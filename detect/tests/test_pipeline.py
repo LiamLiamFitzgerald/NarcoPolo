@@ -8,7 +8,7 @@ import pytest
 from detect import _standin
 from detect._standin import Split, make_scene
 from detect.pboat import fit_pboat
-from detect.run import run_all, run_pass
+from detect.pipeline import run_all, run_pass
 from detect.scene import to_linear
 
 
@@ -110,7 +110,7 @@ def test_empty_pass_has_every_column():
 
 
 def test_one_pol_ratio_next_to_mask_is_never_nan():
-    from detect.run import _ratio_db_at
+    from detect.pipeline import _ratio_db_at
 
     img = np.ones((5, 5)) * 4.0
     img[:, :3] = np.nan
