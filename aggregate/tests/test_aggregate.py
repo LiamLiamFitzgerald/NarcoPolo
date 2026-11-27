@@ -32,12 +32,8 @@ def test_rough_and_missing_passes_add_no_small_boat_exposure():
             "exposure_small": [0.8, 0.0],  # second pass was rough: P3 writes 0
         }
     )
-    rows = exposure_rows(
-        exposure, _cells(["2000_0_0", "2000_1_0"]), pd.DatetimeIndex([D1, D2]), D2
-    )
-    small = rows[rows.event_type == "dark_small"].set_index(["cell_id", "date"])[
-        "exposure"
-    ]
+    rows = exposure_rows(exposure, _cells(["2000_0_0", "2000_1_0"]), pd.DatetimeIndex([D1, D2]), D2)
+    small = rows[rows.event_type == "dark_small"].set_index(["cell_id", "date"])["exposure"]
     assert small[("2000_0_0", D1)] == pytest.approx(0.8)
     assert small[("2000_0_0", D2)] == 0  # no pass that day
     assert small[("2000_1_0", D1)] == 0  # never covered
@@ -93,9 +89,7 @@ def test_event_where_we_never_looked_is_rejected():
 
 def test_to_coarse_sums_the_25_children():
     ids = [f"2000_{i}_{j}" for i in range(5) for j in range(5)] + ["2000_5_0"]
-    expo = pd.DataFrame(
-        {"cell_id": ids, "date": D1, "event_type": "slowdown", "exposure": 1.0}
-    )
+    expo = pd.DataFrame({"cell_id": ids, "date": D1, "event_type": "slowdown", "exposure": 1.0})
     counts = expo.drop(columns="exposure").assign(count=0.5)
     coarse = to_coarse(build_observed(counts, expo)).frame.set_index("cell_id")
     assert coarse.loc["10000_0_0", "exposure"] == 25
@@ -127,8 +121,4 @@ def test_run_writes_both_levels_and_both_types_with_no_gaps():
     fine, coarse = f[f.level == 2000], f[f.level == 10000]
     assert len(fine) == 6 * 2 * 2  # cells x dates x types, unobserved rows included
     assert set(coarse.cell_id) == {"10000_0_0", "10000_1_0"}
-    assert (
-        coarse["count"].sum()
-        == pytest.approx(fine["count"].sum())
-        == pytest.approx(0.6)
-    )
+    assert coarse["count"].sum() == pytest.approx(fine["count"].sum()) == pytest.approx(0.6)

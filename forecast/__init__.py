@@ -52,9 +52,7 @@ def ewma(
     return rate * target2["exposure"]
 
 
-def design_matrix(
-    cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str
-) -> pd.DataFrame:
+def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str) -> pd.DataFrame:
     """Covariates per (cell, date) from reference/layers.gpkg cells (one level at a time).
 
     inshore_frac NaN (no map) gets a missing flag and 0 in the value column, per the spec.
@@ -102,9 +100,7 @@ def _fit_rows(
     return rows, [c for c in cols if c == "intercept" or rows[c].nunique() > 1]
 
 
-def fit_glm(
-    split: Split, train10: pd.DataFrame, X10: pd.DataFrame
-) -> tuple[pd.Series, float]:
+def fit_glm(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.Series, float]:
     """Quasi-Poisson GLM on 10 km rows with E > 0, offset log E. Returns (beta, phi)."""
     rows, cols = _fit_rows(split, train10, X10)
     res = sm.GLM(
@@ -131,9 +127,9 @@ def nb2_alpha(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> float:
     alpha near 0 agrees with phi near 1; a large alpha alongside phi near 1 means they disagree.
     """
     rows, cols = _fit_rows(split, train10, X10)
-    res = sm.NegativeBinomial(
-        rows["count"], rows[cols], offset=np.log(rows["exposure"])
-    ).fit(disp=0)
+    res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
+        disp=0
+    )
     return float(res.params["alpha"])
 
 
@@ -162,9 +158,7 @@ def glm_mu(
     return predict_glm(beta, theta, _with_x(target2, X2)).set_axis(target2.index), phi
 
 
-def nb_interval(
-    mu: pd.Series, phi: float, level: float
-) -> tuple[np.ndarray, np.ndarray]:
+def nb_interval(mu: pd.Series, phi: float, level: float) -> tuple[np.ndarray, np.ndarray]:
     """Central interval from a negative binomial with variance phi x mu; Poisson if phi <= 1."""
     lo_q, hi_q = (1 - level) / 2, 1 - (1 - level) / 2
     m = np.asarray(mu, dtype=float)
@@ -260,9 +254,7 @@ def choose_baseline(
     means = {name: t["skill"].mean() for name, t in skills.items()}
     bad = [n for n, t in skills.items() if not np.isfinite(t["skill"]).all()]
     if bad:
-        raise ValueError(
-            f"non-finite backtest skill for {bad}; not choosing a baseline"
-        )
+        raise ValueError(f"non-finite backtest skill for {bad}; not choosing a baseline")
     best = max(means, key=means.__getitem__)
     ranges = "; ".join(
         f"{n}: mean {means[n]:.3f}, range {t['skill'].min():.3f} to {t['skill'].max():.3f}"
@@ -270,9 +262,7 @@ def choose_baseline(
     )
     with open(decisions, "a", encoding="utf-8") as f:
         # DECISIONS.md format: YYYY-MM-DD HH:MM · who · decision · why
-        f.write(
-            f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n"
-        )
+        f.write(f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n")
     return best
 
 

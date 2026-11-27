@@ -45,9 +45,7 @@ def _glm(f2, f10, X2, X10, split=SPLIT):
 def _recovery(test, mu, cells):
     """sum(mu) / sum(true rate x E) per group of cells; 1.0 is perfect."""
     fine = cells[cells.level == 2000].set_index("cell_id")
-    t = test.assign(
-        mu=mu, true=test.cell_id.map(fake_sim.planted_rate(fine)) * test.exposure
-    )
+    t = test.assign(mu=mu, true=test.cell_id.map(fake_sim.planted_rate(fine)) * test.exposure)
     t = t[t.exposure > 0]
     lane = t.cell_id.map(fine.lane) == 1
     inshore = t.cell_id.map(fine.inshore_frac)
@@ -164,9 +162,7 @@ def test_empirical_bayes_pulls_thin_cells_towards_one():
 
 
 def test_poisson_deviance_is_zero_for_a_perfect_forecast_and_handles_soft_zeros():
-    assert poisson_deviance(
-        pd.Series([0.6, 2.0]), pd.Series([0.6, 2.0])
-    ) == pytest.approx(0)
+    assert poisson_deviance(pd.Series([0.6, 2.0]), pd.Series([0.6, 2.0])) == pytest.approx(0)
     assert poisson_deviance(pd.Series([0.0]), pd.Series([0.5])) == pytest.approx(1.0)
 
 
@@ -185,9 +181,7 @@ def test_walk_forward_backtest_beats_flat_average(event_type, k):
         "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0]),
     }
     for name, table in skills.items():
-        print(
-            event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict()
-        )
+        print(event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict())
     for table in skills.values():
         assert np.isfinite(table.skill).all() and (table.skill < 1).all()
     assert skills["glm"].skill.mean() > 0
@@ -244,10 +238,7 @@ def test_backtest_rows_carry_their_fold_number():
     frames = _frames("dark_small")
     fs = folds(frames[0].date.max(), 3, embargo_days=7, test_days=7)
     rows = pd.concat(
-        [
-            expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL)
-            for k, s in enumerate(fs, 1)
-        ]
+        [expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL) for k, s in enumerate(fs, 1)]
     )
     assert sorted(rows.fold.unique()) == [1, 2, 3]
     assert rows.groupby("fold").date.nunique().eq(7).all()
@@ -259,9 +250,7 @@ def test_choose_baseline_records_the_higher_mean_skill(tmp_path):
         "ewma": pd.DataFrame({"fold": [1, 2], "skill": [0.05, 0.10]}),
         "glm": pd.DataFrame({"fold": [1, 2], "skill": [0.20, 0.12]}),
     }
-    assert (
-        choose_baseline("slowdown", skills, str(decisions), "2026-11-28 10:00") == "glm"
-    )
+    assert choose_baseline("slowdown", skills, str(decisions), "2026-11-28 10:00") == "glm"
     line = decisions.read_text()
     assert "slowdown: glm" in line and "range 0.120 to 0.200" in line
 
@@ -307,9 +296,7 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
     )
     assert list(expected.columns) == EXPECTED_COLUMNS
     folds_by_type = expected.groupby("event_type").fold.nunique()
-    assert (
-        folds_by_type["slowdown"] == 13 and folds_by_type["dark_small"] == 7
-    )  # fold 0 + K
+    assert folds_by_type["slowdown"] == 13 and folds_by_type["dark_small"] == 7  # fold 0 + K
     assert set(expected.groupby("event_type").model.unique().map(tuple)) == {
         ("glm",),
         ("ewma",),
@@ -319,12 +306,8 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
             observed[(observed.level == 2000) & (observed.event_type == "slowdown")]
         )
     )
-    assert (
-        report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()
-    )  # forced: nothing recorded
-    assert (
-        report.nb2_alpha < 0.1
-    ).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
+    assert report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()  # forced: nothing recorded
+    assert (report.nb2_alpha < 0.1).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
     print(report.round(3).to_string())
 
 
