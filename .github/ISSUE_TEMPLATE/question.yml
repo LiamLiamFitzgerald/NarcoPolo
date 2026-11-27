@@ -1,0 +1,19 @@
+name: Question
+description: Something the spec doesn't say (a number, a name, an API field). Never guess; ask.
+labels: ["question"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module asking
+      options: [P1, P2, P3, P4, P5, P6, P7]
+  - type: textarea
+    id: question
+    attributes:
+      label: What's missing
+    validations:
+      required: true
+  - type: textarea
+    id: meanwhile
+    attributes:
+      label: What I'm doing meanwhile (config key with TODO, simulator value)

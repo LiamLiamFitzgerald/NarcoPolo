@@ -1,0 +1,10 @@
+# Graph code only: AST extraction is free; docs would be extracted by the model and cost tokens.
+docs/
+pitch/
+*.md
+.claude/
+.github/
+data/
+raw/
+reports/
+graphify-out/

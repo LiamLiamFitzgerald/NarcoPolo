@@ -1,0 +1,22 @@
+{
+  "_comment": "Single source of truth for who may edit what. Used by the Claude Code guard hook, the CI path check and the CODEOWNERS generator. Paths ending in / are folders.",
+  "shared": ["STATUS.md", "DECISIONS.md"],
+  "modules": {
+    "P1": {
+      "name": "Core, simulator, validation, CI",
+      "paths": ["core/", "sim/", "validate/", "reports/", "docs/", "scripts/", ".github/", ".claude/",
+                "pyproject.toml", "uv.lock", "Makefile", "tach.toml", "config.yaml",
+                "AGENTS.md", "CLAUDE.md", "README.md", ".gitignore", ".env.example"]
+    },
+    "P2": {"name": "Ingest", "paths": ["ingest/"]},
+    "P3": {"name": "Reference and coverage", "paths": ["reference/", "coverage/"]},
+    "P4": {"name": "Detect and match", "paths": ["detect/", "match/"]},
+    "P5": {"name": "Aggregate and forecast", "paths": ["aggregate/", "forecast/"]},
+    "P6": {"name": "Detectors and fuse", "paths": ["detectors/", "fuse/"]},
+    "P7": {"name": "Patrol, export, dashboard, pitch", "paths": ["patrol/", "export/", "dashboard/", "pitch/"]}
+  },
+  "network_allowed": ["P2"],
+  "github_users": {
+    "P1": "", "P2": "", "P3": "", "P4": "", "P5": "", "P6": "", "P7": ""
+  }
+}

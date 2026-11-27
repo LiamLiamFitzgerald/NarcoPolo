@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# 1. Strip AI attribution lines: commits are credited to the human who made them.
+# 2. On mod/p<n>/... branches, prefix the subject with [P<n>] so the team can see which agent made it.
+msg="$1"
+sed -i.bak -E '/^Co-[Aa]uthored-[Bb]y: .*(Claude|anthropic)/d; /Generated with .*Claude/d; /^Claude-Session:/d' "$msg" && rm -f "$msg.bak"
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null || true)
+if [[ "$branch" =~ ^mod/[pP]([1-7])/ ]]; then
+  tag="[P${BASH_REMATCH[1]}]"
+  first=$(head -n1 "$msg")
+  if [[ "$first" != "$tag"* ]]; then
+    { echo "$tag $first"; tail -n +2 "$msg"; } > "$msg.tmp" && mv "$msg.tmp" "$msg"
+  fi
+fi

@@ -1,0 +1,23 @@
+name: Contract change
+description: Change a schema, stage file or shared config key (needs P1 + every affected owner)
+labels: ["contract"]
+body:
+  - type: textarea
+    id: change
+    attributes:
+      label: Proposed change (file, columns, types, invariants)
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it can't be avoided
+    validations:
+      required: true
+  - type: checkboxes
+    id: approvals
+    attributes:
+      label: Approvals (each owner comments "approve")
+      options:
+        - label: P1
+        - label: Every module that reads or writes this file

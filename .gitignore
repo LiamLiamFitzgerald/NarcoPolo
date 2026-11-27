@@ -1,0 +1,26 @@
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Data (never committed; rebuilt with make fetch / make all)
+data/
+raw/
+*.tif
+*.nc
+*.parquet
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Tools
+.serena/
+.DS_Store
+
+# Graphify output (each person builds their own)
+graphify-out/

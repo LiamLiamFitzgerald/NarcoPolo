@@ -1,0 +1,33 @@
+name: Task
+description: One unit of work inside one module
+labels: ["task"]
+body:
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      options: [P1, P2, P3, P4, P5, P6, P7]
+    validations:
+      required: true
+  - type: input
+    id: spec
+    attributes:
+      label: Spec section
+      description: Where in docs/specs/P<n>.md this comes from
+  - type: textarea
+    id: functions
+    attributes:
+      label: Functions (names and signatures from the pseudo-codebase)
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: io
+    attributes:
+      label: Reads / writes
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when (tests)
+    validations:
+      required: true

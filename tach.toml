@@ -1,0 +1,63 @@
+# Module boundaries (checked in CI with `tach check`).
+# Modules talk through stage files, not imports: every module may import only core.
+# validate (P1) is the one exception: it calls other modules' public functions to test them.
+# If tach reports a config format error after `uv add tach`, run `tach mod` / `tach sync` and keep these rules.
+
+source_roots = ["."]
+exclude = ["**/tests", "docs", "scripts", "dashboard", "pitch"]
+
+[[modules]]
+path = "core"
+depends_on = []
+
+[[modules]]
+path = "sim"
+depends_on = ["core"]
+
+[[modules]]
+path = "validate"
+depends_on = ["core", "detect", "forecast", "fuse"]
+
+[[modules]]
+path = "ingest"
+depends_on = ["core"]
+
+[[modules]]
+path = "reference"
+depends_on = ["core"]
+
+[[modules]]
+path = "coverage"
+depends_on = ["core"]
+
+[[modules]]
+path = "detect"
+depends_on = ["core"]
+
+[[modules]]
+path = "match"
+depends_on = ["core"]
+
+[[modules]]
+path = "aggregate"
+depends_on = ["core"]
+
+[[modules]]
+path = "forecast"
+depends_on = ["core"]
+
+[[modules]]
+path = "detectors"
+depends_on = ["core"]
+
+[[modules]]
+path = "fuse"
+depends_on = ["core"]
+
+[[modules]]
+path = "patrol"
+depends_on = ["core"]
+
+[[modules]]
+path = "export"
+depends_on = ["core"]
