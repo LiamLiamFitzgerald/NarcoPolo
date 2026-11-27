@@ -4,7 +4,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 
 | Module | Simulator | Real data | Blocked |
 | --- | --- | --- | --- |
-| P1 core, sim, validate, CI | core, schemas, io, sim tables, make targets, validate (7 of 10 checks) merged | n/a until P2 data | sim scene chips and raw files (#92-94); validate injection, null, backtest wait for P4, P6, P5 |
+| P1 core, sim, validate, CI | core, sim (all raw files), make targets, validate: 8 of 10 checks incl. backtest; #58, #74, #90 settled | n/a until P2 data | validate injection and null tests (prompts A, B) wait for P4 detect and P6 fuse; #117 (CI on every module) waits for other modules' type errors |
 | P2 ingest | `ingest/cache` (request_key, cached, record) tested, manifest matches sim/raw.py, PR #53 | — | #21 stubs still open |
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
