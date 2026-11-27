@@ -182,6 +182,7 @@ def test_stage_reads_inputs_and_writes_a_valid_observed_file(tmp_path, monkeypat
                 "hs_m": [0.5],
                 "calm": [True],
                 "exposure_small": [0.9],
+                "post_storm": [False],  # contract #140
             }
         ),
         "simulated",

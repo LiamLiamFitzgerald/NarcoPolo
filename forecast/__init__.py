@@ -5,6 +5,7 @@ Fits take a Split and the caller's split.train(frame); they raise on any row at 
 cutoff, so look-ahead fails loudly instead of quietly improving the backtest (principle 6).
 """
 
+import gc
 import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -115,13 +116,21 @@ def _fit_rows(
 def fit_glm(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> tuple[pd.Series, float]:
     """Quasi-Poisson GLM on 2 km rows with E > 0, offset log E (#58). Returns (beta, phi)."""
     rows, cols = _fit_rows(split, train2, X2)
-    res = sm.GLM(
-        rows["count"],
-        rows[cols],
-        family=sm.families.Poisson(),
-        offset=np.log(rows["exposure"]),
-    ).fit(scale="X2")
-    return res.params, float(res.scale)
+    # Each IRLS step leaves ~400 MB of cyclic garbage on ~700k rows; few Python objects are made, so the default
+    # collector never runs mid-fit and memory passed 6 GB. Collect every generation often while fitting only.
+    old = gc.get_threshold()
+    gc.set_threshold(100, 1, 1)
+    try:
+        res = sm.GLM(
+            rows["count"],
+            rows[cols],
+            family=sm.families.Poisson(),
+            offset=np.log(rows["exposure"]),
+        ).fit(scale="X2")
+        return res.params, float(res.scale)
+    finally:
+        gc.set_threshold(*old)
+        gc.collect()
 
 
 def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
