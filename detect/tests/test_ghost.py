@@ -28,12 +28,12 @@ def _ghost_hits(offset_from_meta: bool):
         c = clusters(flag(img, mu, alpha(4.4)), img, mu, meta=s.meta)
         offset = ghost_offset_m(s.meta) if offset_from_meta else ghost_offset_m({})
         heading = azimuth_heading(s.meta)
-        for g in s.ghosts.itertuples():
-            near = c[np.hypot(c["row"] - g.row, c["col"] - g.col) <= 2]
+        for r, col in s.ghosts[["row", "col"]].to_numpy():
+            near = c[np.hypot(c["row"] - r, c["col"] - col) <= 2]
             n += 1
             hits += len(near) > 0 and is_ghost(near.iloc[0], img, heading, offset)
-        for b in s.boats.itertuples():
-            near = c[np.hypot(c["row"] - b.row, c["col"] - b.col) <= 2]
+        for r, col in s.boats[["row", "col"]].to_numpy():
+            near = c[np.hypot(c["row"] - r, c["col"] - col) <= 2]
             boats_flagged += len(near) > 0 and is_ghost(near.iloc[0], img, heading, offset)
     return hits / n, boats_flagged
 

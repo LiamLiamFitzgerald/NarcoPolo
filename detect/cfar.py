@@ -1,5 +1,7 @@
 """Cell-averaging CFAR on linear power."""
 
+from typing import cast
+
 import numpy as np
 import pandas as pd
 from scipy import ndimage, optimize, stats
@@ -54,7 +56,7 @@ def clusters(mask: np.ndarray, img: np.ndarray, mu_b: np.ndarray, *, meta: dict)
     meta gives the scene's top-left corner (x_left, y_top) in metres. peak_db is the blob's
     peak sigma0 in dB, which the ghost rule compares against.
     """
-    lab, n = ndimage.label(mask, structure=np.ones((3, 3)))
+    lab, n = cast(tuple[np.ndarray, int], ndimage.label(mask, structure=np.ones((3, 3))))
     if n == 0:
         return pd.DataFrame(columns=CLUSTER_COLUMNS)
     idx = np.arange(1, n + 1)

@@ -35,10 +35,10 @@ def test_fit_recovers_known_coefficients_and_is_calibrated_out_of_sample():
         assert abs(m.params[k] - b) < 4 * m.bse[k], k
     test = split.test(df)
     p = predict_pboat(m, test)
-    bins = pd.cut(p, np.linspace(0, 1, 11))
     rel = (
         pd.DataFrame({"p": p, "y": test["is_boat"].to_numpy()})
-        .groupby(bins, observed=True)
+        .assign(bin=pd.cut(p, np.linspace(0, 1, 11).tolist()))
+        .groupby("bin", observed=True)
         .agg(["mean", "size"])
     )
     big = rel[("p", "size")] >= 100
