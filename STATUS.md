@@ -6,7 +6,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | --- | --- | --- | --- |
 | P1 core, sim, validate, CI | — | — | — |
 | P2 ingest | — | — | — |
-| P3 reference, coverage | — | — | — |
+| P3 reference, coverage | stubs for every public function; run() checks the simulated reference and coverage files (#22) | — | real layers need P3 config keys, post_storm column, raster paths (#85); module tests not collected by CI (#96) |
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | — | — | — |
 | P6 detectors, fuse | — | — | — |
