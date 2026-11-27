@@ -8,7 +8,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P2 ingest | `ingest/cache` (request_key, cached, record) tested, manifest matches sim/raw.py, PR #53 | — | #21 stubs still open |
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
-| P5 aggregate, forecast | aggregate.run() and forecast.run() on core.io and snapshot.json; observed, EWMA, GLM + EB, NB intervals, fold 0 + backtest rows (PR #66) | waits for P3 cells/coverage and P4 events | #90 (sim small-boat events on rough passes); #58 (lane bias, zero rates); #69 (P5 config keys, testpaths); #74 |
+| P5 aggregate, forecast | aggregate.run() and forecast.run() run end to end on P1's simulator; EWMA with zero-rate shrinkage, GLM on 2 km + EB per 10 km, NB intervals, fold 0 + backtest rows; skill finite (PR #66) | waits for P3 cells/coverage and P4 events | P5 tests not in pytest testpaths (P1); forecast takes ~4 min at 730 days |
 | P6 detectors, fuse | stubs: `detectors.run()` and `fuse.run()` write schema-valid placeholder fuse/cells and fuse/sites (#24) | — | P6 tests not in pytest testpaths (P1) |
 | P7 patrol, export, dashboard | — | — | — |
 
