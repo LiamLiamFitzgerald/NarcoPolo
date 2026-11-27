@@ -107,3 +107,18 @@ def test_empty_pass_has_every_column():
     c = run_pass("empty", _chip(s), masks=(s.land, s.static))
     assert len(c) == 0
     assert set(_standin.DETECTIONS_COLUMNS) - {"p_boat"} <= set(c.columns)
+
+
+def test_one_pol_ratio_next_to_mask_is_never_nan():
+    from detect.run import _ratio_db_at
+
+    img = np.ones((5, 5)) * 4.0
+    img[:, :3] = np.nan
+    r = _ratio_db_at(img, np.ones((5, 5)), pd.Series([2.0, 2.0]), pd.Series([1.0, 3.0]))
+    assert r[0] == 0.0 and np.isclose(r[1], 10 * np.log10(4))
+
+
+def test_naive_start_time_is_read_as_utc():
+    s = make_scene(7, shape=(300, 300), n_boats=5, time_utc="2026-11-01T06:30:00")
+    c = run_pass("naive", _chip(s), masks=(s.land, s.static))
+    assert (c["time_utc"] == pd.Timestamp("2026-11-01T06:30:00Z")).all()

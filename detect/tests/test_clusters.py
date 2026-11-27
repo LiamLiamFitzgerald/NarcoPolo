@@ -4,6 +4,7 @@ import pandas as pd
 from detect._standin import make_scene
 from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
 from detect.scene import to_linear
+from detect.tests.test_run import _hits
 
 
 def _cands(s):
@@ -15,14 +16,8 @@ def _cands(s):
     return merge_pols(*out)
 
 
-def _recall(cands, boats, tol_px=2):
-    if not len(cands):
-        return 0.0
-    d = np.hypot(
-        boats["row"].to_numpy()[:, None] - cands["row"].to_numpy(),
-        boats["col"].to_numpy()[:, None] - cands["col"].to_numpy(),
-    )
-    return float((d.min(axis=1) <= tol_px).mean())
+def _recall(cands, boats):
+    return float(_hits(cands, boats).mean())
 
 
 def test_planted_bright_boats_recovered():

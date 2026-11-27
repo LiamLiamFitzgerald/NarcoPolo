@@ -27,9 +27,14 @@ def _read_masks(meta: dict[str, Any], shape: tuple[int, int], root: Path) -> tup
 
 
 def _ratio_db_at(img: np.ndarray, mu_b: np.ndarray, rows: pd.Series, cols: pd.Series) -> np.ndarray:
-    r, c = np.rint(rows).astype(int), np.rint(cols).astype(int)
+    """Brightest valid I / mu_b in dB in the 3 x 3 pixels round each centre; 0 dB if all are masked."""
     with np.errstate(invalid="ignore", divide="ignore"):
-        return 10 * np.log10(img[r, c] / mu_b[r, c])
+        ratio = np.pad(img / mu_b, 1, constant_values=np.nan)
+    out = []
+    for r, c in zip(np.rint(rows).astype(int), np.rint(cols).astype(int), strict=True):
+        win = ratio[r : r + 3, c : c + 3]  # padded by 1, so this is centred on (r, c)
+        out.append(10 * np.log10(np.nanmax(win)) if np.isfinite(win).any() else 0.0)
+    return np.array(out)
 
 
 def run_pass(
@@ -64,8 +69,7 @@ def run_pass(
     cands["n_px"] = cands["n_px"].astype(int)
     cands["pol_agree"] = cands["pol_agree"].astype(bool)
     cands["pass_id"] = pass_id
-    cands["time_utc"] = pd.Timestamp(meta["start_time"]).tz_convert("UTC") if len(cands) else pd.NaT
-    cands["time_utc"] = pd.to_datetime(cands["time_utc"], utc=True)
+    cands["time_utc"] = pd.to_datetime(pd.Series(meta["start_time"], index=cands.index), utc=True)  # naive = UTC
     cands["cell_id"] = cell_id(cands["x_m"].to_numpy(), cands["y_m"].to_numpy()) if len(cands) else []
     cands["det_id"] = [f"{pass_id}-{i}" for i in range(len(cands))]
     return cands
