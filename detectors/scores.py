@@ -1,5 +1,5 @@
-"""The four detectors and their fusion (docs/specs/P6.md). Tail surprise, BH, Gi* and CUSUM are issue 54;
-the context rules and fusion are still stubs (issue 55)."""
+"""The four detectors and their fusion (docs/specs/P6.md): tail surprise + BH, Gi*, CUSUM (issue 54), context and
+rank fusion (issue 55)."""
 
 from datetime import timedelta
 
@@ -78,16 +78,71 @@ def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarra
     return out
 
 
-def context_small(layers, post_storm) -> np.ndarray:  # stub, issue 55
-    return np.full(len(layers), 0.5)
+def _fact(known, yes) -> np.ndarray:
+    """1.0 / 0.0 for a yes/no fact, NaN where its input is unknown."""
+    return np.where(known, np.asarray(yes, float), np.nan)
 
 
-def context_slowdown(layers, hours) -> np.ndarray:  # stub, issue 55
-    return np.full(len(layers), 0.5)
+def _mean_known(*facts) -> np.ndarray:
+    """Mean of the known facts per row; unknown (NaN) facts are left out, never counted as yes or no."""
+    f = np.vstack(facts)
+    n = (~np.isnan(f)).sum(axis=0)
+    return np.divide(np.nansum(f, axis=0), n, out=np.full(f.shape[1], np.nan), where=n > 0)
 
 
-def fuse(scores: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:  # stub, issue 55
-    return np.full(len(scores), 0.5), np.zeros(len(scores), int)
+def context_small(layers, post_storm) -> np.ndarray:
+    """dark_small context per row of `layers` (inshore_frac, dist_coast_m): outside inshore grounds, 2-25 km
+    offshore, first calm pass after a storm (post_storm 1/0, NaN unknown). inshore_frac NaN = no map = unknown."""
+    inshore = np.asarray(layers["inshore_frac"], float)
+    dist = np.asarray(layers["dist_coast_m"], float)
+    storm = np.asarray(post_storm, float)
+    p = PARAMS
+    return _mean_known(
+        _fact(~np.isnan(inshore), inshore < p["inshore_max"]),
+        _fact(~np.isnan(dist), (dist >= p["coast_min_m"]) & (dist <= p["coast_max_m"])),
+        _fact(~np.isnan(storm), storm == 1),
+    )
+
+
+def context_slowdown(layers, hours) -> np.ndarray:
+    """slowdown context per row of `layers` (lane): outside lane cells; slow presence-hours 0.33-3 (shared.md
+    issue 3), NaN hours unknown."""
+    lane = np.asarray(layers["lane"], bool)
+    h = np.asarray(hours, float)
+    p = PARAMS
+    return _mean_known(
+        _fact(np.ones(len(lane), bool), ~lane),
+        _fact(~np.isnan(h), (h >= p["slow_hours_min"]) & (h <= p["slow_hours_max"])),
+    )
+
+
+_DETECTORS = ["p_mid", "gi_z", "cusum_s", "context"]
+
+
+def _ranks(scores: pd.DataFrame) -> pd.DataFrame:
+    """Percentile rank of each detector within its event type, over one identical row set (no NaN allowed).
+    p_mid is ranked as 1 - p so a small tail value ranks high."""
+    if scores[_DETECTORS].isna().any().any():
+        raise ValueError("a detector is NaN on some rows; the four ranks must share one row set")
+    vals = scores[_DETECTORS].assign(p_mid=1 - scores["p_mid"])
+    return vals.groupby(scores["event_type"]).rank(pct=True)
+
+
+def fuse(scores: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """U = mean of the four percentile ranks; agreement = detectors placing the row in their own top top_frac.
+    Agreement counts angles that agree on the same counts, not independent proofs."""
+    r = _ranks(scores)
+    return r.mean(axis=1).to_numpy(), (r > 1 - PARAMS["top_frac"]).sum(axis=1).to_numpy()
+
+
+def _slow_hours(m: pd.DataFrame, events: pd.DataFrame) -> np.ndarray:
+    """Slow presence-hours per slowdown row: sum of duration_min / 60 over its events; NaN when any duration is
+    null (GFW gives none) or the cell-day had no event. TODO(P6): real source of slow hours, question #131."""
+    ev = events[events["event_type"] == "slowdown"]
+    ev = ev.assign(date=ev["time_utc"].dt.date, h=ev["duration_min"] / 60)
+    g = ev.groupby(["cell_id", "date"])["h"]
+    hours = g.sum().where(g.count() == g.size()).rename("hours").reset_index()
+    return m[["cell_id", "date"]].merge(hours, how="left")["hours"].to_numpy(float)
 
 
 def _weekly_gi(m: pd.DataFrame) -> np.ndarray:
@@ -119,15 +174,19 @@ def run_cells() -> None:
     T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
     m = m[(m["date"] >= start) & (m["date"] <= T)].reset_index(drop=True)
+    layers = io.read_stage("reference/cells")[["cell_id", "inshore_frac", "lane", "dist_coast_m"]]
+    m = m.merge(layers, on="cell_id", how="left")
+    # TODO(P6): post_storm is not in coverage/exposure yet (P3 contract #85); unknown until it is.
+    post_storm = np.full(len(m), np.nan)
+    hours = _slow_hours(m, io.read_stage("match/events"))
+    small = (m["event_type"] == "dark_small").to_numpy()
     p_mid = tail_pmid(m["count"], m["mu"], m["phi"])
     scores = m[_KEY].assign(
         p_mid=p_mid,
         bh_flag=bh(p_mid),
         gi_z=_weekly_gi(m),
         cusum_s=m["cusum_s"],
-        context=context_small(
-            m, None
-        ),  # TODO(P6): issue 55, per event type, with layers and post_storm
+        context=np.where(small, context_small(m, post_storm), context_slowdown(m, hours)),
     )
     scores["U"], scores["agreement"] = fuse(scores)
     io.write_stage("fuse/cells", scores, _provenance("aggregate/observed"))  # type: ignore[arg-type]

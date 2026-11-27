@@ -30,12 +30,3 @@ def test_run_writes_schema_valid_cells_for_observed_rows_only(sim_data):
     seen = obs[obs["exposure"] > 0][keys].astype(str)
     assert len(cells) > 0
     assert cells[keys].astype(str).merge(seen).shape[0] == len(cells)  # no unobserved row is scored
-
-
-def test_stub_shapes():  # fuse stays a stub until issue 55
-    import pandas as pd
-
-    from detectors import fuse
-
-    U, agreement = fuse(pd.DataFrame({"cusum_s": [0.0, 1.0]}))
-    assert len(U) == len(agreement) == 2

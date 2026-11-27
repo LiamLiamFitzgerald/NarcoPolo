@@ -9,7 +9,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | — | — | — |
-| P6 detectors, fuse | mid-p + BH, weekly Gi*, Poisson CUSUM (h = 0.5 from the simulator null) fill fuse/cells for the evaluation window (#54); context, fusion and fuse/ still stubs (#24) | — | p6 config keys not in config.yaml yet (P1) |
+| P6 detectors, fuse | mid-p + BH, weekly Gi*, Poisson CUSUM (h = 0.5 from the simulator null) fill fuse/cells for the evaluation window (#54); context rules + rank fusion give U and agreement, planted drop cell-days rank top decile with agreement ≥ 2 (#55); fuse/ sites still stubs (#24) | — | p6 config keys not in config.yaml yet (P1, #123); post_storm missing from coverage/exposure (P3, #85); slow presence-hours source on real data (P4, #131) |
 | P7 patrol, export, dashboard | — | — | — |
 
 ## Checkpoints

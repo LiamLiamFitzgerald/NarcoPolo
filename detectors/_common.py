@@ -18,6 +18,12 @@ _SPEC = {
     "cusum_rho": 2,
     "cusum_h": 0.5,
     "top_frac": 0.1,
+    # context facts (docs/specs/P6.md step 4; slow hours from shared.md issue 3). TODO(P1): config keys, #123
+    "inshore_max": 0.1,
+    "coast_min_m": 2000,
+    "coast_max_m": 25000,
+    "slow_hours_min": 0.33,
+    "slow_hours_max": 3,
 }
 PARAMS = {**_SPEC, **load(io.CONFIG_PATH)[0].get("p6", {})}
 
