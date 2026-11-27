@@ -83,8 +83,8 @@ def sea_raster(coastline: BaseGeometry, res_m: float = 250) -> NDArray[np.uint8]
 def assert_closed(sea: NDArray[np.uint8]) -> None:
     """Raise if two seas that land separates touch only diagonally through it (a leak in the coastline). Flood fill:
     the 8-connected sea must have exactly as many parts as the 4-connected sea."""
-    four = ndimage.label(sea, structure=ndimage.generate_binary_structure(2, 1))[1]
-    eight = ndimage.label(sea, structure=np.ones((3, 3), int))[1]
+    _, four = ndimage.label(sea, structure=ndimage.generate_binary_structure(2, 1))  # pyright: ignore[reportGeneralTypeIssues]
+    _, eight = ndimage.label(sea, structure=np.ones((3, 3), int))  # pyright: ignore[reportGeneralTypeIssues]
     if eight != four:
         raise ValueError(
             f"coastline leak: {four - eight} sea region(s) join only diagonally through land; close the coastline"
@@ -133,7 +133,10 @@ def travel_hours(
     px, py = np.empty(len(order)), np.empty(len(order))
     px[order], py[order] = x0 + (c + 0.5) * res_m, y0 + (r + 0.5) * res_m
     p = piers[piers["road_access"]]
-    starts = [int(np.argmin(np.hypot(px - q.x, py - q.y))) for q in p.geometry]
+    starts = [
+        int(np.argmin(np.hypot(px - x, py - y)))
+        for x, y in zip(p.geometry.x, p.geometry.y, strict=True)
+    ]
     dist = dijkstra(g, directed=False, indices=starts) if starts else np.empty((0, len(px)))
 
     ix, iy = cell_index(px, py, FINE)

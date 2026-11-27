@@ -4,6 +4,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 from shapely.geometry import LineString, Point, box
+from shapely.geometry.base import BaseGeometry
 
 from core import io
 from core.config import load
@@ -46,10 +47,12 @@ def test_piers_keep_only_pier_slipway_harbour_tags_and_reproject():
     )
     p = rp.piers(osm, gpd.GeoDataFrame(geometry=[], crs=32629))
     assert list(p["name"]) == ["a", "b", "c"]
-    assert p.crs.to_epsg() == 32629 and p.geometry.x.min() > 100_000  # metres, not degrees
+    assert (
+        p.crs is not None and p.crs.to_epsg() == 32629 and p.geometry.x.min() > 100_000
+    )  # metres, not degrees
 
 
-def _headland() -> tuple[object, Point, Point]:
+def _headland() -> tuple[BaseGeometry, Point, Point]:
     """Straight shore along the top with a 10 km headland sticking south; a pier west of it, a spot east of it."""
     x0, y0 = _x0y0()
     land = box(x0, y0 + 20_000, x0 + 40_000, y0 + 30_000).union(
@@ -84,11 +87,12 @@ def test_travel_hours_never_beat_a_straight_line_on_the_simulator(tmp_path, monk
     th = rp.travel_hours(rp.sea_raster(land), sim_piers)
     assert set(th["pier_id"]) == set(sim_piers.loc[sim_piers["road_access"], "pier_id"])
     xy = sim_piers.set_index("pier_id").geometry
-    for r in th.sample(200, random_state=1).itertuples():
-        _, i, j = (int(v) for v in r.cell_id.split("_"))
+    s = th.sample(200, random_state=1)
+    for cid, pid, hours in zip(s["cell_id"], s["pier_id"], s["hours"], strict=True):
+        _, i, j = (int(v) for v in str(cid).split("_"))
         c = Point(x0 + (i + 0.5) * FINE, y0 + (j + 0.5) * FINE)
         # the path ends at the cell's sea pixel nearest its centre, so allow half a cell and a pixel
-        assert r.hours >= (xy[r.pier_id].distance(c) - FINE / 2 - 250) / (15 * KN) / 3600
+        assert hours >= (xy[pid].distance(c) - FINE / 2 - 250) / (15 * KN) / 3600
 
 
 def test_assert_closed_catches_a_diagonal_leak():
