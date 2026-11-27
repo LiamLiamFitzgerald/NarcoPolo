@@ -13,3 +13,4 @@ Format: `YYYY-MM-DD HH:MM · who · decision · why`
 
 ## Log
 2026-11-27 17:25 · Liam (P1) · `raw/manifest.json` carries a top-level `latest` dict with ISO dates `radar`, `gfw_presence`, `gfw_sar`, `era5`; `core.config.snapshot_date` takes their minimum (A11) · the Data dictionary says what the manifest lists per file but not where the latest dates live; P2 writes them
+2026-11-27 17:40 · P7 · The dashboard stays one plain-JS `dashboard/index.html`; a thin pywebview window (`dashboard/app.py`) hosts it and serves the snapshot through `js_api`, so it works offline and the spec's single-file rule holds · the user chose pywebview for the front end; pywebview must be added to pyproject.toml by P1

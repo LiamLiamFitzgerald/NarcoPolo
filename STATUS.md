@@ -10,7 +10,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | — | — | — |
 | P6 detectors, fuse | — | — | — |
-| P7 patrol, export, dashboard | — | — | — |
+| P7 patrol, export, dashboard | placeholder stubs run end to end; dashboard renders them in pywebview (issue 25) | — | real logic waits on issues 49, 50, 51 |
 
 ## Checkpoints
 
