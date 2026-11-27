@@ -32,11 +32,10 @@ def test_run_writes_schema_valid_cells_for_observed_rows_only(sim_data):
     assert cells[keys].astype(str).merge(seen).shape[0] == len(cells)  # no unobserved row is scored
 
 
-def test_stub_shapes():
-    from detectors import bh, cusum, fuse, tail_pmid
+def test_stub_shapes():  # fuse stays a stub until issue 55
+    import pandas as pd
 
-    assert tail_pmid([0.0, 1.0], [1.0, 1.0], [1.0, 1.0]).tolist() == [1.0, 1.0]
-    assert not bh([0.5, 0.5]).any()
-    assert cusum([1.0], [1.0], [1.0]).tolist() == [0.0]
-    U, agreement = fuse(cusum([1.0, 2.0], [1.0, 1.0], [1.0, 1.0]).reshape(-1, 1))
+    from detectors import fuse
+
+    U, agreement = fuse(pd.DataFrame({"cusum_s": [0.0, 1.0]}))
     assert len(U) == len(agreement) == 2
