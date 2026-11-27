@@ -4,7 +4,7 @@ import pandas as pd
 from detect._standin import make_scene
 from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
 from detect.scene import to_linear
-from detect.tests.test_run import _hits
+from detect.tests.test_pipeline import _hits
 
 
 def _cands(s):
