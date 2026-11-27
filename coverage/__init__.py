@@ -151,24 +151,31 @@ def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> 
     fine = cells[cells["level"] == 2000]
     with_storm = "post_storm" in SCHEMAS["coverage/exposure"].columns
     rows = []
-    for p in passes.itertuples(index=False):
-        cov = covered_frac(p.footprint, fine)
-        wind, hs = weather_at(era5, fine, p.time_utc)
+    for pass_id, time_utc, footprint, downloaded in zip(
+        passes["pass_id"],
+        passes["time_utc"],
+        passes["footprint"],
+        passes["downloaded"],
+        strict=True,
+    ):
+        time_utc = pd.Timestamp(time_utc)
+        cov = covered_frac(footprint, fine)
+        wind, hs = weather_at(era5, fine, time_utc)
         ok = calm(wind, hs)
         frame = pd.DataFrame(
             {
                 "cell_id": fine["cell_id"].to_numpy(),
-                "pass_id": p.pass_id,
-                "time_utc": p.time_utc,
+                "pass_id": pass_id,
+                "time_utc": time_utc,
                 "covered_frac": cov.to_numpy(),
                 "wind_ms": wind.to_numpy(),
                 "hs_m": hs.to_numpy(),
                 "calm": ok.to_numpy(),
-                "exposure_small": (cov * ok * bool(p.downloaded)).to_numpy(),
+                "exposure_small": (cov * ok * bool(downloaded)).to_numpy(),
             }
         )
         if with_storm:
-            frame["post_storm"] = _post_storm(era5, fine, p.time_utc).to_numpy()
+            frame["post_storm"] = _post_storm(era5, fine, time_utc).to_numpy()
         rows.append(frame)
     return pd.concat(rows, ignore_index=True)
 
