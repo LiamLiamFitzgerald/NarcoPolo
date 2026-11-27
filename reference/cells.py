@@ -66,7 +66,7 @@ def _res_deg(values: pd.Series) -> float:
     gaps = np.diff(np.unique(np.round(values.to_numpy(float), 6)))
     if not len(gaps):
         raise ValueError("cannot read GFW's grid step from a single presence cell")
-    return float(gaps.min())
+    return float(np.min(gaps))
 
 
 def regrid_presence(presence: pd.DataFrame) -> pd.DataFrame:
@@ -84,7 +84,8 @@ def regrid_presence(presence: pd.DataFrame) -> pd.DataFrame:
         polys.append(Polygon(zip(xs, ys, strict=True)))  # a degree cell is a quadrilateral in UTM
     src = gpd.GeoDataFrame(corners, geometry=polys, crs=32629)
     src["area"] = src.area
-    grid = _grid(tuple(src.total_bounds))
+    xmin, ymin, xmax, ymax = (float(v) for v in src.total_bounds)
+    grid = _grid((xmin, ymin, xmax, ymax))
     ov = gpd.overlay(src, grid.reset_index(drop=True), how="intersection", keep_geom_type=True)
     ov["w"] = ov.area / ov["area"]
     ov["w"] = ov["w"] / ov.groupby(["lon", "lat"])["w"].transform("sum")  # exact sum to 1
@@ -93,7 +94,7 @@ def regrid_presence(presence: pd.DataFrame) -> pd.DataFrame:
     out = out.groupby(["cell_id", "date", "vessel_type", "speed_bin"], as_index=False)[
         "hours"
     ].sum()
-    return out[_PRESENCE_COLS]
+    return pd.DataFrame(out, columns=_PRESENCE_COLS)
 
 
 def _per_cell(cells: gpd.GeoDataFrame, hours: pd.Series) -> pd.Series:

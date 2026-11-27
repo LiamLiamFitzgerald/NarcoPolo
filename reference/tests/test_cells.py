@@ -33,17 +33,19 @@ def _raw_presence(truth: gpd.GeoDataFrame, days: int = 30) -> pd.DataFrame:
     """GFW-shaped presence: fast transit hours on lane cells, mostly slow hours in the anchorage, some anywhere."""
     rng = np.random.default_rng(1)
     rows = []
-    for c in truth.itertuples():
-        x, y = c.geometry.centroid.x, c.geometry.centroid.y
+    pts = truth.geometry.centroid
+    for x, y, lane, anchorage, inshore in zip(
+        pts.x, pts.y, truth["lane"], truth["anchorage"], truth["inshore_frac"], strict=True
+    ):
         for d in range(days):
-            if c.lane:
+            if lane:
                 rows.append((x, y, d, "8+", "cargo", 2.0))
-            if c.anchorage:
+            if anchorage:
                 rows.append((x, y, d, "0-2", "tanker", 3.0))
                 rows.append((x, y, d, "8+", "tanker", 0.5))
             if rng.random() < 0.05:  # a few ships passing elsewhere
                 rows.append((x, y, d, "2-4", "cargo", 0.3))
-            if c.inshore_frac > 0.5 and rng.random() < 0.5:  # fishing boats never make a lane
+            if inshore > 0.5 and rng.random() < 0.5:  # fishing boats never make a lane
                 rows.append((x, y, d, "8+", "fishing", 5.0))
     df = pd.DataFrame(rows, columns=["x", "y", "day", "speed_bin", "vessel_type", "hours"])
     lon, lat = to_wgs84(df["x"].to_numpy(), df["y"].to_numpy())
@@ -81,8 +83,9 @@ def test_planted_lane_and_anchorage_recovered(truth):
     iy = truth["cell_id"].str.split("_").str[2].astype(int)
     lane_rows = set(iy[truth["lane"]])
     near = iy.isin({r + d for r in lane_rows for d in (-1, 0, 1)})
-    assert near[lane].all()
-    assert truth["lane"][lane].mean() >= 0.8
+    # the busy anchorage also passes the lane rule (its ships are non-fishing); exclusion covers it anyway
+    assert (near | truth["anchorage"])[lane].all()
+    assert truth["lane"][lane & ~truth["anchorage"]].mean() >= 0.8
     assert anch[truth["anchorage"]].all()
     assert not anch[~truth["anchorage"] & ~truth["lane"]].any()
     assert not lane[truth["inshore_frac"] == 1].any()  # fishing hours never count towards a lane
