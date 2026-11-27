@@ -45,6 +45,9 @@ coverage:
 
 validate:
   injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
+  injection_brightness_db: [3, 6, 10, 15]  # TODO(P1): not in the spec; spans P4's threshold on the simulator
+  injection_n_per_pass: 10   # TODO(P1): not in the spec
+  injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
 
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
