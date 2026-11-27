@@ -13,6 +13,9 @@ def sandbox(tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
     monkeypatch.setattr(io, "CONFIG_PATH", cfg)
+    io.write_stage(
+        "reference/cells", frame("reference/cells"), "simulated"
+    )  # every cell_id must exist here
     return cfg
 
 

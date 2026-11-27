@@ -4,8 +4,8 @@ One line per module, updated at every merge. Format: what works on the simulator
 
 | Module | Simulator | Real data | Blocked |
 | --- | --- | --- | --- |
-| P1 core, sim, validate, CI | — | — | — |
-| P2 ingest | `ingest/cache` (request_key, cached, record) tested, PR #53 | — | #21 stubs still open; no pyproject, so `make test` not run |
+| P1 core, sim, validate, CI | core, schemas, io, sim tables, make targets, validate (7 of 10 checks) merged | n/a until P2 data | sim scene chips and raw files (#92-94); validate injection, null, backtest wait for P4, P6, P5 |
+| P2 ingest | `ingest/cache` (request_key, cached, record) tested, manifest matches sim/raw.py, PR #53 | — | #21 stubs still open |
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | — | — | — |
