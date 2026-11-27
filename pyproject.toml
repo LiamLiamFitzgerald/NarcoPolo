@@ -2,7 +2,7 @@
 name = "narcopolo"
 version = "0.0.0"
 requires-python = ">=3.12"
-dependencies = ["numpy", "pandas", "pandera", "pyproj", "pyyaml"]
+dependencies = ["numpy", "pandas", "pandera", "pyarrow", "pyproj", "pyyaml"]
 
 [dependency-groups]
 dev = ["types-pyyaml", "pytest", "ruff", "basedpyright", "tach"]
