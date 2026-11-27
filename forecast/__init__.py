@@ -5,7 +5,10 @@ Fits take a Split and the caller's split.train(frame); they raise on any row at 
 cutoff, so look-ahead fails loudly instead of quietly improving the backtest (principle 6).
 """
 
-from collections.abc import Callable
+import sqlite3
+from collections.abc import Callable, Mapping
+from pathlib import Path
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -13,6 +16,7 @@ import statsmodels.api as sm
 from scipy import stats
 
 from core.grid import parent
+from core.io import read_stage, stage_path, write_stage
 from core.split import Split, folds
 
 _ID = ["cell_id", "date"]
@@ -314,7 +318,7 @@ def run(
     observed: pd.DataFrame,
     cells: pd.DataFrame,
     T: pd.Timestamp,
-    cfg: dict,
+    cfg: Mapping[str, Any],
     decisions: str,
     when: str,
     baseline: dict[str, str] | None = None,
@@ -324,9 +328,12 @@ def run(
     expected: fold 0 (evaluation window) plus every backtest fold, all from the chosen model.
     report: per type and model, backtest skill mean/min/max, phi and the NB2 alpha check.
     baseline forces a model per type (skips choose_baseline), e.g. while backtest skill is broken.
-    shortcut: returns frames; once core/io exists this writes forecast/expected.parquet.
+    cfg is the full config: split.n_folds_* plus P5's ewma_delta, ewma_min_se and interval.
     """
-    n_folds = {"slowdown": cfg["n_folds_slowdown"], "dark_small": cfg["n_folds_small"]}
+    n_folds = {
+        "slowdown": cfg["split"]["n_folds_slowdown"],
+        "dark_small": cfg["split"]["n_folds_small"],
+    }
     params = (cfg["ewma_delta"], cfg["ewma_min_se"], cfg["interval"])
     expected, report = [], []
     for event_type, k in n_folds.items():
@@ -365,3 +372,32 @@ def run(
                 }
             )
     return pd.concat(expected, ignore_index=True), pd.DataFrame(report)
+
+
+def _read_cells() -> pd.DataFrame:
+    """Attributes of the cells layer of reference/layers.gpkg (SQLite), without geometry.
+
+    shortcut: duplicates aggregate.read_cells because forecast may import only core; move to core.io
+    if P1 agrees (#69).
+    """
+    with sqlite3.connect(Path(stage_path("reference/cells"))) as con:
+        cells = pd.read_sql("SELECT * FROM cells", con)
+    return cells.drop(columns=[c for c in ("fid", "geom", "geometry") if c in cells.columns])
+
+
+def stage(
+    T: pd.Timestamp,
+    cfg: Mapping[str, Any],
+    provenance: Literal["simulated", "real"],
+    decisions: str,
+    when: str,
+    baseline: dict[str, str] | None = None,
+) -> tuple[Path, pd.DataFrame]:
+    """make all: read aggregate/observed and the cells layer; write forecast/expected.parquet.
+
+    Returns the written path and the backtest report.
+    """
+    observed = read_stage("aggregate/observed")
+    observed["date"] = pd.to_datetime(observed["date"])
+    expected, report = run(observed, _read_cells(), T, cfg, decisions, when, baseline)
+    return write_stage("forecast/expected", expected, provenance), report

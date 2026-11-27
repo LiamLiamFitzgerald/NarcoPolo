@@ -270,10 +270,7 @@ CFG = {
     "ewma_delta": DELTA,
     "ewma_min_se": MIN_SE,
     "interval": LEVEL,
-    "n_folds_slowdown": 12,
-    "n_folds_small": 6,
-    "embargo_days": 7,
-    "test_days": 7,
+    "split": {"n_folds_slowdown": 12, "n_folds_small": 6},
 }
 
 
@@ -327,3 +324,23 @@ def test_stage_run_chooses_a_baseline_unforced(tmp_path):
         str(tmp_path / "D.md"),
         "2026-11-28 10:00",
     )
+
+
+def test_stage_round_trips_through_core_io(tmp_path, monkeypatch):
+    from core.io import read_stage, stage_path, write_stage
+    from forecast import stage
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path))
+    observed, cells = _all_observed()
+    write_stage("aggregate/observed", observed, "simulated")
+    path = stage_path("reference/cells")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import sqlite3
+
+    with sqlite3.connect(path) as con:
+        cells.assign(geom=b"").to_sql("cells", con, index=False)
+    forced = {"slowdown": "glm", "dark_small": "ewma"}
+    T = observed.date.max()
+    stage(T, CFG, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00", forced)
+    out = read_stage("forecast/expected")  # validates against core.schemas
+    assert set(out.event_type) == set(TYPES) and (out.fold == 0).any()

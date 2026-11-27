@@ -6,6 +6,11 @@ from aggregate import build_observed, exposure_rows, soft_counts, to_coarse
 D1, D2 = pd.Timestamp("2026-10-01"), pd.Timestamp("2026-10-02")
 
 
+def _both(*days):
+    idx = pd.DatetimeIndex(list(days))
+    return {"dark_small": idx, "slowdown": idx}
+
+
 def _cells(ids):
     return pd.DataFrame({"cell_id": ids, "level": 2000, "sea_frac": 0.5})
 
@@ -32,7 +37,7 @@ def test_rough_and_missing_passes_add_no_small_boat_exposure():
             "exposure_small": [0.8, 0.0],  # second pass was rough: P3 writes 0
         }
     )
-    rows = exposure_rows(exposure, _cells(["2000_0_0", "2000_1_0"]), pd.DatetimeIndex([D1, D2]), D2)
+    rows = exposure_rows(exposure, _cells(["2000_0_0", "2000_1_0"]), _both(D1, D2), D2)
     small = rows[rows.event_type == "dark_small"].set_index(["cell_id", "date"])["exposure"]
     assert small[("2000_0_0", D1)] == pytest.approx(0.8)
     assert small[("2000_0_0", D2)] == 0  # no pass that day
@@ -43,7 +48,7 @@ def test_slowdown_exposure_is_sea_frac_and_zero_after_gfw_latest_date():
     rows = exposure_rows(
         pd.DataFrame(columns=["cell_id", "time_utc", "exposure_small"]),
         _cells(["2000_0_0"]),
-        pd.DatetimeIndex([D1, D2]),
+        _both(D1, D2),
         slowdown_last_date=D1,
     )
     slow = rows[rows.event_type == "slowdown"].set_index("date")["exposure"]
@@ -117,8 +122,78 @@ def test_run_writes_both_levels_and_both_types_with_no_gaps():
             "exposure_small": [0.9],
         }
     )
-    f = run(events, exposure, _cells(ids), pd.DatetimeIndex([D1, D2]), D2).frame
+    f = run(events, exposure, _cells(ids), _both(D1, D2), D2).frame
     fine, coarse = f[f.level == 2000], f[f.level == 10000]
     assert len(fine) == 6 * 2 * 2  # cells x dates x types, unobserved rows included
     assert set(coarse.cell_id) == {"10000_0_0", "10000_1_0"}
     assert coarse["count"].sum() == pytest.approx(fine["count"].sum()) == pytest.approx(0.6)
+
+
+def test_each_type_gets_its_own_history_window():
+    from aggregate import history_dates
+
+    d = history_dates(
+        pd.Timestamp("2026-11-24 13:00"), {"ship_history_days": 730, "radar_history_days": 90}
+    )
+    assert len(d["slowdown"]) == 730 and len(d["dark_small"]) == 90
+    assert d["slowdown"][-1] == d["dark_small"][-1] == pd.Timestamp("2026-11-24")
+    assert d["dark_small"][0] == pd.Timestamp("2026-11-24") - pd.Timedelta(days=89)
+
+
+def _write_cells_layer(path, cells):
+    """A GeoPackage is SQLite; P5 reads only the attribute columns of the `cells` table."""
+    import sqlite3
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(path) as con:
+        cells.assign(fid=range(1, len(cells) + 1), geom=b"").to_sql("cells", con, index=False)
+
+
+def test_stage_reads_inputs_and_writes_a_valid_observed_file(tmp_path, monkeypatch):
+    from aggregate import stage
+    from core.io import read_stage, stage_path, write_stage
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path))
+    ids = [f"2000_{i}_0" for i in range(6)]
+    _write_cells_layer(stage_path("reference/cells"), _cells(ids))
+    t = pd.Timestamp("2026-10-01 06:00", tz="UTC")
+    write_stage(
+        "coverage/exposure",
+        pd.DataFrame(
+            {
+                "cell_id": ["2000_0_0"],
+                "pass_id": ["s1a_1"],
+                "time_utc": [t],
+                "covered_frac": [1.0],
+                "wind_ms": [3.0],
+                "hs_m": [0.5],
+                "calm": [True],
+                "exposure_small": [0.9],
+            }
+        ),
+        "simulated",
+    )
+    write_stage(
+        "match/events",
+        pd.DataFrame(
+            {
+                "event_id": ["e1"],
+                "event_type": ["dark_small"],
+                "time_utc": [t + pd.Timedelta(minutes=5)],
+                "x_m": [381000.0],
+                "y_m": [5661000.0],
+                "cell_id": ["2000_0_0"],
+                "p": [0.6],
+                "duration_min": [None],
+                "ship_key": [None],
+                "matched": [False],
+            }
+        ),
+        "simulated",
+    )
+    cfg = {"ship_history_days": 3, "radar_history_days": 2}
+    stage(pd.Timestamp("2026-10-02"), pd.Timestamp("2026-10-02"), cfg, "simulated")
+    out = read_stage("aggregate/observed")
+    fine = out[out.level == 2000]
+    assert len(fine) == 6 * (3 + 2)  # every cell on every day of each type's window
+    assert out["count"].sum() == pytest.approx(2 * 0.6)  # the event counted at 2 km and at 10 km
