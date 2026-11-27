@@ -8,6 +8,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 from shapely.geometry import box
+from shapely.geometry.base import BaseGeometry
 
 from core import io
 from core.config import load
@@ -56,7 +57,7 @@ def sim(tmp_path_factory):
     return chips, (float(site["x_m"]), float(site["y_m"]))
 
 
-def _land() -> object:
+def _land() -> BaseGeometry:
     x0, y0 = _origin()
     return box(x0 + 100_000, y0 + 40_000, x0 + 120_000, y0 + 60_000)
 
