@@ -2,6 +2,10 @@
 ship identifier cannot slip into a file after match/. Cross-file rules (every cell_id exists in the cells layer)
 and the config hash / seed stamp are checked by core.io, not here."""
 
+import re
+from collections.abc import Mapping
+from typing import Any
+
 import numpy as np
 import pandas as pd
 import pandera.pandas as pa
@@ -104,6 +108,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "hs_m": _num(ge=0),
             "calm": _flag(),
             "exposure_small": _prob(),
+            "post_storm": _flag(),  # A9: >= 24 h of hs > 2.5 m in the 72 h before the pass
         }
     ),
     "detect/detections": _schema(
@@ -159,7 +164,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "model": pa.Column(str, nullable=False),
             "fold": _num(
                 "Int64", nullable=True
-            ),  # null for the live forecast, fold number in backtests
+            ),  # 0 for the live forecast (evaluation window), fold number 1..k in backtests
         },
         pa.Check(lambda df: df["lo90"] <= df["hi90"], error="lo90 > hi90"),
     ),
@@ -174,6 +179,10 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "cusum_s": _num(ge=0),
             "context": _prob(),
             "U": _prob(),
+            "y": _num(ge=0),  # (C + 0.5) / (mu + 0.5) for this row (#87)
+            "y_week": _num(
+                ge=0
+            ),  # (sum C + 0.5) / (sum mu + 0.5) over the cell's ISO week, on each day row (#87)
             "agreement": _num(int, ge=0, le=4),
         }
     ),
@@ -193,9 +202,90 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "top_piers": _str_list(),
         }
     ),
+    "fuse/piers": _schema(  # #88: one row per pier
+        {
+            "pier_id": _id(),
+            "P_j": _num(ge=0),  # sum over scored sites of S x exp(-T / 1 h), T = sea travel hours
+        }
+    ),
+    "fuse/links": _schema(  # #98: one row per slowdown with a link score
+        {
+            "site_id": _id(),
+            "L": _prob(),
+            "age_days": _num(ge=0),  # per site, sum of L x 0.5^(age_days / 30) = S in fuse/sites
+        }
+    ),
 }
 
 
 def check(name: str, frame: pd.DataFrame) -> pd.DataFrame:
     """Validate a stage frame; raises pandera.errors.SchemaErrors listing every broken rule. Returns the (coerced) frame."""
     return SCHEMAS[name].validate(frame, lazy=True)
+
+
+# Non-tabular stage files. Rasters are checked as arrays (reading and writing GeoTIFFs needs rasterio, which is P3's
+# and P2's business); JSON files are checked as plain dicts.
+_RASTERS = {
+    "reference/sea_250m": 250,
+    "reference/land_mask_10m": 10,
+    "reference/static_mask_10m": 10,
+}
+
+
+def check_raster(
+    name: str, array: np.ndarray, *, pixel_m: float, origin: tuple[float, float] | None = None
+) -> np.ndarray:
+    """uint8 0/1, 2-D, at the right pixel size; the 10 m masks must start at the config origin (x0, y0), gap 5."""
+    if name not in _RASTERS:
+        raise KeyError(f"unknown raster {name!r}")
+    if array.ndim != 2 or array.dtype != np.uint8:
+        raise ValueError(f"{name}: expected a 2-D uint8 array, got {array.ndim}-D {array.dtype}")
+    if not np.isin(array, (0, 1)).all():
+        raise ValueError(f"{name}: values must be 0 or 1")
+    if pixel_m != _RASTERS[name]:
+        raise ValueError(f"{name}: pixel size must be {_RASTERS[name]} m, got {pixel_m}")
+    if name.endswith("_10m") and origin is not None:
+        from core.grid import _origin
+
+        if tuple(origin) != _origin():
+            raise ValueError(f"{name}: origin {origin} is not the config origin {_origin()}")
+    return array
+
+
+_ISO_UTC = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$")
+
+
+def _plan(obj: Mapping[str, Any]) -> None:
+    if not obj or not set(obj) <= {"ship", "aircraft"}:
+        raise ValueError("plan: keys must be 'ship' and/or 'aircraft'")
+    for asset, stops in obj.items():
+        for i, s in enumerate(stops):
+            if (
+                not isinstance(s.get("id"), str)
+                or not _ISO_UTC.match(str(s.get("arrival_utc")))
+                or not s.get("dwell_h", -1) >= 0
+            ):
+                raise ValueError(
+                    f"plan: {asset} stop {i} needs id (str), arrival_utc (ISO UTC string) and dwell_h >= 0"
+                )
+
+
+_SNAPSHOT_KEYS = {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
+
+
+def _snapshot(obj: Mapping[str, Any]) -> None:
+    if set(obj) != _SNAPSHOT_KEYS:
+        raise ValueError(
+            f"snapshot: keys must be exactly {sorted(_SNAPSHOT_KEYS)}, got {sorted(obj)}"
+        )
+    if obj["meta"].get("data_label") not in ("simulated", "real", "mixed"):
+        raise ValueError("snapshot: meta.data_label must be simulated, real or mixed")
+    _plan(obj["plan"])
+
+
+JSON_CHECKS = {"patrol/plan": _plan, "export/snapshot": _snapshot}
+
+
+def check_json(name: str, obj: Mapping[str, Any]) -> Mapping[str, Any]:
+    JSON_CHECKS[name](obj)
+    return obj

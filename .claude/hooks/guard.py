@@ -54,6 +54,30 @@ def path_ok(r: str) -> bool:
     return False
 
 
+def belongs_to_another_module(r: str) -> bool:
+    for other, info in OWNERS["modules"].items():
+        if other == MODULE:
+            continue
+        if any(r == p.rstrip("/") or r.startswith(p) for p in info["paths"]):
+            return True
+    return False
+
+
+def shell_write_targets(cmd: str) -> list[str]:
+    """Best-effort list of paths a shell command would create or overwrite."""
+    targets: list[str] = []
+    for m in re.finditer(r"&?>>?\s*([^\s;&|<>]+)", cmd):
+        targets.append(m.group(1))
+    for m in re.finditer(r"(?<![\w./-])(tee|touch|mkdir|rm|cp|mv)\b([^;&|]*)", cmd):
+        targets += [a.strip("'\"") for a in m.group(2).split() if not a.startswith("-")]
+    for m in re.finditer(r"(?<![\w./-])(sed|perl)\b([^;&|]*)", cmd):
+        if re.search(r"(?:^|\s)-[A-Za-z]*i\b", m.group(2)):
+            targets += [a.strip("'\"") for a in m.group(2).split()
+                        if not a.startswith("-") and not a.startswith(("'", '"'))]
+    return [t for t in targets
+            if t and not t.startswith(("/dev/", "&", "~")) and "$" not in t]
+
+
 def main() -> None:
     data = json.load(sys.stdin)
     tool = data.get("tool_name", "")
@@ -79,10 +103,15 @@ def main() -> None:
         cmd = inp.get("command", "")
         if re.search(r"git\s+push\b.*(--force|\s-f\b)", cmd):
             block("force pushes are not allowed.")
-        if re.search(r"git\s+push\b.*\b(main|integration)\b", cmd):
+        if re.search(r"git\s+push\b[^;&|]*?(?:^|\s|:)(main|integration)(?=\s|$)", cmd):
             block("push your mod/<module>/<issue> branch and open a PR; never push to main or integration.")
-        if re.search(r"(^|[;&|\s])(cat|less|head|tail)\s+[^;&|]*\.env(\s|$)", cmd):
+        env_tokens = re.findall(r"(?<![\w./-])(\.env(?:\.[\w.-]+)?)(?![\w.-])", cmd)
+        if any(t != ".env.example" for t in env_tokens):
             block("secrets files are never read by agents.")
+        for target in shell_write_targets(cmd):
+            r = rel(target)
+            if r is not None and not path_ok(r) and belongs_to_another_module(r):
+                block(f"{MODULE} may not write {r} from the shell. Open an issue on the owning module instead.")
         if MODULE not in OWNERS["network_allowed"] and re.search(r"(^|[;&|\s])(curl|wget)\s", cmd):
             block(f"{MODULE} has no network access; only ingest downloads data.")
 
