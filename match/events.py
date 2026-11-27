@@ -1,13 +1,15 @@
 """Matching to GFW SAR, dark_small events, slowdowns, ship_key, events.parquet."""
 
+import hashlib
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from match._standin import CFG, EVENTS_COLUMNS, KN_TO_MS, cell_id, check_events
+from match._standin import CFG, EVENTS_COLUMNS, KN_TO_MS, RAW_ID_COLUMNS, cell_id, check_events
 
 log = logging.getLogger(__name__)
 
@@ -132,13 +134,27 @@ def slowdowns_from_tracks(ais: pd.DataFrame, *, cells: pd.DataFrame, era5: pd.Da
     return _events(ev)
 
 
-def ship_key(ship_id) -> str:  # stub, issue #10
-    return ""
+def ship_key(ship_id) -> str:
+    """Salted SHA-256 of a raw ship id. The salt comes from the environment, never from code or files.
+
+    Unsalted, a hash of a 9-digit MMSI is reversible by brute force, so a missing salt is an error.
+    """
+    salt = os.environ.get(CFG["ship_key_salt_env"])
+    if not salt:
+        raise RuntimeError(f"set {CFG['ship_key_salt_env']} before hashing ship ids")
+    return hashlib.sha256(f"{salt}:{ship_id}".encode()).hexdigest()
 
 
-def write_events(*frames, out: Path = Path("match/events.parquet")) -> Path:  # stub, issue #10
-    df = pd.concat(frames) if frames else pd.DataFrame(columns=EVENTS_COLUMNS)
-    df = df.astype({"p": float, "matched": bool})
+def write_events(*frames: pd.DataFrame, out: Path = Path("match/events.parquet")) -> Path:
+    """dark_small and slowdown frames -> match/events.parquet. Refuses any raw ship identifier column."""
+    raw = RAW_ID_COLUMNS & {c.lower() for f in frames for c in f.columns}
+    if raw:
+        raise ValueError(f"raw ship identifiers must never be written: {sorted(raw)}")
+    parts = [f for f in frames if len(f)]
+    df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=EVENTS_COLUMNS)
+    df = df.astype({"p": float, "matched": bool, "duration_min": float})
     df["time_utc"] = pd.to_datetime(df["time_utc"], utc=True)
-    check_events(df).to_parquet(out)
+    assert df["event_id"].is_unique, "duplicate event_id"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    check_events(df).to_parquet(out)  # TODO(P1): write through core.io (config hash, seed)
     return out
