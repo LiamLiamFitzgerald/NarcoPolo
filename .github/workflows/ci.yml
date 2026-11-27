@@ -41,22 +41,32 @@ jobs:
   checks:
     name: Lint, types, boundaries, tests
     runs-on: ubuntu-latest
-    if: hashFiles('pyproject.toml') != ''
     steps:
       - uses: actions/checkout@v4
+      - name: Has the project been set up yet?
+        id: has
+        run: echo "py=$([ -f pyproject.toml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        if: steps.has.outputs.py == 'true'
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install locked dependencies
+        if: steps.has.outputs.py == 'true'
         run: uv sync --frozen
       - name: Ruff
+        if: steps.has.outputs.py == 'true'
         run: |
           uv run ruff check .
           uv run ruff format --check .
       - name: Types
+        if: steps.has.outputs.py == 'true'
         run: uv run basedpyright
       - name: Module boundaries
+        if: steps.has.outputs.py == 'true'
         run: uv run tach check
       - name: Tests (simulator only, no network)
+        if: steps.has.outputs.py == 'true'
         run: uv run pytest -q --tb=short
         env:
           NARCO_NO_NETWORK: "1"

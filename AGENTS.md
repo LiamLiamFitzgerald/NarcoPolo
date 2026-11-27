@@ -30,7 +30,7 @@ You are one of several Claude Code agents building NarcoPolo, each working on on
 3. Run `make test` (ruff, type checker, tach, pytest). Keep output quiet: `uv run pytest -q --tb=short`.
 4. Commit in small steps. Push your branch only: `git push -u origin mod/p<n>/<issue>`. Never push to `main` or `integration`.
 5. Open a PR into `integration` with the template filled in: what changed, which tests, which warnings from your spec you checked and how.
-6. CI and the Claude reviewer run. Fix what they find. A human merges `integration` into `main` at checkpoints.
+6. CI runs. Fix what they find. A human merges `integration` into `main` at checkpoints.
 7. Update your module's line in `STATUS.md`.
 
 ## Stop and escalate
