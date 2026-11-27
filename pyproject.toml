@@ -2,7 +2,7 @@
 name = "narcopolo"
 version = "0.0.0"
 requires-python = ">=3.12"
-dependencies = ["numpy", "pandas", "geopandas", "pandera", "pyarrow", "pyproj", "pywebview", "pyyaml", "scipy", "shapely"]
+dependencies = ["numpy", "pandas", "geopandas", "pandera", "pyarrow", "pyproj", "pywebview", "pyyaml", "scipy", "shapely", "statsmodels"]
 
 [dependency-groups]
 dev = ["pandas-stubs", "types-pyyaml", "pytest", "ruff", "basedpyright", "tach"]

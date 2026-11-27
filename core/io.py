@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,7 +13,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from core.config import Config, load
+from core.config import Config, latest_dates, load, snapshot_date
 from core.schemas import SCHEMAS, check
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -31,6 +32,29 @@ def stage_path(name: str) -> Path:
 def truth_path() -> Path:
     """sim/truth.parquet under the data root; only validate reads it."""
     return stage_path("aggregate/observed").parent.parent / "sim" / "truth.parquet"
+
+
+def write_snapshot(manifest: Mapping[str, Any]) -> Path:
+    """data/snapshot.json: T and each feed's latest date, so modules that may not read raw/ (P5) still know them (A11).
+    Written by ingest.fetch_all after it updates the manifest, and by the simulator."""
+    dates = latest_dates(manifest)
+    path = stage_path("aggregate/observed").parent.parent / "snapshot.json"
+    path.write_text(
+        json.dumps(
+            {
+                "T": snapshot_date(manifest).isoformat(),
+                **{k: v.isoformat() for k, v in dates.items()},
+            },
+            indent=1,
+        )
+    )
+    return path
+
+
+def read_snapshot() -> dict[str, date]:
+    """Keys: T, radar, gfw_presence, gfw_sar, era5."""
+    raw = json.loads((stage_path("aggregate/observed").parent.parent / "snapshot.json").read_text())
+    return {k: date.fromisoformat(v) for k, v in raw.items()}
 
 
 def _plain(x: Any) -> Any:
