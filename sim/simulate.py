@@ -597,8 +597,8 @@ def simulate(config: Config, seed: int) -> None:
 
     world = SimWorld(config, seed, start, days, fine, weather, passes, boats, ships, detections)
     write_scenes(world)
-    write_raw(world)
     write_static(world)
+    write_raw(world)  # last: the manifest lists every file the others wrote
 
     # truth: every true boat, every planted drop and pick-up. Only validate reads it.
     tb = boats.assign(
