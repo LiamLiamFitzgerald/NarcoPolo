@@ -19,10 +19,16 @@ PIXEL_M = 250.0
 
 def _gpkg(frame: gpd.GeoDataFrame, path: Path, layer: str) -> None:
     frame.to_crs(4326).to_file(path, layer=layer, driver="GPKG")
-    with sqlite3.connect(
+    db = sqlite3.connect(
         path
-    ) as db:  # GeoPackage stamps the write time; pin it so the same seed gives the same bytes
+    )  # GeoPackage stamps the write time; pin it so the same seed gives the same bytes
+    with db:
         db.execute("UPDATE gpkg_contents SET last_change = '2000-01-01T00:00:00.000Z'")
+    db.close()
+    # SQLite's header write counter (bytes 24-27, copied at 92-95) varies with how many writes the driver made
+    b = bytearray(path.read_bytes())
+    b[24:28] = b[92:96] = (1).to_bytes(4, "big")
+    path.write_bytes(bytes(b))
 
 
 def _geotiff(path: Path, depth: np.ndarray, x_left: float, y_top: float) -> None:

@@ -73,10 +73,4 @@ def test_same_inputs_give_identical_bytes(raw, tmp_path, monkeypatch):
     monkeypatch.setenv("NARCO_RAW", str(tmp_path / "b"))
     write_static(world())
     for f in FILES:
-        if f.endswith(
-            ".gpkg"
-        ):  # SQLite keeps a write counter in its header, so compare what the file holds
-            a, b = (gpd.read_file(r / f) for r in (raw, tmp_path / "b"))
-            assert a.geometry.equals(b.geometry), f
-        else:
-            assert (raw / f).read_bytes() == (tmp_path / "b" / f).read_bytes(), f
+        assert (raw / f).read_bytes() == (tmp_path / "b" / f).read_bytes(), f
