@@ -12,7 +12,9 @@ _SPEC = {
     "fdr_q": 0.1, "link_radius_m": 4000, "link_days": 7, "tau_days": 3, "half_life_days": 30,
     "shift_days": 60, "n_shuffles": 999, "pier_tau_h": 1,
 }  # fmt: skip
-PARAMS = {**_SPEC, **load(io.CONFIG_PATH)[0].get("p6", {})}
+_CFG = load(io.CONFIG_PATH)[0]
+PARAMS = {**_SPEC, **_CFG.get("p6", {})}
+RADAR_HISTORY_DAYS = int(_CFG["radar_history_days"])  # T - 89 .. T (shared.md, Global settings)
 
 
 def _provenance(name: str) -> str:
