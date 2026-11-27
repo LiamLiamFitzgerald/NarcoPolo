@@ -12,9 +12,10 @@ import geopandas as gpd
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyogrio
 
 from core.config import Config, latest_dates, load, snapshot_date
-from core.schemas import SCHEMAS, check
+from core.schemas import JSON_CHECKS, SCHEMAS, check, check_json
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.yaml"
@@ -37,6 +38,37 @@ def raw_root() -> Path:
 def truth_path() -> Path:
     """sim/truth.parquet under the data root; only validate reads it."""
     return stage_path("aggregate/observed").parent.parent / "sim" / "truth.parquet"
+
+
+_KNOWN: dict[tuple[str, int], frozenset[str]] = {}
+
+
+def _known_cells() -> frozenset[str]:
+    """cell_ids in reference/layers.gpkg, cached until the file changes."""
+    path = stage_path("reference/cells")
+    if not path.exists():
+        raise FileNotFoundError(
+            "reference/cells must be written before any file that has a cell_id"
+        )
+    key = (str(path), path.stat().st_mtime_ns)
+    if key not in _KNOWN:
+        ids = pyogrio.read_dataframe(
+            path, layer=_GPKG["reference/cells"], columns=["cell_id"], read_geometry=False
+        )
+        _KNOWN.clear()
+        _KNOWN[key] = frozenset(ids["cell_id"])
+    return _KNOWN[key]
+
+
+def _check_cells_exist(name: str, frame: pd.DataFrame) -> None:
+    """Invariant: every cell_id exists in reference/layers.gpkg (the cells layer itself is the reference)."""
+    if name == "reference/cells" or "cell_id" not in frame.columns:
+        return
+    unknown = set(frame["cell_id"]) - _known_cells()
+    if unknown:
+        raise ValueError(
+            f"{name}: {len(unknown)} cell_id(s) not in reference/cells, e.g. {sorted(unknown)[:3]}"
+        )
 
 
 def write_snapshot(manifest: Mapping[str, Any]) -> Path:
@@ -76,7 +108,10 @@ def _keys_hash(cfg: Config, keys: list[str]) -> str:
 
 
 def _keys(cfg: Config, name: str, provenance: str) -> list[str]:
-    return [*cfg["reads"][name], *(["sim"] if provenance == "simulated" else [])]
+    return [
+        *cfg["reads"].get(name, ["x0", "y0", "region_bbox"]),
+        *(["sim"] if provenance == "simulated" else []),
+    ]
 
 
 def _stamp(cfg: Config, name: str, provenance: str) -> dict[str, Any]:
@@ -102,6 +137,7 @@ def _stale(cfg: Config, name: str, stamp: dict[str, Any]) -> None:
 
 def write_stage(name: str, frame: pd.DataFrame, provenance: Literal["simulated", "real"]) -> Path:
     frame = check(name, frame)  # refuse to write a broken file
+    _check_cells_exist(name, frame)
     cfg, _ = load(CONFIG_PATH)
     stamp = _stamp(cfg, name, provenance)
     path = stage_path(name)
@@ -131,4 +167,36 @@ def read_stage(name: str) -> pd.DataFrame:
         raise ValueError(f"{name} carries no config stamp: it was not written by core.io")
     stamp = json.loads(raw)
     _stale(load(CONFIG_PATH)[0], name, stamp)
-    return check(name, read())
+    frame = check(name, read())
+    _check_cells_exist(name, frame)
+    return frame
+
+
+def json_path(name: str) -> Path:
+    if name not in JSON_CHECKS:
+        raise KeyError(f"unknown JSON stage file {name!r}")
+    return stage_path("aggregate/observed").parent.parent / f"{name}.json"
+
+
+def write_json_stage(
+    name: str, obj: dict[str, Any], provenance: Literal["simulated", "real"]
+) -> Path:
+    """patrol/plan and export/snapshot: checked, then written with a sidecar stamp so the file itself keeps its shape."""
+    check_json(name, obj)
+    cfg, _ = load(CONFIG_PATH)
+    path = json_path(name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(obj, indent=1, allow_nan=False))
+    path.with_suffix(".stamp.json").write_text(json.dumps(_stamp(cfg, name, provenance)))
+    return path
+
+
+def read_json_stage(name: str) -> dict[str, Any]:
+    path = json_path(name)
+    sidecar = path.with_suffix(".stamp.json")
+    if not sidecar.exists():
+        raise ValueError(f"{name} carries no config stamp: it was not written by core.io")
+    _stale(load(CONFIG_PATH)[0], name, json.loads(sidecar.read_text()))
+    obj = json.loads(path.read_text())
+    check_json(name, obj)
+    return obj

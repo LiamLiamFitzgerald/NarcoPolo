@@ -4,7 +4,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 
 | Module | Simulator | Real data | Blocked |
 | --- | --- | --- | --- |
-| P1 core, sim, validate, CI | — | — | — |
+| P1 core, sim, validate, CI | core, schemas, io, sim tables, make targets, validate (7 of 10 checks) merged | n/a until P2 data | sim scene chips and raw files (#92-94); validate injection, null, backtest wait for P4, P6, P5 |
 | P2 ingest | — | — | — |
 | P3 reference, coverage | stubs for every public function; run() checks the simulated reference and coverage files (#22) | — | real layers need P3 config keys, post_storm column, raster paths (#85); module tests not collected by CI (#96) |
 | P4 detect, match | — | — | — |
