@@ -1,33 +1,55 @@
 """Desktop window for the dashboard. Run: uv run python -m dashboard.app
 
-pywebview is not in pyproject.toml yet (P1 owns it): `uv add pywebview` once P1 approves."""
+Shows data/export/snapshot.json (or $NARCO_DATA/export/snapshot.json), written by `make all`."""
 
+import functools
+import http.server
 import json
+import os
 from pathlib import Path
 
 HERE = Path(__file__).parent
 
 
+def _snapshot_path() -> Path:
+    return Path(os.environ.get("NARCO_DATA", HERE.parent / "data")) / "export" / "snapshot.json"
+
+
 class Api:
     """Exposed to index.html as window.pywebview.api; serves the frozen snapshot, nothing else."""
 
-    def __init__(self, snapshot: Path = HERE.parent / "export" / "snapshot.json"):
-        self._snapshot = snapshot
+    def __init__(self, snapshot: Path | None = None):
+        self._snapshot = snapshot or _snapshot_path()
 
     def get_snapshot(self) -> dict:
         return json.loads(self._snapshot.read_text())
 
 
+def _handler(snapshot: Path):
+    """Serves the dashboard folder, and the snapshot at /snapshot.json (it lives under the data
+    root, which is not inside the dashboard folder)."""
+
+    class Handler(http.server.SimpleHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.split("?")[0] != "/snapshot.json":
+                return super().do_GET()
+            body = snapshot.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    return functools.partial(Handler, directory=str(HERE))
+
+
 def _browser() -> None:
-    """Fallback with no GUI backend: serve the repo folder locally (127.0.0.1 only, no internet)
-    and open the same page in the default browser, which fetches ../export/snapshot.json."""
-    import functools
-    import http.server
+    """Fallback with no GUI backend: serve the page on 127.0.0.1 only (no internet) and open it in
+    the default browser."""
     import webbrowser
 
-    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(HERE.parent))
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as srv:
-        url = f"http://127.0.0.1:{srv.server_port}/dashboard/index.html"
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), _handler(_snapshot_path())) as srv:
+        url = f"http://127.0.0.1:{srv.server_port}/index.html"
         print(f"No pywebview window available; serving {url} (Ctrl+C to stop)")
         webbrowser.open(url)
         try:

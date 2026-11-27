@@ -10,7 +10,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | — | — | — |
 | P6 detectors, fuse | — | — | — |
-| P7 patrol, export, dashboard | placeholder stubs run end to end; dashboard renders them in pywebview (issue 25) | — | real logic waits on issues 49, 50, 51 |
+| P7 patrol, export, dashboard | patrol, export and dashboard run on the simulator end to end (PRs 81, 97, 99 and the dashboard PR) | — | `obs_vs_exp`, pier score and exploration bootstrap wait on contract issues 87, 88, 98; sea raster, config keys and base port on issue 89 |
 
 ## Checkpoints
 
