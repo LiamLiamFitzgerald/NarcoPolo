@@ -6,7 +6,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | --- | --- | --- | --- |
 | P1 core, sim, validate, CI | all core, sim (stage + raw files), make targets; validate: all 10 checks incl. injection, null, backtest; contracts #85 #87 #88 #98 in; rasterio + netCDF4 added | n/a until P2 data | null test and planted-site rank wait for P6's real fuse; #117 (CI over every module) waits for other modules' type errors |
 | P2 ingest | `ingest/cache` (PR #53); offline stubs for probe, s1, gfw, era5, osm, static, run write sim-shaped raw/ files recorded with a licence, `fetch_all` exported (#21) | — | real fetchers not started; P2 tests not in pytest testpaths (P1, see #117) |
-| P3 reference, coverage | — | — | — |
+| P3 reference, coverage | stubs for every public function; run() checks the simulated reference and coverage files; exposure writes post_storm (A9) (#22) | — | real layers (#34-#37) |
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | aggregate.run() and forecast.run() on core.io and snapshot.json; observed, EWMA, GLM + EB, NB intervals, fold 0 + backtest rows (PR #66) | waits for P3 cells/coverage and P4 events | #90 (sim small-boat events on rough passes); #58 (lane bias, zero rates); #69 (P5 config keys, testpaths); #74 |
 | P6 detectors, fuse | stubs: `detectors.run()` and `fuse.run()` write schema-valid placeholder fuse/cells and fuse/sites (#24) | — | P6 tests not in pytest testpaths (P1) |
