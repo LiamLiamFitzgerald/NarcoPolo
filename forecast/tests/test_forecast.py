@@ -39,7 +39,7 @@ def _ewma(f2, f10, split=SPLIT):
 
 
 def _glm(f2, f10, X2, X10, split=SPLIT):
-    return glm_mu(split, split.train(f10), X10, split.test(f2), X2)
+    return glm_mu(split, split.train(f2), split.test(f2), X2)
 
 
 def _recovery(test, mu, cells):
@@ -64,11 +64,6 @@ def test_ewma_recovers_planted_rates_within_20_percent(event_type):
     assert all(0.8 <= r <= 1.2 for r in ratios.values()), ratios
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="spec gap: fitting on 10 km and applying beta to 2 km over-predicts lane cells ~35% "
-    "(a 2-row lane band inside a 10 km cell); needs a P1/P3 decision",
-)
 @pytest.mark.parametrize("event_type", TYPES)
 def test_glm_recovers_planted_rates_within_20_percent(event_type):
     f2, f10, X2, X10, cells = _setup(event_type)
@@ -93,7 +88,7 @@ def test_drop_site_days_are_not_absorbed_into_the_baseline():
 
 @pytest.mark.parametrize("event_type", TYPES)
 def test_future_row_in_training_data_makes_the_fit_raise(event_type):
-    f2, f10, X2, X10, _ = _setup(event_type)
+    f2, f10, X2, _, _ = _setup(event_type)
     leak = SPLIT.test(f2).head(1)
     with pytest.raises(ValueError, match="look-ahead"):
         ewma(
@@ -104,9 +99,8 @@ def test_future_row_in_training_data_makes_the_fit_raise(event_type):
             DELTA,
             MIN_SE,
         )
-    leak10 = SPLIT.test(f10).head(1)
     with pytest.raises(ValueError, match="look-ahead"):
-        glm_mu(SPLIT, pd.concat([SPLIT.train(f10), leak10]), X10, SPLIT.test(f2), X2)
+        glm_mu(SPLIT, pd.concat([SPLIT.train(f2), leak]), SPLIT.test(f2), X2)
 
 
 def test_unobserved_rows_get_mu_zero_and_no_surprise():
@@ -183,8 +177,8 @@ def test_walk_forward_backtest_beats_flat_average(event_type, k):
 
 
 def _frames(event_type, fine_frame=None):
-    f2, f10, X2, X10, _ = _setup(event_type, fine_frame)
-    return f2, f10, X2, X10
+    f2, f10, X2, _, _ = _setup(event_type, fine_frame)
+    return f2, f10, X2
 
 
 def _window(model, frames):
@@ -225,7 +219,7 @@ def test_days_being_scored_never_shape_their_own_baseline(model):
     from aggregate import to_coarse
     from core.observed import Observed
 
-    spiked = (f2, to_coarse(Observed(f2)).frame, frames[2], frames[3])
+    spiked = (f2, to_coarse(Observed(f2)).frame, frames[2])
     pd.testing.assert_series_equal(_window(model, frames).mu, _window(model, spiked).mu)
 
 
@@ -337,18 +331,23 @@ def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatc
     assert log.read_bytes() == before  # simulated runs record no decision
 
 
-def test_unknown_coarse_covariate_does_not_inflate_its_childrens_mu():
+def test_unknown_covariate_does_not_inflate_its_neighbours_mu():
     from core.grid import parent
 
     f2, f10, X2, X10, cells = _setup("slowdown")
     hole = "10000_2_2"
-    X10 = X10.assign(log_dist_coast=X10.log_dist_coast.where(X10.cell_id != hole))
+    unknown = (X2.cell_id.map(parent) == hole) & (
+        X2.cell_id.str.split("_").str[1].astype(int) % 2 == 0
+    )
+    X2 = X2.assign(log_dist_coast=X2.log_dist_coast.where(~unknown))
     mu, _ = _glm(f2, f10, X2, X10)
     test = SPLIT.test(f2)
-    kids = (test.cell_id.map(parent) == hole).to_numpy()
+    known = ~test.cell_id.isin(X2.cell_id[unknown])
+    kids = ((test.cell_id.map(parent) == hole) & known).to_numpy()
     rate = fake_sim.planted_rate(cells[cells.level == 2000].set_index("cell_id"))
     ratio = mu[kids].sum() / (test.cell_id[kids].map(rate) * test.exposure[kids]).sum()
-    assert 0.5 < ratio < 2, ratio  # before the fix, M = 0 for that cell, so theta blew up
+    # before the fix, the unknown children's O counted but their M didn't, so theta blew up
+    assert 0.5 < ratio < 2, ratio
 
 
 def test_backtest_leaves_out_a_fold_with_no_observed_rows():
