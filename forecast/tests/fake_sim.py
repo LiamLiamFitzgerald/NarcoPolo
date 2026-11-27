@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from aggregate import to_coarse
-from aggregate._stand_in import Observed, parent
+from core.grid import parent
+from core.observed import Observed
 
 N = 30  # 30 x 30 fine cells -> 6 x 6 coarse cells
 DAYS = 120

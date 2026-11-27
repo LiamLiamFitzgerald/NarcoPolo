@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from core.split import Split, folds
 from forecast import (
     EXPECTED_COLUMNS,
     backtest,
@@ -16,12 +17,11 @@ from forecast import (
     nb_interval,
     poisson_deviance,
 )
-from forecast._stand_in import Split, folds
 from forecast.tests import fake_sim
 
 TYPES = ["dark_small", "slowdown"]
 DELTA, MIN_SE, LEVEL = 0.97, 3.0, 0.9  # spec defaults; real runs read them from config
-SPLIT = Split(fake_sim.START + pd.Timedelta(days=90), embargo_days=0, test_days=30)
+SPLIT = Split((fake_sim.START + pd.Timedelta(days=90)).date(), embargo_days=0, test_days=30)
 
 
 def _setup(event_type, fine_frame=None):
@@ -175,7 +175,7 @@ def test_poisson_deviance_is_zero_for_a_perfect_forecast_and_handles_soft_zeros(
 def test_walk_forward_backtest_beats_flat_average(event_type, k):
     f2, f10, X2, X10, _ = _setup(event_type)
     T = f2.date.max()
-    fs = folds(T, k, embargo_days=7, test_days=7)
+    fs = folds(T.date(), k)
     skills = {
         "ewma": backtest(f2, fs, lambda s: _ewma(f2, f10, s)),
         "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0]),
@@ -200,7 +200,7 @@ def _window(model, frames):
 def test_evaluation_window_runs_from_monday_three_weeks_back_to_T():
     for T in pd.date_range("2026-11-02", periods=7):  # Monday .. Sunday
         s = evaluation_split(T)
-        days = pd.date_range(s.cutoff, T)
+        days = pd.date_range(pd.Timestamp(s.cutoff), T)
         assert s.cutoff.weekday() == 0 and 22 <= len(days) <= 28
         assert len(s.test(pd.DataFrame({"date": days}))) == len(days)
 
@@ -228,7 +228,7 @@ def test_days_being_scored_never_shape_their_own_baseline(model):
     window = evaluation_split(f2.date.max()).test(f2)
     f2.loc[window.index, "count"] += 50  # a wild window: must not move mu
     from aggregate import to_coarse
-    from aggregate._stand_in import Observed
+    from core.observed import Observed
 
     spiked = (f2, to_coarse(Observed(f2)).frame, frames[2], frames[3])
     pd.testing.assert_series_equal(_window(model, frames).mu, _window(model, spiked).mu)
@@ -236,7 +236,7 @@ def test_days_being_scored_never_shape_their_own_baseline(model):
 
 def test_backtest_rows_carry_their_fold_number():
     frames = _frames("dark_small")
-    fs = folds(frames[0].date.max(), 3, embargo_days=7, test_days=7)
+    fs = folds(frames[0].date.max().date(), 3)
     rows = pd.concat(
         [expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL) for k, s in enumerate(fs, 1)]
     )

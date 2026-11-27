@@ -12,7 +12,8 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
 
-from forecast._stand_in import Split, folds, parent
+from core.grid import parent
+from core.split import Split, folds
 
 _ID = ["cell_id", "date"]
 
@@ -20,7 +21,7 @@ _ID = ["cell_id", "date"]
 def _decayed_sums(split: Split, train: pd.DataFrame, delta: float) -> pd.DataFrame:
     """S_C and S_E per cell as they stand after cutoff - 1 day; unobserved days add 0 to both."""
     split.assert_train(train)
-    age = (split.cutoff - pd.Timedelta(days=1) - train["date"]).dt.days
+    age = (pd.Timestamp(split.cutoff) - pd.Timedelta(days=1) - train["date"]).dt.days
     w = delta**age
     sums = train.assign(s_c=train["count"] * w, s_e=train["exposure"] * w)
     return sums.groupby("cell_id")[["s_c", "s_e"]].sum()
@@ -229,7 +230,7 @@ def evaluation_split(T: pd.Timestamp) -> Split:
     No embargo: the production fit uses every day before the window and none inside it.
     """
     start = T.normalize() - pd.Timedelta(days=T.weekday() + 21)
-    return Split(start, embargo_days=0, test_days=(T.normalize() - start).days + 1)
+    return Split(start.date(), embargo_days=0, test_days=(T.normalize() - start).days + 1)
 
 
 def forecast_window(
@@ -335,7 +336,7 @@ def run(
         X2 = design_matrix(cells[cells["level"] == 2000], dates, event_type)
         X10 = design_matrix(cells[cells["level"] == 10000], dates, event_type)
         frames = (f2, f10, X2, X10)
-        fs = folds(T, k, cfg["embargo_days"], cfg["test_days"])
+        fs = folds(T.date(), k)  # core fixes the 7-day embargo and 7-day test window
 
         fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
         skills = {

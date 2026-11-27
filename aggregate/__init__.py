@@ -5,7 +5,8 @@ Dates are tz-naive pandas Timestamps at midnight, meaning the UTC date.
 
 import pandas as pd
 
-from aggregate._stand_in import Observed, parent
+from core.grid import parent
+from core.observed import Observed
 
 EVENT_TYPES = ("dark_small", "slowdown")
 _KEYS = ["cell_id", "date", "event_type"]
