@@ -164,6 +164,23 @@ def write_stage(name: str, frame: pd.DataFrame, provenance: Literal["simulated",
     return path
 
 
+def read_provenance(name: str) -> Literal["simulated", "real"]:
+    """The provenance in a stage file's core.io stamp."""
+    if name in _GPKG:
+        sidecar = _sidecar(name)
+        raw = sidecar.read_bytes() if sidecar.exists() else None
+    else:
+        raw = (pq.read_schema(stage_path(name)).metadata or {}).get(_STAMP)
+    if raw is None:
+        raise ValueError(f"{name} carries no config stamp: it was not written by core.io")
+    return json.loads(raw)["provenance"]
+
+
+def read_cells() -> pd.DataFrame:
+    """reference/cells without geometry."""
+    return pd.DataFrame(read_stage("reference/cells").drop(columns="geometry"))
+
+
 def read_stage(name: str) -> pd.DataFrame:
     if name in _GPKG:
         sidecar = _sidecar(name)

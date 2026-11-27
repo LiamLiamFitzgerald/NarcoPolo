@@ -89,3 +89,21 @@ def test_raster_paths_sit_under_the_data_root():
     )
     with pytest.raises(KeyError):
         io.raster_path("reference/nope")
+
+
+@pytest.mark.parametrize("provenance", ["simulated", "real"])
+@pytest.mark.parametrize("name", ["aggregate/observed", "reference/cells"])
+def test_read_provenance_round_trips(name, provenance):
+    io.write_stage(name, frame(name), provenance)
+    assert io.read_provenance(name) == provenance
+
+
+def test_read_provenance_without_stamp_raises():
+    io._sidecar("reference/cells").unlink()
+    with pytest.raises(ValueError, match="no config stamp"):
+        io.read_provenance("reference/cells")
+
+
+def test_read_cells_drops_geometry():
+    cells = io.read_cells()
+    assert "geometry" not in cells.columns and "cell_id" in cells.columns
