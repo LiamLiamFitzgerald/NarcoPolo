@@ -67,6 +67,11 @@ def run(observed=None, expected=None, layers=None, travel=None, events=None):
     With no arguments (make all, DECISIONS.md 2026-11-27 18:30) it reads the stage files and writes fuse/sites."""
     if observed is None:
         return run_sites()
+    return _run(observed, expected, layers, travel, events)
+
+
+def _run(observed, expected, layers, travel, events) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The pure path of run(): frames in, (cells, sites) out, no file I/O (the null test calls it 200 times)."""
     cells = pd.DataFrame(
         {c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()}
     )  # stub, issue 24
@@ -83,5 +88,5 @@ def run_sites() -> None:
         "reference/travel_hours",
         "match/events",
     ]
-    _, out = run(*(io.read_stage(n) for n in names))
+    _, out = _run(*(io.read_stage(n) for n in names))
     io.write_stage("fuse/sites", out, _provenance("aggregate/observed"))  # type: ignore[arg-type]

@@ -97,11 +97,24 @@ def test_run_cells_schema_ranges_and_same_seed_same_file(cells):
     assert c["context"].between(0, 1).all()
 
 
+def test_backtest_fold_rows_never_duplicate_a_cell_day(cells):
+    import detectors
+
+    c, _ = cells
+    exp = io.read_stage("forecast/expected")
+    backtest = exp.assign(fold=pd.array([1] * len(exp), "Int64"), mu=exp["mu"] * 3)
+    io.write_stage("forecast/expected", pd.concat([exp, backtest], ignore_index=True), "simulated")
+    detectors.run()
+    again = io.read_stage("fuse/cells")
+    assert not again.duplicated(["cell_id", "date", "event_type"]).any()
+    pd.testing.assert_frame_equal(again, c)  # fold 1 rows are ignored, not mixed in
+
+
 def test_planted_drop_cell_days_are_top_decile_with_agreement(cells):
     c, _ = cells
     truth = pd.read_parquet(io.truth_path())
     drops = truth[truth["kind"] == "drop"].assign(date=lambda t: t["time_utc"].dt.date)
-    slow = c[c["event_type"] == "slowdown"]
+    slow = c[c["event_type"] == "slowdown"].assign(date=lambda t: pd.to_datetime(t["date"]).dt.date)
     hit = slow.merge(drops[["cell_id", "date"]], on=["cell_id", "date"])
     assert len(hit) > 0
     assert (hit["U"] >= slow["U"].quantile(0.9)).all()

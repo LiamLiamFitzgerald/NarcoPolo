@@ -142,7 +142,8 @@ def _slow_hours(m: pd.DataFrame, events: pd.DataFrame) -> np.ndarray:
     ev = ev.assign(date=ev["time_utc"].dt.date, h=ev["duration_min"] / 60)
     g = ev.groupby(["cell_id", "date"])["h"]
     hours = g.sum().where(g.count() == g.size()).rename("hours").reset_index()
-    return m[["cell_id", "date"]].merge(hours, how="left")["hours"].to_numpy(float)
+    keys = m[["cell_id"]].assign(date=pd.to_datetime(m["date"]).dt.date)
+    return keys.merge(hours, how="left")["hours"].to_numpy(float)
 
 
 def _weekly_gi(m: pd.DataFrame) -> np.ndarray:
@@ -167,7 +168,11 @@ def run_cells() -> None:
     """aggregate/observed + forecast/expected -> fuse/cells.parquet, observed rows (E > 0) in the evaluation
     window only. CUSUM runs over all observed history so a build-up before the window still counts."""
     obs = Observed(io.read_stage("aggregate/observed")).observed_rows()
-    m = obs.merge(io.read_stage("forecast/expected"), on=_KEY).sort_values(["date", "cell_id"])
+    exp = io.read_stage("forecast/expected")
+    # Live forecast only (fold 0, #74 item 6; the simulator's truth rows have fold NA). Backtest folds would
+    # duplicate cell-days.
+    exp = exp[exp["fold"].fillna(0) == 0]
+    m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
