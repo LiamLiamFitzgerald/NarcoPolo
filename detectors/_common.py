@@ -7,8 +7,8 @@ import pyarrow.parquet as pq
 from core import io
 from core.config import load
 
-# TODO(P1): add these keys to config.yaml under `p6`. Values are docs/specs/P6.md, Parameters, plus rho from A1.
-# TODO(P6): cusum_h is not in the spec. A1: chosen on the simulator null so a quiet cell (mu = sim
+# TODO(P1): add these keys to config.yaml under `p6` (#123). Values are docs/specs/P6.md, Parameters, plus rho from A1.
+# TODO(P6): cusum_h is not in the spec (question #124). A1: chosen on the simulator null so a quiet cell (mu = sim
 # slowdown_rate_cold) alarms about once a quarter; test_cusum_alarms_about_once_a_quarter_on_quiet_simulator_cells
 # checks it. Any h below ln(rho) - mu gives that rate (one event alarms), so 0.5 is a pick, not a fit.
 _SPEC = {
