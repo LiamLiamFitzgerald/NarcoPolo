@@ -26,7 +26,7 @@ line-length = 100
 extend-exclude = ["scripts", ".claude"]  # tooling scripts, not pipeline code
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "sim/tests"]
+testpaths = ["core/tests", "sim/tests", "validate/tests"]
 pythonpath = ["."]
 
 [tool.basedpyright]
