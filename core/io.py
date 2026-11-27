@@ -30,6 +30,16 @@ def stage_path(name: str) -> Path:
     return root / ("reference/layers.gpkg" if name in _GPKG else f"{name}.parquet")
 
 
+RASTERS = ("reference/sea_250m", "reference/land_mask_10m", "reference/static_mask_10m")
+
+
+def raster_path(name: str) -> Path:
+    """Where P3 writes and P4/P7 read the reference rasters (#85); check them with core.schemas.check_raster."""
+    if name not in RASTERS:
+        raise KeyError(f"unknown raster {name!r}")
+    return stage_path("aggregate/observed").parent.parent / f"{name}.tif"
+
+
 def raw_root() -> Path:
     """raw/ (or $NARCO_RAW): the shape of what P2 downloads, which the simulator imitates."""
     return Path(os.environ.get("NARCO_RAW", ROOT / "raw"))
@@ -152,6 +162,23 @@ def write_stage(name: str, frame: pd.DataFrame, provenance: Literal["simulated",
     )
     pq.write_table(table, path)
     return path
+
+
+def read_provenance(name: str) -> Literal["simulated", "real"]:
+    """The provenance in a stage file's core.io stamp."""
+    if name in _GPKG:
+        sidecar = _sidecar(name)
+        raw = sidecar.read_bytes() if sidecar.exists() else None
+    else:
+        raw = (pq.read_schema(stage_path(name)).metadata or {}).get(_STAMP)
+    if raw is None:
+        raise ValueError(f"{name} carries no config stamp: it was not written by core.io")
+    return json.loads(raw)["provenance"]
+
+
+def read_cells() -> pd.DataFrame:
+    """reference/cells without geometry."""
+    return pd.DataFrame(read_stage("reference/cells").drop(columns="geometry"))
 
 
 def read_stage(name: str) -> pd.DataFrame:

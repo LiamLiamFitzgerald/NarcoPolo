@@ -297,6 +297,14 @@ def simulate(config: Config, seed: int) -> None:
     pw = weather.loc[passes["day"].to_numpy()].reset_index(drop=True)
     calm = ~pw["rough"].to_numpy()
     exposure_small = cov * fine["sea_frac"].to_numpy() * calm[:, None]
+    # A9: >= storm_hours of hs > storm_hs_m in the storm_lookback_h before the pass; the simulator's weather is daily
+    cv = config["coverage"]
+    stormy = weather["hs_m"].to_numpy() > cv["storm_hs_m"]
+    look = int(cv["storm_lookback_h"] // 24)
+    need = int(np.ceil(cv["storm_hours"] / 24))
+    post_storm = np.array(
+        [stormy[max(0, d - look) : d].sum() >= need for d in passes["day"].astype(int)]
+    )
     cell_ids = fine["cell_id"].to_numpy()
     exp_df = pd.DataFrame(
         {
@@ -308,6 +316,7 @@ def simulate(config: Config, seed: int) -> None:
             "hs_m": np.repeat(pw["hs_m"].to_numpy(), n),
             "calm": np.repeat(calm, n),
             "exposure_small": exposure_small.ravel(),
+            "post_storm": np.repeat(post_storm, n),
         }
     )
 
@@ -547,6 +556,14 @@ def simulate(config: Config, seed: int) -> None:
             "agreement": (u >= 0.9).astype(int),
         }
     )
+    c_seen, mu_seen = fc["count"].to_numpy(), mu[seen]
+    fuse_cells["y"] = (c_seen + 0.5) / (mu_seen + 0.5)
+    week = pd.to_datetime(fuse_cells["date"]).dt.strftime("%G-W%V")
+    g = pd.DataFrame(
+        {"k": fuse_cells["cell_id"] + fuse_cells["event_type"] + week, "c": c_seen, "m": mu_seen}
+    )
+    sums = g.groupby("k")[["c", "m"]].transform("sum")
+    fuse_cells["y_week"] = ((sums["c"] + 0.5) / (sums["m"] + 0.5)).to_numpy()
 
     # fuse/sites: the planted site, with its pick-ups that no pass could have seen
     pk_seen = int(boats[(boats["kind"] == "pickup")]["pass"].ge(0).sum())
@@ -581,6 +598,19 @@ def simulate(config: Config, seed: int) -> None:
         }
     )
 
+    # fuse/piers: P_j = S x exp(-T / 1 h) from the one site; fuse/links: S split into equal links of age 0
+    t_site = travel[travel["cell_id"] == cell_ids[site]].set_index("pier_id")["hours"]
+    fuse_piers = pd.DataFrame(
+        {
+            "pier_id": piers["pier_id"],
+            "P_j": float(npk) * np.exp(-t_site.reindex(piers["pier_id"]).to_numpy()),
+        }
+    )
+    k = int(np.ceil(npk))
+    fuse_links = pd.DataFrame(
+        {"site_id": ["site_0"] * k, "L": [npk / max(k, 1)] * k, "age_days": [0.0] * k}
+    )
+
     for name, frame in {
         "reference/cells": gpd.GeoDataFrame(cells, crs=32629),
         "reference/piers": piers,
@@ -592,6 +622,8 @@ def simulate(config: Config, seed: int) -> None:
         "forecast/expected": expected,
         "fuse/cells": fuse_cells,
         "fuse/sites": sites,
+        "fuse/piers": fuse_piers,
+        "fuse/links": fuse_links,
     }.items():
         io.write_stage(name, frame, "simulated")
 
