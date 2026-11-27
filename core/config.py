@@ -28,7 +28,12 @@ def load(path: str | Path = "config.yaml") -> tuple[Config, str]:
     return _freeze(yaml.safe_load(raw)), hashlib.sha256(raw).hexdigest()
 
 
+def latest_dates(manifest: Mapping[str, Any]) -> dict[str, date]:
+    """The latest date of each feed, from raw/manifest.json["latest"]; KeyError if a feed is missing."""
+    latest = manifest["latest"]
+    return {f: date.fromisoformat(latest[f]) for f in _FEEDS}
+
+
 def snapshot_date(manifest: Mapping[str, Any]) -> date:
     """T = the earliest of the four feeds' latest dates; later days would count as 'looked, saw nothing'."""
-    latest = manifest["latest"]
-    return min(date.fromisoformat(latest[f]) for f in _FEEDS)  # KeyError if a feed is missing
+    return min(latest_dates(manifest).values())
