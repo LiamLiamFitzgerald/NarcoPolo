@@ -154,6 +154,79 @@ def poisson_deviance(C: pd.Series, mu: pd.Series) -> float:
     return float(np.mean(2 * term))
 
 
+EXPECTED_COLUMNS = ["cell_id", "date", "event_type", "mu", "phi", "lo90", "hi90", "model", "fold"]
+
+
+def expected_rows(
+    model: str,
+    split: Split,
+    fold: int,
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    delta: float,
+    min_se: float,
+    level: float,
+) -> pd.DataFrame:
+    """Expected rows for split.test of the 2 km frame, fitted on split.train only.
+
+    frames = (fine, coarse, X2, X10) for one event type. The GLM's dispersion is used for the
+    EWMA's intervals too: phi describes the data, and the EWMA has no fit of its own to give one.
+    """
+    f2, f10, X2, X10 = frames
+    target = split.test(f2)
+    mu_glm, phi = glm_mu(split, split.train(f10), X10, target, X2)
+    if model == "ewma":
+        mu = ewma(split, split.train(f2), split.train(f10), target, delta, min_se)
+    elif model == "glm":
+        mu = mu_glm
+    else:
+        raise ValueError(f"unknown model {model!r}")
+    lo, hi = nb_interval(mu, phi, level)
+    out = target[["cell_id", "date", "event_type"]].assign(
+        mu=mu, phi=phi, lo90=lo, hi90=hi, model=model, fold=fold
+    )
+    return out[EXPECTED_COLUMNS].reset_index(drop=True)
+
+
+def evaluation_split(T: pd.Timestamp) -> Split:
+    """The scored window: Monday of the ISO week 3 weeks before T's week, up to T (22-28 days).
+
+    No embargo: the production fit uses every day before the window and none inside it.
+    """
+    start = T.normalize() - pd.Timedelta(days=T.weekday() + 21)
+    return Split(start, embargo_days=0, test_days=(T.normalize() - start).days + 1)
+
+
+def forecast_window(
+    model: str,
+    T: pd.Timestamp,
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    delta: float,
+    min_se: float,
+    level: float,
+) -> pd.DataFrame:
+    """Production rows (fold = 0) for the evaluation window, fitted only on days before it."""
+    return expected_rows(model, evaluation_split(T), 0, frames, delta, min_se, level)
+
+
+def choose_baseline(event_type: str, skills: dict[str, pd.DataFrame], decisions: str) -> str:
+    """Keep the model with the higher mean backtest skill and append the choice to DECISIONS.md.
+
+    Refuses to choose on NaN or infinite skill, so a broken backtest can't be recorded as a win.
+    """
+    means = {name: t["skill"].mean() for name, t in skills.items()}
+    bad = [n for n, t in skills.items() if not np.isfinite(t["skill"]).all()]
+    if bad:
+        raise ValueError(f"non-finite backtest skill for {bad}; not choosing a baseline")
+    best = max(means, key=means.__getitem__)
+    ranges = "; ".join(
+        f"{n}: mean {means[n]:.3f}, range {t['skill'].min():.3f} to {t['skill'].max():.3f}"
+        for n, t in skills.items()
+    )
+    with open(decisions, "a", encoding="utf-8") as f:
+        f.write(f"- P5 baseline for {event_type}: {best} (walk-forward skill {ranges})\n")
+    return best
+
+
 def backtest(
     frame2: pd.DataFrame,
     folds: list[Split],

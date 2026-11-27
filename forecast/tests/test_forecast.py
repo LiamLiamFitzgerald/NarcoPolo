@@ -3,7 +3,12 @@ import pandas as pd
 import pytest
 
 from forecast import (
+    EXPECTED_COLUMNS,
     backtest,
+    choose_baseline,
+    evaluation_split,
+    expected_rows,
+    forecast_window,
     design_matrix,
     empirical_bayes,
     ewma,
@@ -167,3 +172,79 @@ def test_walk_forward_backtest_beats_flat_average(event_type, k):
     for table in skills.values():
         assert np.isfinite(table.skill).all() and (table.skill < 1).all()
     assert skills["glm"].skill.mean() > 0
+
+
+def _frames(event_type, fine_frame=None):
+    f2, f10, X2, X10, _ = _setup(event_type, fine_frame)
+    return f2, f10, X2, X10
+
+
+def _window(model, frames):
+    T = frames[0].date.max()
+    return forecast_window(model, T, frames, DELTA, MIN_SE, LEVEL)
+
+
+def test_evaluation_window_runs_from_monday_three_weeks_back_to_T():
+    for T in pd.date_range("2026-11-02", periods=7):  # Monday .. Sunday
+        s = evaluation_split(T)
+        days = pd.date_range(s.cutoff, T)
+        assert s.cutoff.weekday() == 0 and 22 <= len(days) <= 28
+        assert len(s.test(pd.DataFrame({"date": days}))) == len(days)
+
+
+@pytest.mark.parametrize("model", ["ewma", "glm"])
+@pytest.mark.parametrize("event_type", TYPES)
+def test_forecast_window_rows_match_the_expected_contract(model, event_type):
+    frames = _frames(event_type)
+    rows = _window(model, frames)
+    window = evaluation_split(frames[0].date.max()).test(frames[0])
+    assert list(rows.columns) == EXPECTED_COLUMNS
+    assert len(rows) == len(window)
+    assert (rows.fold == 0).all() and (rows.model == model).all()
+    seen = window.exposure.to_numpy() > 0
+    assert (rows.mu >= 0).all()
+    assert rows.loc[seen, ["mu", "lo90", "hi90"]].notna().all().all()
+    # integer bounds: for mu below ~0.05 the 90% interval is [0, 0], so mu may exceed hi90
+    assert ((rows.lo90 >= 0) & (rows.lo90 <= rows.hi90) & (rows.lo90 <= rows.mu)).all()
+
+
+@pytest.mark.parametrize("model", ["ewma", "glm"])
+def test_days_being_scored_never_shape_their_own_baseline(model):
+    frames = _frames("slowdown")
+    f2 = frames[0].copy()
+    window = evaluation_split(f2.date.max()).test(f2)
+    f2.loc[window.index, "count"] += 50  # a wild window: must not move mu
+    from aggregate import to_coarse
+    from aggregate._stand_in import Observed
+
+    spiked = (f2, to_coarse(Observed(f2)).frame, frames[2], frames[3])
+    pd.testing.assert_series_equal(_window(model, frames).mu, _window(model, spiked).mu)
+
+
+def test_backtest_rows_carry_their_fold_number():
+    frames = _frames("dark_small")
+    fs = folds(frames[0].date.max(), 3, embargo_days=7, test_days=7)
+    rows = pd.concat(
+        [expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL) for k, s in enumerate(fs, 1)]
+    )
+    assert sorted(rows.fold.unique()) == [1, 2, 3]
+    assert rows.groupby("fold").date.nunique().eq(7).all()
+
+
+def test_choose_baseline_records_the_higher_mean_skill(tmp_path):
+    decisions = tmp_path / "DECISIONS.md"
+    skills = {
+        "ewma": pd.DataFrame({"fold": [1, 2], "skill": [0.05, 0.10]}),
+        "glm": pd.DataFrame({"fold": [1, 2], "skill": [0.20, 0.12]}),
+    }
+    assert choose_baseline("slowdown", skills, str(decisions)) == "glm"
+    line = decisions.read_text()
+    assert "slowdown: glm" in line and "range 0.120 to 0.200" in line
+
+
+def test_choose_baseline_refuses_a_broken_backtest(tmp_path):
+    decisions = tmp_path / "DECISIONS.md"
+    skills = {"ewma": pd.DataFrame({"fold": [1], "skill": [np.nan]}), "glm": pd.DataFrame({"fold": [1], "skill": [0.1]})}
+    with pytest.raises(ValueError, match="non-finite"):
+        choose_baseline("dark_small", skills, str(decisions))
+    assert not decisions.exists()
