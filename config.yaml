@@ -1,0 +1,52 @@
+# Every threshold and global setting lives here; no module hardcodes them (docs/shared.md, Global settings).
+seed: 20261127            # global; each use adds its own fixed number written next to it
+
+region_bbox: {lon_min: -10.6, lon_max: -7.9, lat_min: 51.1, lat_max: 51.95}  # TODO(P3): trim to where inshore maps exist
+# Grid origin: bbox min UTM x and y rounded down to a multiple of 10 000 m (2 km cells nest in 10 km cells)
+x0: 380000
+y0: 5660000
+
+split:
+  embargo_days: 7
+  test_days: 7
+  n_folds_slowdown: 12
+  n_folds_small: 6
+
+sim:                      # docs/specs/P1.md, "Simulator defaults"
+  days: 120
+  beta0: -4
+  beta1_inshore: 2
+  beta2_lane: 1
+  gamma: 0.3
+  det_a: -4
+  det_b: 0.4              # per metre of length
+  det_c: 0.5              # per m/s of wind
+  small_boat_length_m: [6, 15]
+  false_alarm_per_km2_pass: 0.002
+  drop_interval_days: 10
+  pickup_prob: 0.8
+  pickup_delay_days: [0.2, 4]
+  # TODO(P1): the values below are not in the spec; chosen so the simulator has a rough and a calm world
+  start_date: "2026-07-31"       # day 0; day 119 is 2026-11-27
+  rough_wind_ms: 8               # a day at or above this wind is rough (P3 owns the real calm rule)
+  rough_pickup_delay_prob: 0.7   # spec: 70% of rough-day pick-ups move to the next calm day
+  ghost_offset_m: 3000           # azimuth-ambiguity offset for simulated ghosts
+  boat_speed_kn: 15              # travel_hours = straight-line distance / this speed
+  slowdown_rate_hot: 1.0         # ship slowdowns per cell-day in the anchorage and port zones
+  slowdown_rate_cold: 0.01       # ... everywhere else
+  pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
+  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7}
+
+# A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
+# Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
+reads:
+  reference/cells: [x0, y0, region_bbox]
+  reference/piers: [x0, y0, region_bbox]
+  reference/travel_hours: [x0, y0, region_bbox]
+  coverage/exposure: [x0, y0, region_bbox]
+  detect/detections: [x0, y0, region_bbox]
+  match/events: [x0, y0, region_bbox]
+  aggregate/observed: [x0, y0, region_bbox]
+  forecast/expected: [x0, y0, region_bbox, split]
+  fuse/cells: [x0, y0, region_bbox]
+  fuse/sites: [x0, y0, region_bbox]

@@ -1,0 +1,201 @@
+"""One pandera schema per stage file (docs/shared.md, Data dictionary). Extra columns are rejected, so a raw
+ship identifier cannot slip into a file after match/. Cross-file rules (every cell_id exists in the cells layer)
+and the config hash / seed stamp are checked by core.io, not here."""
+
+import numpy as np
+import pandas as pd
+import pandera.pandas as pa
+
+
+def _id() -> pa.Column:
+    return pa.Column(nullable=False)
+
+
+def _num(
+    dtype: type | str = float,
+    nullable: bool = False,
+    *,
+    ge: float | None = None,
+    le: float | None = None,
+) -> pa.Column:
+    checks = [pa.Check.ge(ge)] if ge is not None else []
+    checks += [pa.Check.le(le)] if le is not None else []
+    return pa.Column(dtype, checks, nullable=nullable, coerce=True)
+
+
+def _prob(nullable: bool = False) -> pa.Column:  # a probability or fraction
+    return _num(float, nullable, ge=0, le=1)
+
+
+def _utc() -> pa.Column:
+    ok = lambda s: isinstance(s.dtype, pd.DatetimeTZDtype) and str(s.dtype.tz) == "UTC"
+    return pa.Column(checks=pa.Check(ok, error="not timezone-aware UTC"), nullable=False)
+
+
+def _date() -> pa.Column:
+    ok = lambda s: bool(pd.to_datetime(s, errors="coerce").notna().all())
+    return pa.Column(
+        checks=pa.Check(ok, element_wise=False, error="not calendar dates"), nullable=False
+    )
+
+
+def _flag() -> pa.Column:
+    return pa.Column(bool, nullable=False)
+
+
+def _in(*values: object) -> pa.Column:
+    return pa.Column(checks=pa.Check.isin(list(values)), nullable=False)
+
+
+def _str_list() -> pa.Column:
+    ok = lambda s: all(
+        isinstance(v, list | tuple | np.ndarray) and all(isinstance(i, str) for i in v) for v in s
+    )
+    return pa.Column(checks=pa.Check(ok, error="not a list of str"), nullable=False)
+
+
+def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSchema:
+    return pa.DataFrameSchema(columns, checks=list(checks), strict=True, ordered=False)
+
+
+_event_type = _in("dark_small", "slowdown")
+_count_needs_exposure = pa.Check(
+    lambda df: ~((df["count"] > 0) & (df["exposure"] <= 0)), error="count > 0 where exposure = 0"
+)
+
+SCHEMAS: dict[str, pa.DataFrameSchema] = {
+    "reference/cells": _schema(
+        {  # the cells layer of reference/layers.gpkg
+            "cell_id": pa.Column(str, nullable=False),
+            "level": _in(2000, 10000),
+            "geometry": pa.Column(nullable=False),
+            "inshore_frac": _prob(nullable=True),  # NaN where no inshore map exists
+            "lane": _flag(),
+            "anchorage": _flag(),
+            "port_zone": _flag(),
+            "exclusion": _flag(),
+            "dist_coast_m": _num(ge=0),
+            "static_frac": _prob(),
+            "sea_frac": _num(ge=0.2, le=1),
+        }
+    ),
+    "reference/piers": _schema(
+        {  # the piers layer of reference/layers.gpkg
+            "pier_id": pa.Column(str, nullable=False),
+            "name": pa.Column(str, nullable=True),
+            "geometry": pa.Column(nullable=False),
+            "road_access": _flag(),
+        }
+    ),
+    "reference/travel_hours": _schema(
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "pier_id": pa.Column(str, nullable=False),
+            "hours": _num(ge=0),
+        }
+    ),
+    "coverage/exposure": _schema(
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "pass_id": _id(),
+            "time_utc": _utc(),
+            "covered_frac": _prob(),
+            "wind_ms": _num(ge=0),
+            "hs_m": _num(ge=0),
+            "calm": _flag(),
+            "exposure_small": _prob(),
+        }
+    ),
+    "detect/detections": _schema(
+        {
+            "det_id": _id(),
+            "pass_id": _id(),
+            "time_utc": _utc(),
+            "x_m": _num(),
+            "y_m": _num(),
+            "peak_ratio_vv_db": _num(),
+            "peak_ratio_vh_db": _num(),
+            "pol_agree": _flag(),
+            "n_px": _num(int, ge=1),
+            "size_class": _in("small", "medium", "large"),
+            "ghost": _flag(),
+            "p_boat": _prob(),
+        }
+    ),
+    "match/events": _schema(
+        {
+            "event_id": _id(),
+            "event_type": _event_type,
+            "time_utc": _utc(),
+            "x_m": _num(),
+            "y_m": _num(),
+            "cell_id": pa.Column(str, nullable=False),
+            "p": _prob(),
+            "duration_min": _num(nullable=True, ge=0),
+            "ship_key": pa.Column(str, nullable=True),  # salted hash, internal to match/ and fuse/
+            "matched": _flag(),
+        }
+    ),
+    "aggregate/observed": _schema(
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "level": _in(2000, 10000),
+            "date": _date(),
+            "event_type": _event_type,
+            "count": _num(ge=0),
+            "exposure": _num(ge=0),
+        },
+        _count_needs_exposure,
+    ),
+    "forecast/expected": _schema(
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),
+            "event_type": _event_type,
+            "mu": _num(ge=0),
+            "phi": _num(ge=0),
+            "lo90": _num(ge=0),
+            "hi90": _num(ge=0),
+            "model": pa.Column(str, nullable=False),
+            "fold": _num(
+                "Int64", nullable=True
+            ),  # null for the live forecast, fold number in backtests
+        },
+        pa.Check(lambda df: df["lo90"] <= df["hi90"], error="lo90 > hi90"),
+    ),
+    "fuse/cells": _schema(
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),
+            "event_type": _event_type,
+            "p_mid": _prob(),
+            "bh_flag": _flag(),
+            "gi_z": _num(),
+            "cusum_s": _num(ge=0),
+            "context": _prob(),
+            "U": _prob(),
+            "agreement": _num(int, ge=0, le=4),
+        }
+    ),
+    "fuse/sites": _schema(
+        {
+            "site_id": _id(),
+            "x_m": _num(),
+            "y_m": _num(),
+            "n_slowdowns": _num(int, ge=0),
+            "S": _num(ge=0),
+            "p_perm": _prob(),
+            "bh_flag": _flag(),
+            "recurrence": _num(int, ge=0),
+            "followup_unobserved": _num(int, ge=0),
+            "agreement": _num(int, ge=0, le=4),
+            "reasons": _str_list(),
+            "top_piers": _str_list(),
+        }
+    ),
+}
+
+
+def check(name: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """Validate a stage frame; raises pandera.errors.SchemaErrors listing every broken rule. Returns the (coerced) frame."""
+    return SCHEMAS[name].validate(frame, lazy=True)
