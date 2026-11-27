@@ -36,6 +36,19 @@ def test_data_label_comes_from_provenance():
             data_label(bad)
 
 
+def test_scan_identities_ignores_hex_hashes_that_end_in_nine_digits():
+    # a config hash is 64 hex characters; about 1 in 70 end in 9 digits, which is not an MMSI
+    h = "3fa9c1d0e7b24a5f8c6d1e0b9a7f3c2d4e5f60718293a4b5c6d7e8f9" + "a" + "123456789"
+    scan_identities({"meta": {"config_hash": h}, "k": "x" + h})
+    for bad in (
+        "id 123456789",
+        "123456789",
+        "mmsi=123456789",
+    ):  # a real stand-alone number still fails
+        with pytest.raises(ValueError):
+            scan_identities({"v": bad})
+
+
 def test_scan_identities_flags_ids_but_not_iso_times_or_decimals():
     scan_identities({"t": "2026-11-23T06:00:00Z", "x": 123456789.5, "n": 12345678})
     for bad in ("id 123456789", "IMO 9074729", "call_sign", "mmsi", "ship_key"):

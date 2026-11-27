@@ -39,6 +39,7 @@ def _browser() -> None:
 def main() -> None:
     try:
         import webview  # imported here so tests and the pipeline run without pywebview installed
+        from webview.errors import WebViewException
     except ImportError:
         return _browser()
     webview.create_window(
@@ -46,7 +47,7 @@ def main() -> None:
     )
     try:
         webview.start()
-    except webview.errors.WebViewException:  # neither GTK nor Qt is usable
+    except WebViewException:  # neither GTK nor Qt is usable
         _browser()
 
 

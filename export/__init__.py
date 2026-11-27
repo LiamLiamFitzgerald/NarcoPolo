@@ -31,10 +31,11 @@ _INPUTS = (
     "reference/cells",
     "reference/piers",
 )
-# Stand-alone 9-digit numbers, IMO numbers, call-sign / MMSI fields, the internal ship_key (A12:
-# all times are ISO strings, so they never look like a bare 9-digit number).
+# Stand-alone 9-digit numbers (not part of a word, so the end of a hex hash such as the config hash
+# is not an MMSI), IMO numbers, call-sign / MMSI fields, the internal ship_key (A12: all times are
+# ISO strings, so they never look like a bare 9-digit number).
 _IDENTITY = re.compile(
-    r"(?<![\d.])\d{9}(?![\d.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign|\bmmsi\b|ship_key",
+    r"(?<![\w.])\d{9}(?![\w.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign|\bmmsi\b|ship_key",
     re.IGNORECASE,
 )
 
