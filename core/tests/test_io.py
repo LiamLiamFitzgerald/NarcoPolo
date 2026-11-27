@@ -80,3 +80,12 @@ def test_unstamped_file_and_bad_names_and_gpkg():
 def test_date_reads_back_as_timestamps():
     io.write_stage("aggregate/observed", frame("aggregate/observed"), "simulated")
     assert pd.api.types.is_datetime64_dtype(io.read_stage("aggregate/observed")["date"])
+
+
+def test_raster_paths_sit_under_the_data_root():
+    assert (
+        io.raster_path("reference/sea_250m")
+        == io.stage_path("reference/cells").parent / "sea_250m.tif"
+    )
+    with pytest.raises(KeyError):
+        io.raster_path("reference/nope")

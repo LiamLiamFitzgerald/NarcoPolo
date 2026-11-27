@@ -108,6 +108,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "hs_m": _num(ge=0),
             "calm": _flag(),
             "exposure_small": _prob(),
+            "post_storm": _flag(),  # A9: >= 24 h of hs > 2.5 m in the 72 h before the pass
         }
     ),
     "detect/detections": _schema(
@@ -178,6 +179,10 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "cusum_s": _num(ge=0),
             "context": _prob(),
             "U": _prob(),
+            "y": _num(ge=0),  # (C + 0.5) / (mu + 0.5) for this row (#87)
+            "y_week": _num(
+                ge=0
+            ),  # (sum C + 0.5) / (sum mu + 0.5) over the cell's ISO week, on each day row (#87)
             "agreement": _num(int, ge=0, le=4),
         }
     ),
@@ -195,6 +200,19 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "agreement": _num(int, ge=0, le=4),
             "reasons": _str_list(),
             "top_piers": _str_list(),
+        }
+    ),
+    "fuse/piers": _schema(  # #88: one row per pier
+        {
+            "pier_id": _id(),
+            "P_j": _num(ge=0),  # sum over scored sites of S x exp(-T / 1 h), T = sea travel hours
+        }
+    ),
+    "fuse/links": _schema(  # #98: one row per slowdown with a link score
+        {
+            "site_id": _id(),
+            "L": _prob(),
+            "age_days": _num(ge=0),  # per site, sum of L x 0.5^(age_days / 30) = S in fuse/sites
         }
     ),
 }

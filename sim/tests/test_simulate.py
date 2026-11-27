@@ -46,7 +46,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 9  # 8 stage files + truth
+    assert first == second and len(first) == 11  # 10 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -102,3 +102,16 @@ def test_no_dark_small_event_on_a_rough_pass(world):  # #90: rough passes look f
     rough = set(ex.loc[~ex["calm"], "time_utc"])
     assert rough and not ev[ev["event_type"] == "dark_small"]["time_utc"].isin(rough).any()
     assert not io.read_stage("detect/detections")["time_utc"].isin(rough).any()
+
+
+def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    sites, links = io.read_stage("fuse/sites"), io.read_stage("fuse/links")
+    s = links.assign(w=links["L"] * 0.5 ** (links["age_days"] / 30)).groupby("site_id")["w"].sum()
+    assert (s.reindex(sites["site_id"]).fillna(0) - sites["S"].to_numpy()).abs().max() < 1e-9
+    assert set(io.read_stage("fuse/piers")["pier_id"]) == set(
+        io.read_stage("reference/piers")["pier_id"]
+    )
+    cells = io.read_stage("fuse/cells")
+    assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
