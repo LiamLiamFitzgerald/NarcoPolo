@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NarcoPolo</title>
+<style>
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #f6f7f8; color: #1b1f23; }
+  #banner { padding: 6px 12px; font-weight: 600; color: #fff; background: #555; }
+  #banner.simulated { background: #b26a00; } #banner.real { background: #1a6b3a; } #banner.mixed { background: #8a2be2; }
+  main { display: grid; grid-template-columns: 1fr 340px; gap: 12px; padding: 12px; }
+  svg { width: 100%; background: #dbe9f4; border: 1px solid #aab; }
+  section { background: #fff; border: 1px solid #ccd; padding: 8px 12px; margin-bottom: 12px; }
+  h2 { font-size: 14px; margin: 0 0 6px; } ol, ul { margin: 0; padding-left: 18px; } table { font-size: 12px; }
+  #legend { font-size: 12px; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div id="banner">loading…</div>
+<main>
+  <div>
+    <label>Heat map <select id="map">
+      <option value="normal">Normal small-boat activity</option>
+      <option value="obs_vs_exp">Observed versus expected</option>
+      <option value="unusual">Unusual score</option>
+      <option value="exposure">Blind spots</option>
+    </select></label>
+    <label>Week <select id="week"></select></label>
+    <svg id="svg" viewBox="0 0 800 520"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
+    <div id="legend"></div>
+  </div>
+  <aside>
+    <section><h2>Sites</h2><ol id="sites"></ol></section>
+    <section><h2>Plan</h2><div id="plan"></div></section>
+    <section><h2>Validation</h2><div id="validation"></div></section>
+  </aside>
+</main>
+<script>
+// Plain JavaScript, no network. The browser only draws, sorts and formats: every number comes from
+// the snapshot (docs/specs/P7.md). TEMPORARY PLACEHOLDERS (issue 25): the TODO(P7) items are issue 51.
+const NS = "http://www.w3.org/2000/svg", W = 800, H = 520;
+let snap;
+
+// Inside pywebview the Python side serves the snapshot; in a plain browser it is fetched from disk.
+async function loadSnapshot() {
+  if (!window.pywebview?.api)
+    await new Promise(r => { addEventListener("pywebviewready", r, { once: true }); setTimeout(r, 300); });
+  if (window.pywebview?.api) return window.pywebview.api.get_snapshot();
+  return (await fetch("../export/snapshot.json")).json();
+}
+
+// Equirectangular, scaled by cos(latitude) so east-west distances are not stretched (fine for 150 km).
+function project(lon, lat) {
+  const r = snap.meta.region, k = Math.cos(((r.lat_min + r.lat_max) / 2) * Math.PI / 180);
+  const s = Math.min(W / ((r.lon_max - r.lon_min) * k), H / (r.lat_max - r.lat_min));
+  return [(lon - r.lon_min) * k * s, H - (lat - r.lat_min) * s];
+}
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  parent.appendChild(e);
+  return e;
+}
+const clear = id => { const g = document.getElementById(id); g.replaceChildren(); return g; };
+
+function drawBasemap() {
+  const g = clear("base");
+  for (const f of snap.basemap.features)
+    for (const ring of f.geometry.coordinates)
+      el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", fill: "#e8e4d8", stroke: "#888" }, g);
+}
+
+// Unobserved cells are hatched grey, never the lowest colour of the scale (Design principle 4).
+function hatchUnobserved() {
+  const defs = document.querySelector("#svg defs");
+  if (defs.querySelector("#hatch")) return;
+  const p = el("pattern", { id: "hatch", width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)" }, defs);
+  el("rect", { width: 6, height: 6, fill: "#ddd" }, p);
+  el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: "#888", "stroke-width": 2 }, p);
+}
+
+// TODO(P7): colour breaks per heat map (quantile, diverging at 0, 0-1) must come from the snapshot.
+// Placeholder: one hue, light to dark, scaled to the values shown.
+function drawHeatmap(name, week) {
+  hatchUnobserved();
+  const g = clear("heat"), cells = snap.cells[week];
+  const vals = cells.filter(c => c.observed).map(c => c[name]);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  for (const c of cells) {
+    const [x0, y1] = project(c.bbox[0], c.bbox[1]), [x1, y0] = project(c.bbox[2], c.bbox[3]);
+    const t = hi > lo ? (c[name] - lo) / (hi - lo) : 0;
+    el("rect", { x: x0, y: y0, width: x1 - x0, height: y1 - y0,
+      fill: c.observed ? `hsl(210 70% ${90 - 55 * t}%)` : "url(#hatch)", "fill-opacity": 0.85 }, g);
+  }
+  document.getElementById("legend").textContent =
+    `${document.querySelector("#map option:checked").textContent}, week ${week}: ${lo.toFixed(2)} to ${hi.toFixed(2)} (placeholder units). Hatched grey = not observed.`;
+}
+
+// TODO(P7): lane/exclusion/inshore outlines and the agreement dots need layer geometry in the snapshot.
+function drawOverlays() {
+  const g = clear("over"), pos = {};
+  for (const s of [...snap.sites, ...snap.piers]) pos[s.id] = project(s.lon, s.lat);
+  for (const [asset, stops] of Object.entries(snap.plan))
+    el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), fill: "none",
+      stroke: "#c0392b", "stroke-width": 2, "stroke-dasharray": asset === "aircraft" ? "6 4" : "" }, g);
+  for (const s of snap.sites) {
+    const [x, y] = pos[s.id];
+    el("circle", { cx: x, cy: y, r: 4 + 10 * s.S, fill: s.bh_flag ? "#c0392b" : "none", stroke: "#c0392b", "stroke-width": 2 }, g);
+  }
+  for (const p of snap.piers) {
+    const [x, y] = pos[p.id], h = 3 + 5 * p.P_j;
+    el("rect", { x: x - h, y: y - h, width: 2 * h, height: 2 * h, fill: "#222" }, g);
+  }
+}
+
+function drawSiteList() {
+  const ol = document.getElementById("sites");
+  ol.replaceChildren();
+  for (const s of [...snap.sites].sort((a, b) => b.S - a.S)) {
+    const li = document.createElement("li");
+    li.textContent = `${s.id}: S ${s.S.toFixed(2)}, p ${s.p_perm}, agreement ${s.agreement}/4` +
+      (s.bh_flag ? "" : " (not significant)") + `. ${s.reasons.join("; ")}. Piers: ${s.top_piers.join(", ")}`;
+    ol.appendChild(li);
+  }
+}
+
+function drawPlan() {
+  document.getElementById("plan").replaceChildren(...Object.entries(snap.plan).map(([asset, stops]) => {
+    const d = document.createElement("div");
+    d.textContent = `${asset}: ` + stops.map(s => `${s.id} ${s.arrival_utc.slice(11, 16)}`).join(" → ");
+    return d;
+  }));
+}
+
+// TODO(P7): recall table, calibration bins and skill range once P1 writes reports/validation.json.
+function drawValidation() {
+  const v = snap.validation, d = document.getElementById("validation");
+  d.textContent = v.notes.join(" ");
+}
+
+function drawBanner() {
+  const b = document.getElementById("banner");
+  b.className = snap.meta.data_label;
+  b.textContent = `Data: ${snap.meta.data_label} · week ${snap.meta.week} · generated ${snap.meta.generated_utc}` +
+    (snap.meta.placeholder ? " · PLACEHOLDER CONTENT" : "");
+}
+
+function onWeekChange(week) { drawHeatmap(document.getElementById("map").value, week); }
+
+(async () => {
+  snap = await loadSnapshot();
+  const wk = document.getElementById("week");
+  for (const w of snap.meta.weeks) wk.add(new Option(w, w, false, w === snap.meta.week));
+  wk.onchange = () => onWeekChange(wk.value);
+  document.getElementById("map").onchange = () => onWeekChange(wk.value);
+  drawBanner(); drawBasemap(); drawHeatmap("normal", snap.meta.week); drawOverlays(); drawSiteList(); drawPlan(); drawValidation();
+})();
+</script>
+</body>
+</html>

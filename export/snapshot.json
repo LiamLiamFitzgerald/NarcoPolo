@@ -1,0 +1,722 @@
+{
+  "meta": {
+    "data_label": "simulated",
+    "generated_utc": "2026-11-27T17:25:56Z",
+    "region": {
+      "lon_min": -10.6,
+      "lon_max": -7.9,
+      "lat_min": 51.1,
+      "lat_max": 51.95
+    },
+    "week": "2026-W47",
+    "weeks": [
+      "2026-W44",
+      "2026-W45",
+      "2026-W46",
+      "2026-W47"
+    ],
+    "config_hash": "f99ab1f2c8196b1c6461aa35457db318aa06440af57e0c9257efcc2565efab45",
+    "placeholder": true
+  },
+  "basemap": {
+    "type": "FeatureCollection",
+    "features": [
+      {
+        "type": "Feature",
+        "properties": {},
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -9.6,
+                51.62
+              ],
+              [
+                -9.4,
+                51.62
+              ],
+              [
+                -9.4,
+                51.7
+              ],
+              [
+                -9.6,
+                51.7
+              ],
+              [
+                -9.6,
+                51.62
+              ]
+            ]
+          ]
+        }
+      }
+    ]
+  },
+  "cells": {
+    "2026-W44": [
+      {
+        "cell_id": "c00",
+        "bbox": [
+          -9.5,
+          51.5,
+          -9.47,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.0,
+        "obs_vs_exp": -1.0,
+        "unusual": 0.0,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c01",
+        "bbox": [
+          -9.47,
+          51.5,
+          -9.44,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.125,
+        "obs_vs_exp": -0.75,
+        "unusual": 0.1,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c02",
+        "bbox": [
+          -9.44,
+          51.5,
+          -9.41,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.25,
+        "obs_vs_exp": -0.5,
+        "unusual": 0.2,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c10",
+        "bbox": [
+          -9.5,
+          51.53,
+          -9.47,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.375,
+        "obs_vs_exp": -0.25,
+        "unusual": 0.3,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c11",
+        "bbox": [
+          -9.47,
+          51.53,
+          -9.44,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.5,
+        "obs_vs_exp": 0.0,
+        "unusual": 0.4,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c12",
+        "bbox": [
+          -9.44,
+          51.53,
+          -9.41,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.625,
+        "obs_vs_exp": 0.25,
+        "unusual": 0.5,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c20",
+        "bbox": [
+          -9.5,
+          51.56,
+          -9.47,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.75,
+        "obs_vs_exp": 0.5,
+        "unusual": 0.6,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c21",
+        "bbox": [
+          -9.47,
+          51.56,
+          -9.44,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.875,
+        "obs_vs_exp": 0.75,
+        "unusual": 0.7,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c22",
+        "bbox": [
+          -9.44,
+          51.56,
+          -9.41,
+          51.59
+        ],
+        "observed": false,
+        "normal": null,
+        "obs_vs_exp": null,
+        "unusual": null,
+        "exposure": 0.0
+      }
+    ],
+    "2026-W45": [
+      {
+        "cell_id": "c00",
+        "bbox": [
+          -9.5,
+          51.5,
+          -9.47,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.0,
+        "obs_vs_exp": -1.0,
+        "unusual": 0.0,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c01",
+        "bbox": [
+          -9.47,
+          51.5,
+          -9.44,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.125,
+        "obs_vs_exp": -0.75,
+        "unusual": 0.1,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c02",
+        "bbox": [
+          -9.44,
+          51.5,
+          -9.41,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.25,
+        "obs_vs_exp": -0.5,
+        "unusual": 0.2,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c10",
+        "bbox": [
+          -9.5,
+          51.53,
+          -9.47,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.375,
+        "obs_vs_exp": -0.25,
+        "unusual": 0.3,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c11",
+        "bbox": [
+          -9.47,
+          51.53,
+          -9.44,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.5,
+        "obs_vs_exp": 0.0,
+        "unusual": 0.4,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c12",
+        "bbox": [
+          -9.44,
+          51.53,
+          -9.41,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.625,
+        "obs_vs_exp": 0.25,
+        "unusual": 0.5,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c20",
+        "bbox": [
+          -9.5,
+          51.56,
+          -9.47,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.75,
+        "obs_vs_exp": 0.5,
+        "unusual": 0.6,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c21",
+        "bbox": [
+          -9.47,
+          51.56,
+          -9.44,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.875,
+        "obs_vs_exp": 0.75,
+        "unusual": 0.7,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c22",
+        "bbox": [
+          -9.44,
+          51.56,
+          -9.41,
+          51.59
+        ],
+        "observed": false,
+        "normal": null,
+        "obs_vs_exp": null,
+        "unusual": null,
+        "exposure": 0.0
+      }
+    ],
+    "2026-W46": [
+      {
+        "cell_id": "c00",
+        "bbox": [
+          -9.5,
+          51.5,
+          -9.47,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.0,
+        "obs_vs_exp": -1.0,
+        "unusual": 0.0,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c01",
+        "bbox": [
+          -9.47,
+          51.5,
+          -9.44,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.125,
+        "obs_vs_exp": -0.75,
+        "unusual": 0.1,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c02",
+        "bbox": [
+          -9.44,
+          51.5,
+          -9.41,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.25,
+        "obs_vs_exp": -0.5,
+        "unusual": 0.2,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c10",
+        "bbox": [
+          -9.5,
+          51.53,
+          -9.47,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.375,
+        "obs_vs_exp": -0.25,
+        "unusual": 0.3,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c11",
+        "bbox": [
+          -9.47,
+          51.53,
+          -9.44,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.5,
+        "obs_vs_exp": 0.0,
+        "unusual": 0.4,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c12",
+        "bbox": [
+          -9.44,
+          51.53,
+          -9.41,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.625,
+        "obs_vs_exp": 0.25,
+        "unusual": 0.5,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c20",
+        "bbox": [
+          -9.5,
+          51.56,
+          -9.47,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.75,
+        "obs_vs_exp": 0.5,
+        "unusual": 0.6,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c21",
+        "bbox": [
+          -9.47,
+          51.56,
+          -9.44,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.875,
+        "obs_vs_exp": 0.75,
+        "unusual": 0.7,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c22",
+        "bbox": [
+          -9.44,
+          51.56,
+          -9.41,
+          51.59
+        ],
+        "observed": false,
+        "normal": null,
+        "obs_vs_exp": null,
+        "unusual": null,
+        "exposure": 0.0
+      }
+    ],
+    "2026-W47": [
+      {
+        "cell_id": "c00",
+        "bbox": [
+          -9.5,
+          51.5,
+          -9.47,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.0,
+        "obs_vs_exp": -1.0,
+        "unusual": 0.0,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c01",
+        "bbox": [
+          -9.47,
+          51.5,
+          -9.44,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.125,
+        "obs_vs_exp": -0.75,
+        "unusual": 0.1,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c02",
+        "bbox": [
+          -9.44,
+          51.5,
+          -9.41,
+          51.53
+        ],
+        "observed": true,
+        "normal": 0.25,
+        "obs_vs_exp": -0.5,
+        "unusual": 0.2,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c10",
+        "bbox": [
+          -9.5,
+          51.53,
+          -9.47,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.375,
+        "obs_vs_exp": -0.25,
+        "unusual": 0.3,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c11",
+        "bbox": [
+          -9.47,
+          51.53,
+          -9.44,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.5,
+        "obs_vs_exp": 0.0,
+        "unusual": 0.4,
+        "exposure": 0.0
+      },
+      {
+        "cell_id": "c12",
+        "bbox": [
+          -9.44,
+          51.53,
+          -9.41,
+          51.56
+        ],
+        "observed": true,
+        "normal": 0.625,
+        "obs_vs_exp": 0.25,
+        "unusual": 0.5,
+        "exposure": 1.0
+      },
+      {
+        "cell_id": "c20",
+        "bbox": [
+          -9.5,
+          51.56,
+          -9.47,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.75,
+        "obs_vs_exp": 0.5,
+        "unusual": 0.6,
+        "exposure": 2.0
+      },
+      {
+        "cell_id": "c21",
+        "bbox": [
+          -9.47,
+          51.56,
+          -9.44,
+          51.59
+        ],
+        "observed": true,
+        "normal": 0.875,
+        "obs_vs_exp": 0.75,
+        "unusual": 0.7,
+        "exposure": 3.0
+      },
+      {
+        "cell_id": "c22",
+        "bbox": [
+          -9.44,
+          51.56,
+          -9.41,
+          51.59
+        ],
+        "observed": false,
+        "normal": null,
+        "obs_vs_exp": null,
+        "unusual": null,
+        "exposure": 0.0
+      }
+    ]
+  },
+  "sites": [
+    {
+      "id": "S01",
+      "lon": -9.46,
+      "lat": 51.56,
+      "S": 0.9,
+      "p_perm": 0.01,
+      "bh_flag": true,
+      "recurrence": 2,
+      "agreement": 3,
+      "followup_unobserved": 0,
+      "reasons": [
+        "placeholder reason: unusual slowdown, worth checking"
+      ],
+      "top_piers": [
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "id": "S02",
+      "lon": -9.4,
+      "lat": 51.6,
+      "S": 0.6,
+      "p_perm": 0.04,
+      "bh_flag": true,
+      "recurrence": 2,
+      "agreement": 2,
+      "followup_unobserved": 0,
+      "reasons": [
+        "placeholder reason: unusual slowdown, worth checking"
+      ],
+      "top_piers": [
+        "P1",
+        "P2"
+      ]
+    },
+    {
+      "id": "S03",
+      "lon": -9.52,
+      "lat": 51.64,
+      "S": 0.3,
+      "p_perm": 0.3,
+      "bh_flag": false,
+      "recurrence": 2,
+      "agreement": 1,
+      "followup_unobserved": 0,
+      "reasons": [
+        "placeholder reason: unusual slowdown, worth checking"
+      ],
+      "top_piers": [
+        "P1",
+        "P2"
+      ]
+    }
+  ],
+  "piers": [
+    {
+      "id": "P1",
+      "name": "Placeholder pier A",
+      "lon": -9.44,
+      "lat": 51.58,
+      "P_j": 0.8
+    },
+    {
+      "id": "P2",
+      "name": "Placeholder pier B",
+      "lon": -9.38,
+      "lat": 51.57,
+      "P_j": 0.4
+    }
+  ],
+  "plan": {
+    "ship": [
+      {
+        "id": "base",
+        "arrival_utc": "2026-11-23T06:00:00Z",
+        "dwell_h": 0,
+        "lon": -8.32,
+        "lat": 51.85
+      },
+      {
+        "id": "S01",
+        "arrival_utc": "2026-11-23T08:30:00Z",
+        "dwell_h": 1,
+        "lon": -9.46,
+        "lat": 51.56
+      },
+      {
+        "id": "S02",
+        "arrival_utc": "2026-11-23T11:00:00Z",
+        "dwell_h": 1,
+        "lon": -9.4,
+        "lat": 51.6
+      },
+      {
+        "id": "base",
+        "arrival_utc": "2026-11-23T13:30:00Z",
+        "dwell_h": 0,
+        "lon": -8.32,
+        "lat": 51.85
+      }
+    ],
+    "aircraft": [
+      {
+        "id": "base",
+        "arrival_utc": "2026-11-23T06:00:00Z",
+        "dwell_h": 0,
+        "lon": -8.32,
+        "lat": 51.85
+      },
+      {
+        "id": "S01",
+        "arrival_utc": "2026-11-23T06:24:00Z",
+        "dwell_h": 0.2,
+        "lon": -9.46,
+        "lat": 51.56
+      },
+      {
+        "id": "S02",
+        "arrival_utc": "2026-11-23T06:48:00Z",
+        "dwell_h": 0.2,
+        "lon": -9.4,
+        "lat": 51.6
+      },
+      {
+        "id": "S03",
+        "arrival_utc": "2026-11-23T07:12:00Z",
+        "dwell_h": 0.2,
+        "lon": -9.52,
+        "lat": 51.64
+      },
+      {
+        "id": "base",
+        "arrival_utc": "2026-11-23T07:36:00Z",
+        "dwell_h": 0,
+        "lon": -8.32,
+        "lat": 51.85
+      }
+    ]
+  },
+  "validation": {
+    "recall": [],
+    "forecast_skill": null,
+    "calibration_bins": [],
+    "brier": null,
+    "null_test_flag_share": null,
+    "notes": [
+      "placeholder: no validation run"
+    ]
+  }
+}
