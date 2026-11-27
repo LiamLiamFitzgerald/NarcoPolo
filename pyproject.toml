@@ -2,10 +2,10 @@
 name = "narcopolo"
 version = "0.0.0"
 requires-python = ">=3.12"
-dependencies = ["numpy", "pyproj"]
+dependencies = ["numpy", "pyproj", "pyyaml"]
 
 [dependency-groups]
-dev = ["pytest", "ruff", "basedpyright", "tach"]
+dev = ["types-pyyaml", "pytest", "ruff", "basedpyright", "tach"]
 
 [tool.ruff]
 line-length = 100
