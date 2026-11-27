@@ -322,7 +322,9 @@ def simulate(config: Config, seed: int) -> None:
         & (bxc <= passes["b"].to_numpy()[bpass])
     )
     wind_b = weather["wind_ms"].to_numpy()[bday]
-    detected = inside & (
+    # principle 5: small boats are looked for on calm passes only, so a rough pass detects nothing (#90)
+    calm_b = inside & ~weather["rough"].to_numpy()[bday]
+    detected = calm_b & (
         rng.random(len(boats)) < _p_det(config, boats["length_m"].to_numpy(), wind_b)
     )
     boats["detected"], boats["pass"] = detected, np.where(inside, bpass, -1)
@@ -383,6 +385,9 @@ def simulate(config: Config, seed: int) -> None:
         rows,
         columns=["k", "x_m", "y_m", "vv", "pol_agree", "n_px", "size_class", "ghost", "p_boat"],
     )
+    det = det[~pw["rough"].to_numpy()[det["k"].to_numpy(int)]].reset_index(
+        drop=True
+    )  # false alarms and ghosts too
     detections = pd.DataFrame(
         {
             "det_id": [f"det_{i:05d}" for i in range(len(det))],

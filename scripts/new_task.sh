@@ -11,7 +11,7 @@ repo_root=$(git rev-parse --show-toplevel)
 dir="$(dirname "$repo_root")/narcopolo-${m}-${issue}"
 
 git -C "$repo_root" fetch origin integration
-git -C "$repo_root" worktree add "$dir" -b "$branch" origin/integration
+git -C "$repo_root" worktree add "$dir" --no-track -b "$branch" origin/integration
 
 cat <<EOF
 
