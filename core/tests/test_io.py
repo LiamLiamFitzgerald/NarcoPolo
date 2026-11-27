@@ -18,8 +18,6 @@ def sandbox(tmp_path, monkeypatch):
 
 def test_round_trip_every_parquet_stage():
     for name in io.SCHEMAS:
-        if name in io._GPKG:
-            continue
         io.write_stage(name, frame(name), "simulated")
         back = io.read_stage(name)
         assert (
@@ -72,7 +70,5 @@ def test_unstamped_file_and_bad_names_and_gpkg():
         io.read_stage("aggregate/observed")
     with pytest.raises(KeyError):
         io.stage_path("nope/nothing")
-    with pytest.raises(NotImplementedError):
-        io.read_stage("reference/cells")
     assert io.stage_path("aggregate/observed").name == "observed.parquet"
     assert isinstance(pd.read_parquet(p), pd.DataFrame)
