@@ -132,7 +132,8 @@ def test_run_cells_scores_only_observed_rows_in_the_evaluation_window(sim_data):
     obs = io.read_stage("aggregate/observed")
     T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)
-    assert cells["date"].min() >= start and cells["date"].max() <= T
+    d = pd.to_datetime(cells["date"])
+    assert d.min() >= pd.Timestamp(start) and d.max() <= pd.Timestamp(T)
     seen = obs[obs["exposure"] > 0][KEY].astype(str)
     assert len(cells) > 0 and cells[KEY].astype(str).merge(seen).shape[0] == len(cells)
     assert np.array_equal(cells["bh_flag"], bh(cells["p_mid"]))  # BH once over the whole window

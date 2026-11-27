@@ -118,7 +118,9 @@ def run_cells() -> None:
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
     T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
-    m = m[(m["date"] >= start) & (m["date"] <= T)].reset_index(drop=True)
+    m = m[pd.to_datetime(m["date"]).between(pd.Timestamp(start), pd.Timestamp(T))].reset_index(
+        drop=True
+    )
     p_mid = tail_pmid(m["count"], m["mu"], m["phi"])
     scores = m[_KEY].assign(
         p_mid=p_mid,
