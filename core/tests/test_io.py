@@ -13,6 +13,9 @@ def sandbox(tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
     monkeypatch.setattr(io, "CONFIG_PATH", cfg)
+    io.write_stage(
+        "reference/cells", frame("reference/cells"), "simulated"
+    )  # every cell_id must exist here
     return cfg
 
 
@@ -72,3 +75,8 @@ def test_unstamped_file_and_bad_names_and_gpkg():
         io.stage_path("nope/nothing")
     assert io.stage_path("aggregate/observed").name == "observed.parquet"
     assert isinstance(pd.read_parquet(p), pd.DataFrame)
+
+
+def test_date_reads_back_as_timestamps():
+    io.write_stage("aggregate/observed", frame("aggregate/observed"), "simulated")
+    assert pd.api.types.is_datetime64_dtype(io.read_stage("aggregate/observed")["date"])

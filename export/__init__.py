@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from core.config import load
+from core.schemas import check_json
 
 _OUT = Path("export/snapshot.json")
-# Stand-alone 9-digit numbers, IMO numbers, call-sign fields (A12: all times are ISO strings).
+# Stand-alone 9-digit numbers (not part of a word, so the end of a hex hash such as the config hash
+# is not an MMSI), IMO numbers, call-sign fields (A12: all times are ISO strings).
 _IDENTITY = re.compile(
-    r"(?<![\d.])\d{9}(?![\d.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign", re.IGNORECASE
+    r"(?<![\w.])\d{9}(?![\w.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign", re.IGNORECASE
 )
 _WEEKS = ["2026-W44", "2026-W45", "2026-W46", "2026-W47"]  # TODO(P7): from T via core.time
 _CELL = 0.03  # degrees, placeholder cell size
@@ -138,6 +140,7 @@ def build_snapshot(
         },
     }
     scan_identities(snap)
+    check_json("export/snapshot", snap)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(snap, indent=2))
     return snap

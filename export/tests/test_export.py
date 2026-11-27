@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from core.schemas import check_json
 from export import build_snapshot, data_label, heatmap_values, scan_identities
 from patrol import aircraft_plan, ship_plan
 
@@ -13,6 +14,19 @@ def test_data_label_comes_from_provenance():
     for bad in ([], ["demo"]):
         with pytest.raises(ValueError):
             data_label(bad)
+
+
+def test_scan_identities_ignores_hex_hashes_that_end_in_nine_digits():
+    # a config hash is 64 hex characters; about 1 in 70 end in 9 digits, which is not an MMSI
+    h = "3fa9c1d0e7b24a5f8c6d1e0b9a7f3c2d4e5f60718293a4b5c6d7e8f9" + "a" + "123456789"
+    scan_identities({"meta": {"config_hash": h}, "k": "x" + h})
+    for bad in (
+        "id 123456789",
+        "123456789",
+        "mmsi=123456789",
+    ):  # a real stand-alone number still fails
+        with pytest.raises(ValueError):
+            scan_identities({"v": bad})
 
 
 def test_scan_identities_flags_ids_but_not_iso_times_or_decimals():
@@ -36,5 +50,7 @@ def test_snapshot_round_trips_with_label_and_plan(tmp_path):
     snap = json.loads(out.read_text())
     assert set(snap) == {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
     assert snap["meta"]["data_label"] == "simulated"
+    check_json("export/snapshot", snap)
+    check_json("patrol/plan", json.loads(plan.read_text()))
     assert set(snap["cells"]) == set(snap["meta"]["weeks"])
     assert all("lon" in s for stops in snap["plan"].values() for s in stops)
