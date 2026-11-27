@@ -43,6 +43,9 @@ coverage:
   storm_hours: 24
   storm_lookback_h: 72       # ... in the 72 h before the pass
 
+validate:
+  injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
+
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
   beta0: -4
