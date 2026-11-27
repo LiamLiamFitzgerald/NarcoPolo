@@ -32,7 +32,9 @@ def test_events_file_is_schema_valid_and_never_holds_the_raw_id(tmp_path):
     out = write_events(dark_small_events(dets), slow, out=tmp_path / "events.parquet")
     ev = pd.read_parquet(out)
     assert list(ev.columns) == _standin.EVENTS_COLUMNS and len(ev) == 2
-    assert set(ev["event_type"]) == {"dark_small", "slowdown"} and str(ev["time_utc"].dt.tz) == "UTC"
+    assert (
+        set(ev["event_type"]) == {"dark_small", "slowdown"} and str(ev["time_utc"].dt.tz) == "UTC"
+    )
     assert ev.loc[ev["event_type"] == "slowdown", "ship_key"].str.len().eq(64).all()
     assert RAW_ID.encode() not in out.read_bytes()
 

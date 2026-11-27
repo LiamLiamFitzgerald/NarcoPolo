@@ -9,7 +9,9 @@ CELLS = pd.DataFrame({"cell_id": ["0_0", "1_0", "2_0"], "exclusion": [False, Tru
 
 
 def _era5(hs_by_cell, date="2026-11-03"):
-    return pd.DataFrame([{"cell_id": c, "date": date, "hs_m": h} for c, hs in hs_by_cell.items() for h in hs])
+    return pd.DataFrame(
+        [{"cell_id": c, "date": date, "hs_m": h} for c, hs in hs_by_cell.items() for h in hs]
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -29,7 +31,12 @@ def test_presence_slowdowns_rules():
     ev = slowdowns_from_presence(pres, CELLS, era5)
     assert len(ev) == 1
     e = ev.iloc[0]
-    assert e["cell_id"] == "0_0" and e["duration_min"] == 45 and e["p"] == 1.0 and e["ship_key"] is None
+    assert (
+        e["cell_id"] == "0_0"
+        and e["duration_min"] == 45
+        and e["p"] == 1.0
+        and e["ship_key"] is None
+    )
     assert e["time_utc"] == pd.Timestamp("2026-11-03T12:00:00Z")
     assert (e["x_m"], e["y_m"]) == (1000.0, 1000.0)
 
@@ -49,7 +56,14 @@ def _track(slow_min=40, ping_min=5, x0=1000.0, ship_type=70, ship_id="S1"):
     for phase_kn, minutes in ((13, 120), (2, slow_min), (13, 60)):
         for _ in range(minutes // ping_min):
             rows.append(
-                {"ship_id": ship_id, "time_utc": t, "x_m": x, "y_m": 1000.0, "sog_kn": phase_kn, "ship_type": ship_type}
+                {
+                    "ship_id": ship_id,
+                    "time_utc": t,
+                    "x_m": x,
+                    "y_m": 1000.0,
+                    "sog_kn": phase_kn,
+                    "ship_type": ship_type,
+                }
             )
             t += pd.Timedelta(minutes=ping_min)
             x += phase_kn * 0.514444 * ping_min * 60 / 50  # stays inside the 2 km cell

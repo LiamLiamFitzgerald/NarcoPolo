@@ -23,7 +23,9 @@ def test_background_recovers_sea_level():
 def test_background_ignores_a_boat_inside_the_guard():
     img = _sea(2, (200, 200))
     img[100, 100] += 1000 * SEA
-    assert np.isclose(background(img)[100, 100], np.median(background(_sea(2, (200, 200)))), rtol=0.1)
+    assert np.isclose(
+        background(img)[100, 100], np.median(background(_sea(2, (200, 200)))), rtol=0.1
+    )
 
 
 def test_background_next_to_land_is_not_biased():

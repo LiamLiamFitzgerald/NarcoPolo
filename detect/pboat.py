@@ -11,7 +11,9 @@ FEATURES = ["peak_ratio_vv_db", "peak_ratio_vh_db", "pol_agree", "n_px", "wind_m
 
 def features(cands: pd.DataFrame, exposure: pd.DataFrame) -> pd.DataFrame:
     """Feature matrix; wind_ms joined from coverage/exposure on (cell_id, pass_id). Index kept."""
-    wind = exposure.drop_duplicates(["cell_id", "pass_id"]).set_index(["cell_id", "pass_id"])["wind_ms"]
+    wind = exposure.drop_duplicates(["cell_id", "pass_id"]).set_index(["cell_id", "pass_id"])[
+        "wind_ms"
+    ]
     keys = pd.MultiIndex.from_frame(cands[["cell_id", "pass_id"]])
     X = cands.assign(wind_ms=wind.reindex(keys).to_numpy())
     return X[FEATURES].astype(float)
@@ -24,7 +26,9 @@ def fit_pboat(injection_cands: pd.DataFrame, split: Split):
     (positives at injected boats, negatives > 500 m from any injection or AIS ship).
     """
     train = split.train(injection_cands)
-    return sm.Logit(train["is_boat"].astype(float), sm.add_constant(train[FEATURES].astype(float))).fit(disp=0)
+    return sm.Logit(
+        train["is_boat"].astype(float), sm.add_constant(train[FEATURES].astype(float))
+    ).fit(disp=0)
 
 
 def predict_pboat(model, X: pd.DataFrame) -> np.ndarray:

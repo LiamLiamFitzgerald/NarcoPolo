@@ -36,10 +36,16 @@ def test_fit_recovers_known_coefficients_and_is_calibrated_out_of_sample():
     test = split.test(df)
     p = predict_pboat(m, test)
     bins = pd.cut(p, np.linspace(0, 1, 11))
-    rel = pd.DataFrame({"p": p, "y": test["is_boat"].to_numpy()}).groupby(bins, observed=True).agg(["mean", "size"])
+    rel = (
+        pd.DataFrame({"p": p, "y": test["is_boat"].to_numpy()})
+        .groupby(bins, observed=True)
+        .agg(["mean", "size"])
+    )
     big = rel[("p", "size")] >= 100
     assert (abs(rel[("p", "mean")] - rel[("y", "mean")])[big] < 0.05).all()
-    assert np.mean((p - test["is_boat"]) ** 2) < np.mean((test["is_boat"].mean() - test["is_boat"]) ** 2)
+    assert np.mean((p - test["is_boat"]) ** 2) < np.mean(
+        (test["is_boat"].mean() - test["is_boat"]) ** 2
+    )
 
 
 def test_fit_never_sees_data_after_the_cutoff():
@@ -51,6 +57,12 @@ def test_fit_never_sees_data_after_the_cutoff():
 def test_features_join_wind_on_cell_and_pass():
     cands = pd.DataFrame({"cell_id": ["a", "b", "a"], "pass_id": ["p1", "p1", "p2"], "peak_ratio_vv_db": 10.0,
                           "peak_ratio_vh_db": 8.0, "pol_agree": True, "n_px": 3, "ghost": False}, index=[5, 6, 7])  # fmt: skip
-    exp = pd.DataFrame({"cell_id": ["a", "b", "a"], "pass_id": ["p1", "p1", "p2"], "wind_ms": [1.0, 2.0, 3.0]})
+    exp = pd.DataFrame(
+        {"cell_id": ["a", "b", "a"], "pass_id": ["p1", "p1", "p2"], "wind_ms": [1.0, 2.0, 3.0]}
+    )
     X = features(cands, exp)
-    assert list(X.index) == [5, 6, 7] and list(X["wind_ms"]) == [1.0, 2.0, 3.0] and list(X.columns) == FEATURES
+    assert (
+        list(X.index) == [5, 6, 7]
+        and list(X["wind_ms"]) == [1.0, 2.0, 3.0]
+        and list(X.columns) == FEATURES
+    )

@@ -23,7 +23,9 @@ def test_masked_pixels_are_nan_never_zero():
     static[200, 300] = 1
     out = apply_masks(to_linear(s.vv), s.land, static)
     assert np.isnan(out[:, :50]).all()  # land
-    assert np.isnan(out[:, 50:80]).all() and np.isfinite(out[:, 81:]).sum() > 0  # 300 m buffer = 30 px
+    assert (
+        np.isnan(out[:, 50:80]).all() and np.isfinite(out[:, 81:]).sum() > 0
+    )  # 300 m buffer = 30 px
     assert np.isnan(out[200, 300])
     assert not (out == 0).any()
 

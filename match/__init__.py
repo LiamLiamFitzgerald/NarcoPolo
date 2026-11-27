@@ -1,7 +1,6 @@
 """P4 match: GFW/AIS matching, dark_small and slowdown events."""
 
 from core import io
-
 from match.events import (
     dark_small_events,
     match,
@@ -11,7 +10,15 @@ from match.events import (
     write_events,
 )
 
-__all__ = ["dark_small_events", "match", "run", "ship_key", "slowdowns_from_presence", "slowdowns_from_tracks", "write_events"]
+__all__ = [
+    "dark_small_events",
+    "match",
+    "run",
+    "ship_key",
+    "slowdowns_from_presence",
+    "slowdowns_from_tracks",
+    "write_events",
+]
 
 
 def run() -> None:

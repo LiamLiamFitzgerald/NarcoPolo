@@ -18,7 +18,9 @@ def _box_sum(a: np.ndarray, size: int) -> np.ndarray:
     return ndimage.uniform_filter(a, size=size, mode="constant", cval=0.0) * size**2
 
 
-def background(img: np.ndarray, outer: int = CFG["cfar_outer"], guard: int = CFG["cfar_guard"]) -> np.ndarray:
+def background(
+    img: np.ndarray, outer: int = CFG["cfar_outer"], guard: int = CFG["cfar_guard"]
+) -> np.ndarray:
     """Mean of the ring between the outer window and the guard window, skipping NaN pixels.
 
     Linear power only. Masked (NaN) pixels count neither in the sum nor in the pixel count,
@@ -71,7 +73,9 @@ def clusters(mask: np.ndarray, img: np.ndarray, mu_b: np.ndarray, *, meta: dict)
     return df[df["n_px"].between(lo, hi)].reset_index(drop=True)
 
 
-def merge_pols(vv: pd.DataFrame, vh: pd.DataFrame, gate_m: float = CFG["pol_agree_m"]) -> pd.DataFrame:
+def merge_pols(
+    vv: pd.DataFrame, vh: pd.DataFrame, gate_m: float = CFG["pol_agree_m"]
+) -> pd.DataFrame:
     """Pair VV and VH clusters one-to-one within gate_m into single candidates.
 
     Paired: pol_agree, VV position, n_px = the larger count. Unpaired clusters stay, with
@@ -80,7 +84,8 @@ def merge_pols(vv: pd.DataFrame, vh: pd.DataFrame, gate_m: float = CFG["pol_agre
     pairs: list[tuple[int, int]] = []
     if len(vv) and len(vh):
         d = np.hypot(
-            vv["x_m"].to_numpy()[:, None] - vh["x_m"].to_numpy(), vv["y_m"].to_numpy()[:, None] - vh["y_m"].to_numpy()
+            vv["x_m"].to_numpy()[:, None] - vh["x_m"].to_numpy(),
+            vv["y_m"].to_numpy()[:, None] - vh["y_m"].to_numpy(),
         )
         r, c = optimize.linear_sum_assignment(np.where(d <= gate_m, d, 1e9))
         pairs = [(i, j) for i, j in zip(r, c, strict=True) if d[i, j] <= gate_m]
@@ -93,8 +98,12 @@ def merge_pols(vv: pd.DataFrame, vh: pd.DataFrame, gate_m: float = CFG["pol_agre
     keep = ["row", "col", "x_m", "y_m", "n_px", "peak_db"]
     only_vv = vv.drop(index=vv.index[pi])
     only_vh = vh.drop(index=vh.index[pj])
-    only_vv = only_vv[keep].assign(pol_agree=False, peak_ratio_vv_db=only_vv["peak_ratio_db"], peak_ratio_vh_db=np.nan)
-    only_vh = only_vh[keep].assign(pol_agree=False, peak_ratio_vv_db=np.nan, peak_ratio_vh_db=only_vh["peak_ratio_db"])
+    only_vv = only_vv[keep].assign(
+        pol_agree=False, peak_ratio_vv_db=only_vv["peak_ratio_db"], peak_ratio_vh_db=np.nan
+    )
+    only_vh = only_vh[keep].assign(
+        pol_agree=False, peak_ratio_vv_db=np.nan, peak_ratio_vh_db=only_vh["peak_ratio_db"]
+    )
     parts = [p for p in (both, only_vv, only_vh) if len(p)]
     if not parts:
         return pd.DataFrame(columns=[*keep, "pol_agree", "peak_ratio_vv_db", "peak_ratio_vh_db"])
@@ -104,5 +113,9 @@ def merge_pols(vv: pd.DataFrame, vh: pd.DataFrame, gate_m: float = CFG["pol_agre
 def size_class(n_px):
     """1-4 px small, 5-20 medium, more large (very rough at 20 m resolution). Scalar or array."""
     n = np.asarray(n_px)
-    out = np.where(n <= CFG["size_small_max_px"], "small", np.where(n <= CFG["size_medium_max_px"], "medium", "large"))
+    out = np.where(
+        n <= CFG["size_small_max_px"],
+        "small",
+        np.where(n <= CFG["size_medium_max_px"], "medium", "large"),
+    )
     return out.item() if out.ndim == 0 else out

@@ -13,7 +13,9 @@ from detect.pboat import features, predict_pboat
 from detect.scene import apply_masks, load_scene
 
 
-def _read_masks(meta: dict[str, Any], shape: tuple[int, int], root: Path) -> tuple[np.ndarray, np.ndarray]:
+def _read_masks(
+    meta: dict[str, Any], shape: tuple[int, int], root: Path
+) -> tuple[np.ndarray, np.ndarray]:
     """reference/land_mask_10m.tif and static_mask_10m.tif, cut to the scene's window on the region grid."""
     import rasterio
 
@@ -69,8 +71,12 @@ def run_pass(
     cands["n_px"] = cands["n_px"].astype(int)
     cands["pol_agree"] = cands["pol_agree"].astype(bool)
     cands["pass_id"] = pass_id
-    cands["time_utc"] = pd.to_datetime(pd.Series(meta["start_time"], index=cands.index), utc=True)  # naive = UTC
-    cands["cell_id"] = cell_id(cands["x_m"].to_numpy(), cands["y_m"].to_numpy()) if len(cands) else []
+    cands["time_utc"] = pd.to_datetime(
+        pd.Series(meta["start_time"], index=cands.index), utc=True
+    )  # naive = UTC
+    cands["cell_id"] = (
+        cell_id(cands["x_m"].to_numpy(), cands["y_m"].to_numpy()) if len(cands) else []
+    )
     cands["det_id"] = [f"{pass_id}-{i}" for i in range(len(cands))]
     return cands
 

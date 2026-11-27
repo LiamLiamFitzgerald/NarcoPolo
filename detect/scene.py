@@ -15,7 +15,9 @@ def to_linear(db100: np.ndarray) -> np.ndarray:
     return 10 ** (np.asarray(db100, dtype=np.float64) / 1000)
 
 
-def load_scene(pass_id: str, raw_dir: Path = Path("raw")) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
+def load_scene(
+    pass_id: str, raw_dir: Path = Path("raw")
+) -> tuple[np.ndarray, np.ndarray, dict[str, Any]]:
     """raw/s1/<pass_id>.tif (VV, VH) and its .json -> (vv, vh, meta) in linear sigma0.
 
     TODO(P2): assumes the file hash is the pass_id; meta gains x_left/y_top from the GeoTIFF.
@@ -26,7 +28,11 @@ def load_scene(pass_id: str, raw_dir: Path = Path("raw")) -> tuple[np.ndarray, n
     with rasterio.open(tif) as src:
         vv, vh = src.read(1), src.read(2)
         x_left, y_top = src.transform.c, src.transform.f
-    meta = json.loads(tif.with_suffix(".json").read_text()) | {"pass_id": pass_id, "x_left": x_left, "y_top": y_top}
+    meta = json.loads(tif.with_suffix(".json").read_text()) | {
+        "pass_id": pass_id,
+        "x_left": x_left,
+        "y_top": y_top,
+    }
     return to_linear(vv), to_linear(vh), meta
 
 

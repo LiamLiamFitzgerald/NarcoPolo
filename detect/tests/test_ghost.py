@@ -52,5 +52,9 @@ def test_ship_itself_is_not_a_ghost():
     s = make_scene(1, shape=(1200, 1200), n_ships=1)
     img = to_linear(s.vv)
     g = s.ghosts.iloc[0]
-    ship = {"row": g.ship_row, "col": g.ship_col, "peak_db": 10 * np.log10(img[int(g.ship_row), int(g.ship_col)])}
+    ship = {
+        "row": g.ship_row,
+        "col": g.ship_col,
+        "peak_db": 10 * np.log10(img[int(g.ship_row), int(g.ship_col)]),
+    }
     assert not is_ghost(ship, img, 350.0, ghost_offset_m(s.meta))

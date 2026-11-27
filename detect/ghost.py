@@ -30,7 +30,9 @@ def azimuth_heading(meta: dict[str, Any]) -> float:
         str(meta["orbit_direction"]).lower()
     ]
     if CFG[key] is None:
-        raise ValueError(f"no heading_deg in scene meta and config {key} is unset (TODO(P4) question)")
+        raise ValueError(
+            f"no heading_deg in scene meta and config {key} is unset (TODO(P4) question)"
+        )
     return float(CFG[key])
 
 

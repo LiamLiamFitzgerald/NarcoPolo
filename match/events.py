@@ -14,7 +14,9 @@ from match._standin import CFG, EVENTS_COLUMNS, KN_TO_MS, RAW_ID_COLUMNS, cell_i
 log = logging.getLogger(__name__)
 
 
-def match(dets: pd.DataFrame, gfw_sar: pd.DataFrame, gate_m: float = CFG["match_gate_m"]) -> np.ndarray:
+def match(
+    dets: pd.DataFrame, gfw_sar: pd.DataFrame, gate_m: float = CFG["match_gate_m"]
+) -> np.ndarray:
     """One-to-one match of each pass's detections to GFW SAR detections with matched = True (issue 1).
 
     A GFW row belongs to the pass if its time is within ais_window_min of the pass time.
@@ -30,7 +32,8 @@ def match(dets: pd.DataFrame, gfw_sar: pd.DataFrame, gate_m: float = CFG["match_
         if g.empty:
             continue
         dist = np.hypot(
-            d["x_m"].to_numpy()[:, None] - g["x_m"].to_numpy(), d["y_m"].to_numpy()[:, None] - g["y_m"].to_numpy()
+            d["x_m"].to_numpy()[:, None] - g["x_m"].to_numpy(),
+            d["y_m"].to_numpy()[:, None] - g["y_m"].to_numpy(),
         )
         r, c = optimize.linear_sum_assignment(np.where(dist <= gate_m, dist, CFG["match_big_cost"]))
         out[idx[r[dist[r, c] <= gate_m]]] = True
@@ -45,7 +48,11 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
     """
     large = dets["size_class"] == "large"
     if large.any():
-        log.info("large detections matched to GFW: %.2f of %d", dets.loc[large, "matched"].mean(), large.sum())
+        log.info(
+            "large detections matched to GFW: %.2f of %d",
+            dets.loc[large, "matched"].mean(),
+            large.sum(),
+        )
     d = dets[dets["size_class"].isin(["small", "medium"]) & ~dets["matched"].astype(bool)]
     return pd.DataFrame({
         "event_id": "dark_small-" + d["det_id"].astype(str), "event_type": "dark_small", "time_utc": d["time_utc"],
@@ -54,7 +61,9 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
     }).reset_index(drop=True)  # fmt: skip
 
 
-def _outside_exclusion_and_calm(ev: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+def _outside_exclusion_and_calm(
+    ev: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame
+) -> pd.DataFrame:
     """Keep events in known, non-exclusion cells whose daily max wave height is below storm_hs_m.
 
     Cell-days with no wave data are dropped: without it a weather stop can't be ruled out.
@@ -66,10 +75,14 @@ def _outside_exclusion_and_calm(ev: pd.DataFrame, cells: pd.DataFrame, era5: pd.
 
 
 def _events(ev: pd.DataFrame) -> pd.DataFrame:
-    return ev.assign(event_type="slowdown", p=1.0, matched=False)[EVENTS_COLUMNS].reset_index(drop=True)
+    return ev.assign(event_type="slowdown", p=1.0, matched=False)[EVENTS_COLUMNS].reset_index(
+        drop=True
+    )
 
 
-def slowdowns_from_presence(presence2km: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+def slowdowns_from_presence(
+    presence2km: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame
+) -> pd.DataFrame:
     """One slowdown per cell-day with cargo or tanker presence-hours in the slowest GFW bin (issue 3).
 
     TODO(P3): assumed columns. presence2km: cell_id, date, vessel_type ("cargo" | "tanker"),
@@ -82,8 +95,15 @@ def slowdowns_from_presence(presence2km: pd.DataFrame, cells: pd.DataFrame, era5
     ev = slow.groupby(["cell_id", "date"], as_index=False)["hours"].sum()
     ev = _outside_exclusion_and_calm(ev[ev["hours"] > 0], cells, era5)
     ev = ev.merge(cells[["cell_id", "x_m", "y_m"]], on="cell_id")
-    ev["time_utc"] = pd.to_datetime(ev["date"]).dt.tz_localize("UTC") + pd.Timedelta(hours=CFG["slowdown_hour_utc"])
-    ev["event_id"] = "slowdown-" + ev["cell_id"].astype(str) + "-" + pd.to_datetime(ev["date"]).dt.strftime("%Y%m%d")
+    ev["time_utc"] = pd.to_datetime(ev["date"]).dt.tz_localize("UTC") + pd.Timedelta(
+        hours=CFG["slowdown_hour_utc"]
+    )
+    ev["event_id"] = (
+        "slowdown-"
+        + ev["cell_id"].astype(str)
+        + "-"
+        + pd.to_datetime(ev["date"]).dt.strftime("%Y%m%d")
+    )
     return _events(ev.assign(duration_min=ev["hours"] * 60, ship_key=None))
 
 
@@ -91,9 +111,13 @@ def _ship_slowdowns(t: pd.DataFrame) -> list[dict]:
     """Per-ship rule on one ship's pings (sorted): cruise >= cruise_kn in the previous hour, then
     a rolling median < slow_kn for >= slow_min, with enough pings and no gap > ais_window_min."""
     gap = pd.Timedelta(minutes=CFG["ais_window_min"])
-    med = t.rolling(f"{CFG['rolling_median_min']}min", on="time_utc")["speed_ms"].median().to_numpy()
+    med = (
+        t.rolling(f"{CFG['rolling_median_min']}min", on="time_utc")["speed_ms"].median().to_numpy()
+    )
     slow = med < CFG["slow_kn"] * KN_TO_MS
-    seg = np.cumsum(~slow | (t["time_utc"].diff() > gap).to_numpy())  # new id at every fast ping or long gap
+    seg = np.cumsum(
+        ~slow | (t["time_utc"].diff() > gap).to_numpy()
+    )  # new id at every fast ping or long gap
     out = []
     for s_id in np.unique(seg[slow]):
         g = t[(seg == s_id) & slow]
@@ -110,7 +134,9 @@ def _ship_slowdowns(t: pd.DataFrame) -> list[dict]:
     return out
 
 
-def slowdowns_from_tracks(ais: pd.DataFrame, *, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+def slowdowns_from_tracks(
+    ais: pd.DataFrame, *, cells: pd.DataFrame, era5: pd.DataFrame
+) -> pd.DataFrame:
     """Per-ship slowdowns, only if a track source turns up. Never interpolates a slowdown into existence.
 
     TODO(P2): assumed ais columns: ship_id, time_utc, x_m, y_m, sog_kn, ship_type. Raw ids are
@@ -121,7 +147,9 @@ def slowdowns_from_tracks(ais: pd.DataFrame, *, cells: pd.DataFrame, era5: pd.Da
         types |= ais["ship_type"].between(lo, hi).to_numpy()
     a = ais[types].assign(speed_ms=ais["sog_kn"] * KN_TO_MS).sort_values(["ship_id", "time_utc"])
     rows = [
-        r | {"ship_key": ship_key(sid)} for sid, t in a.groupby("ship_id") for r in _ship_slowdowns(t.reset_index())
+        r | {"ship_key": ship_key(sid)}
+        for sid, t in a.groupby("ship_id")
+        for r in _ship_slowdowns(t.reset_index())
     ]
     ev = pd.DataFrame(rows, columns=["time_utc", "x_m", "y_m", "duration_min", "ship_key"])
     ev["cell_id"] = cell_id(ev["x_m"], ev["y_m"]) if len(ev) else []

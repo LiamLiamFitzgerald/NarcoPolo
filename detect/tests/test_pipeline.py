@@ -71,7 +71,14 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path):
 
     def tif(path, bands, dtype):
         with rasterio.open(
-            path, "w", driver="GTiff", height=500, width=500, count=len(bands), dtype=dtype, transform=tr
+            path,
+            "w",
+            driver="GTiff",
+            height=500,
+            width=500,
+            count=len(bands),
+            dtype=dtype,
+            transform=tr,
         ) as f:
             f.write(np.stack(bands))
 
@@ -85,7 +92,9 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path):
     cands = run_pass("p9", root=tmp_path)
     cells = sorted(cands["cell_id"].unique())
     rough = cells[0]
-    exposure = pd.DataFrame({"cell_id": cells, "pass_id": "p9", "calm": [c != rough for c in cells], "wind_ms": 3.0})
+    exposure = pd.DataFrame(
+        {"cell_id": cells, "pass_id": "p9", "calm": [c != rough for c in cells], "wind_ms": 3.0}
+    )
     exposure.to_parquet(tmp_path / "coverage/exposure.parquet")
 
     cut = datetime(2026, 12, 1, tzinfo=UTC)

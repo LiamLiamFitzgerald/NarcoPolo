@@ -42,4 +42,8 @@ def test_dark_small_events_keep_unmatched_small_and_medium():
     d = _dets().assign(matched=[True, False, False, False, True])
     ev = dark_small_events(d)
     assert list(ev["event_id"]) == ["dark_small-c", "dark_small-d"]
-    assert list(ev["p"]) == [0.6, 0.3] and (ev["event_type"] == "dark_small").all() and not ev["matched"].any()
+    assert (
+        list(ev["p"]) == [0.6, 0.3]
+        and (ev["event_type"] == "dark_small").all()
+        and not ev["matched"].any()
+    )

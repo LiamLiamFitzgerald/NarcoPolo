@@ -99,7 +99,12 @@ def cell_id(x_m: np.ndarray, y_m: np.ndarray, cfg: dict[str, Any] = CFG) -> np.n
 # TODO(P1): replace with sim/. Renders int16 dB x 100 chips with gamma speckle (issue 8).
 # The sea levels and meta values below are simulator settings only, never used on real data.
 SIM_SEA_DB = {"vv": -20.0, "vh": -27.0}
-SIM_META = {"prf_hz": 1700.0, "slant_range_m": 850_000.0, "sat_speed_ms": 7600.0, "heading_deg": 350.0}
+SIM_META = {
+    "prf_hz": 1700.0,
+    "slant_range_m": 850_000.0,
+    "sat_speed_ms": 7600.0,
+    "heading_deg": 350.0,
+}
 
 
 @dataclass
@@ -139,7 +144,12 @@ def make_scene(
     meta: dict[str, Any] = {"pass_id": pass_id, "start_time": time_utc, "x_left": 500_000.0,
                             "y_top": 5_700_000.0, **SIM_META}  # fmt: skip
     px = P4_DEFAULTS["pixel_m"]
-    offset = P4_DEFAULTS["radar_wavelength_m"] * meta["slant_range_m"] * meta["prf_hz"] / (2 * meta["sat_speed_ms"])
+    offset = (
+        P4_DEFAULTS["radar_wavelength_m"]
+        * meta["slant_range_m"]
+        * meta["prf_hz"]
+        / (2 * meta["sat_speed_ms"])
+    )
     h = np.deg2rad(meta["heading_deg"])
     drow, dcol = -np.cos(h) * offset / px, np.sin(h) * offset / px
 
@@ -161,7 +171,9 @@ def make_scene(
         for pol, img in imgs.items():
             for rr, cc in cells:
                 img[rr, cc] += 10 ** ((SIM_SEA_DB[pol] + ex) / 10)  # linear, never dB
-        boats.append({"row": r + 0.5 * (n > 2), "col": c + 0.5 * (n > 1), "n_px": n, "excess_db": ex})
+        boats.append(
+            {"row": r + 0.5 * (n > 2), "col": c + 0.5 * (n > 1), "n_px": n, "excess_db": ex}
+        )
 
     ghosts = []
     for _ in range(n_ships):
@@ -176,7 +188,9 @@ def make_scene(
             raise ValueError("scene too small for the ghost offset")
         for pol, img in imgs.items():
             img[r : r + 6, c : c + 6] += 10 ** ((SIM_SEA_DB[pol] + ship_excess_db) / 10)
-            img[gr : gr + 2, gc : gc + 2] += 10 ** ((SIM_SEA_DB[pol] + ship_excess_db - ghost_drop_db) / 10)
+            img[gr : gr + 2, gc : gc + 2] += 10 ** (
+                (SIM_SEA_DB[pol] + ship_excess_db - ghost_drop_db) / 10
+            )
         ghosts.append({"row": gr + 0.5, "col": gc + 0.5, "ship_row": r + 2.5, "ship_col": c + 2.5})
 
     return SimScene(
