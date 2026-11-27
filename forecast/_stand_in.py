@@ -25,10 +25,14 @@ class Split:
 
     def assert_train(self, frame: pd.DataFrame) -> None:
         if (frame["date"] >= self.cutoff).any():
-            raise ValueError(f"look-ahead: training rows on or after cutoff {self.cutoff.date()}")
+            raise ValueError(
+                f"look-ahead: training rows on or after cutoff {self.cutoff.date()}"
+            )
 
 
-def folds(T: pd.Timestamp, k_max: int, embargo_days: int, test_days: int) -> list[Split]:
+def folds(
+    T: pd.Timestamp, k_max: int, embargo_days: int, test_days: int
+) -> list[Split]:
     """Fold k tests [T - 7k + 1, T - 7k + 7]; its cutoff sits one embargo before the test start."""
     return [
         Split(T - pd.Timedelta(days=7 * k - 1 + embargo_days), embargo_days, test_days)

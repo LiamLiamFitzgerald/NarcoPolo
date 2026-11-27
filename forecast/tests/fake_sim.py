@@ -21,8 +21,12 @@ def cells() -> pd.DataFrame:
     ix, iy = np.meshgrid(np.arange(N), np.arange(N), indexing="ij")
     fine = pd.DataFrame({"ix": ix.ravel(), "iy": iy.ravel()})
     fine["cell_id"] = [f"2000_{a}_{b}" for a, b in zip(fine.ix, fine.iy)]
-    fine["inshore_frac"] = np.clip(1 - fine.iy / 12 + rng.normal(0, 0.1, len(fine)), 0, 1)
-    fine.loc[fine.ix >= 25, "inshore_frac"] = np.nan  # no inshore map covers the east edge
+    fine["inshore_frac"] = np.clip(
+        1 - fine.iy / 12 + rng.normal(0, 0.1, len(fine)), 0, 1
+    )
+    fine.loc[fine.ix >= 25, "inshore_frac"] = (
+        np.nan
+    )  # no inshore map covers the east edge
     fine["lane"] = fine.iy.between(18, 20).astype(float)
     fine["dist_coast_m"] = 1000.0 + 800.0 * fine.iy
     fine["static_frac"] = 0.0
@@ -31,20 +35,27 @@ def cells() -> pd.DataFrame:
 
     fine["parent"] = fine.cell_id.map(parent)
     agg = fine.groupby("parent").agg(
-        inshore_frac=("inshore_frac", lambda s: s.mean() if s.notna().all() else np.nan),
+        inshore_frac=(
+            "inshore_frac",
+            lambda s: s.mean() if s.notna().all() else np.nan,
+        ),
         lane=("lane", "mean"),  # share of lane children; P3 owns the real rule
         dist_coast_m=("dist_coast_m", "mean"),
         static_frac=("static_frac", "mean"),
         sea_frac=("sea_frac", "mean"),
     )
     coarse = agg.reset_index().rename(columns={"parent": "cell_id"}).assign(level=10000)
-    return pd.concat([fine.drop(columns=["ix", "iy", "parent"]), coarse], ignore_index=True)
+    return pd.concat(
+        [fine.drop(columns=["ix", "iy", "parent"]), coarse], ignore_index=True
+    )
 
 
 def planted_rate(c: pd.DataFrame) -> pd.Series:
     """True events per unit exposure. Missing inshore map: the true value is still there, use 0.5."""
     inshore = c["inshore_frac"].fillna(0.5)
-    return np.exp(BETA["intercept"] + BETA["inshore"] * inshore + BETA["lane"] * c["lane"])
+    return np.exp(
+        BETA["intercept"] + BETA["inshore"] * inshore + BETA["lane"] * c["lane"]
+    )
 
 
 def observed(event_type: str, seed: int = 7) -> tuple[Observed, Observed, pd.DataFrame]:

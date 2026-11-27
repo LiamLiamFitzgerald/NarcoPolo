@@ -52,7 +52,9 @@ def ewma(
     return rate * target2["exposure"]
 
 
-def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str) -> pd.DataFrame:
+def design_matrix(
+    cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str
+) -> pd.DataFrame:
     """Covariates per (cell, date) from reference/layers.gpkg cells (one level at a time).
 
     inshore_frac NaN (no map) gets a missing flag and 0 in the value column, per the spec.
@@ -65,7 +67,14 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
         lane=cells["lane"].astype(float),
         log_dist_coast=np.log(cells["dist_coast_m"]),
     )
-    cols = ["intercept", "inshore", "inshore_missing", "lane", "log_dist_coast", "static_frac"]
+    cols = [
+        "intercept",
+        "inshore",
+        "inshore_missing",
+        "lane",
+        "log_dist_coast",
+        "static_frac",
+    ]
     X = c[["cell_id", *cols]].merge(pd.DataFrame({"date": dates}), how="cross")
     if event_type == "slowdown":
         angle = 2 * np.pi * X["date"].dt.day_of_year / 365
@@ -81,7 +90,9 @@ def _xb(beta: pd.Series, rows: pd.DataFrame) -> pd.Series:
     return rows[beta.index].to_numpy() @ beta.to_numpy()
 
 
-def _fit_rows(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+def _fit_rows(
+    split: Split, train10: pd.DataFrame, X10: pd.DataFrame
+) -> tuple[pd.DataFrame, list[str]]:
     """Training rows with E > 0 and known covariates, and the columns that can be fitted."""
     split.assert_train(train10)
     rows = _with_x(train10[train10["exposure"] > 0], X10)
@@ -91,7 +102,9 @@ def _fit_rows(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[p
     return rows, [c for c in cols if c == "intercept" or rows[c].nunique() > 1]
 
 
-def fit_glm(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.Series, float]:
+def fit_glm(
+    split: Split, train10: pd.DataFrame, X10: pd.DataFrame
+) -> tuple[pd.Series, float]:
     """Quasi-Poisson GLM on 10 km rows with E > 0, offset log E. Returns (beta, phi)."""
     rows, cols = _fit_rows(split, train10, X10)
     res = sm.GLM(
@@ -118,9 +131,9 @@ def nb2_alpha(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> float:
     alpha near 0 agrees with phi near 1; a large alpha alongside phi near 1 means they disagree.
     """
     rows, cols = _fit_rows(split, train10, X10)
-    res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
-        disp=0
-    )
+    res = sm.NegativeBinomial(
+        rows["count"], rows[cols], offset=np.log(rows["exposure"])
+    ).fit(disp=0)
     return float(res.params["alpha"])
 
 
@@ -149,7 +162,9 @@ def glm_mu(
     return predict_glm(beta, theta, _with_x(target2, X2)).set_axis(target2.index), phi
 
 
-def nb_interval(mu: pd.Series, phi: float, level: float) -> tuple[np.ndarray, np.ndarray]:
+def nb_interval(
+    mu: pd.Series, phi: float, level: float
+) -> tuple[np.ndarray, np.ndarray]:
     """Central interval from a negative binomial with variance phi x mu; Poisson if phi <= 1."""
     lo_q, hi_q = (1 - level) / 2, 1 - (1 - level) / 2
     m = np.asarray(mu, dtype=float)
@@ -171,7 +186,17 @@ def poisson_deviance(C: pd.Series, mu: pd.Series) -> float:
     return float(np.mean(2 * term))
 
 
-EXPECTED_COLUMNS = ["cell_id", "date", "event_type", "mu", "phi", "lo90", "hi90", "model", "fold"]
+EXPECTED_COLUMNS = [
+    "cell_id",
+    "date",
+    "event_type",
+    "mu",
+    "phi",
+    "lo90",
+    "hi90",
+    "model",
+    "fold",
+]
 
 
 def expected_rows(
@@ -235,7 +260,9 @@ def choose_baseline(
     means = {name: t["skill"].mean() for name, t in skills.items()}
     bad = [n for n, t in skills.items() if not np.isfinite(t["skill"]).all()]
     if bad:
-        raise ValueError(f"non-finite backtest skill for {bad}; not choosing a baseline")
+        raise ValueError(
+            f"non-finite backtest skill for {bad}; not choosing a baseline"
+        )
     best = max(means, key=means.__getitem__)
     ranges = "; ".join(
         f"{n}: mean {means[n]:.3f}, range {t['skill'].min():.3f} to {t['skill'].max():.3f}"
@@ -243,7 +270,9 @@ def choose_baseline(
     )
     with open(decisions, "a", encoding="utf-8") as f:
         # DECISIONS.md format: YYYY-MM-DD HH:MM · who · decision · why
-        f.write(f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n")
+        f.write(
+            f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n"
+        )
     return best
 
 
@@ -270,6 +299,24 @@ def backtest(
         d_flat = poisson_deviance(test["count"][keep], flat[keep])
         out.append({"fold": k, "skill": 1 - d_model / d_flat})
     return pd.DataFrame(out)
+
+
+def _fold_model(
+    name: str,
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    fs: list[Split],
+    params: tuple[float, float, float],
+    store: dict[tuple[str, int], pd.DataFrame],
+) -> Callable[[Split], pd.Series]:
+    """A backtest model that also keeps each fold's expected rows, so they're computed once."""
+
+    def predict(split: Split) -> pd.Series:
+        fold = fs.index(split) + 1
+        rows = expected_rows(name, split, fold, frames, *params)
+        store[(name, fold)] = rows
+        return rows["mu"].set_axis(split.test(frames[0]).index)
+
+    return predict
 
 
 def run(
@@ -301,17 +348,10 @@ def run(
         fs = folds(T, k, cfg["embargo_days"], cfg["test_days"])
 
         fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
-
-        def model_fn(name: str) -> Callable[[Split], pd.Series]:
-            def predict(split: Split) -> pd.Series:
-                fold = fs.index(split) + 1
-                rows = expected_rows(name, split, fold, frames, *params)
-                fold_rows[(name, fold)] = rows
-                return rows["mu"].set_axis(split.test(f2).index)
-
-            return predict
-
-        skills = {name: backtest(f2, fs, model_fn(name)) for name in ("ewma", "glm")}
+        skills = {
+            name: backtest(f2, fs, _fold_model(name, frames, fs, params, fold_rows))
+            for name in ("ewma", "glm")
+        }
         chosen = (baseline or {}).get(event_type) or choose_baseline(
             event_type, skills, decisions, when
         )

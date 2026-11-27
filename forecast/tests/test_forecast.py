@@ -6,12 +6,12 @@ from forecast import (
     EXPECTED_COLUMNS,
     backtest,
     choose_baseline,
-    evaluation_split,
-    expected_rows,
-    forecast_window,
     design_matrix,
     empirical_bayes,
+    evaluation_split,
     ewma,
+    expected_rows,
+    forecast_window,
     glm_mu,
     nb_interval,
     poisson_deviance,
@@ -45,11 +45,17 @@ def _glm(f2, f10, X2, X10, split=SPLIT):
 def _recovery(test, mu, cells):
     """sum(mu) / sum(true rate x E) per group of cells; 1.0 is perfect."""
     fine = cells[cells.level == 2000].set_index("cell_id")
-    t = test.assign(mu=mu, true=test.cell_id.map(fake_sim.planted_rate(fine)) * test.exposure)
+    t = test.assign(
+        mu=mu, true=test.cell_id.map(fake_sim.planted_rate(fine)) * test.exposure
+    )
     t = t[t.exposure > 0]
     lane = t.cell_id.map(fine.lane) == 1
     inshore = t.cell_id.map(fine.inshore_frac)
-    groups = {"lane": lane, "inshore": inshore > 0.7, "offshore": (inshore < 0.2) & ~lane}
+    groups = {
+        "lane": lane,
+        "inshore": inshore > 0.7,
+        "offshore": (inshore < 0.2) & ~lane,
+    }
     return {g: t[m].mu.sum() / t[m].true.sum() for g, m in groups.items()}
 
 
@@ -92,7 +98,14 @@ def test_future_row_in_training_data_makes_the_fit_raise(event_type):
     f2, f10, X2, X10, _ = _setup(event_type)
     leak = SPLIT.test(f2).head(1)
     with pytest.raises(ValueError, match="look-ahead"):
-        ewma(SPLIT, pd.concat([SPLIT.train(f2), leak]), SPLIT.train(f10), SPLIT.test(f2), DELTA, MIN_SE)
+        ewma(
+            SPLIT,
+            pd.concat([SPLIT.train(f2), leak]),
+            SPLIT.train(f10),
+            SPLIT.test(f2),
+            DELTA,
+            MIN_SE,
+        )
     leak10 = SPLIT.test(f10).head(1)
     with pytest.raises(ValueError, match="look-ahead"):
         glm_mu(SPLIT, pd.concat([SPLIT.train(f10), leak10]), X10, SPLIT.test(f2), X2)
@@ -125,7 +138,9 @@ def test_interval_covers_about_ninety_percent():
     test = SPLIT.test(f2)
     lo, hi = nb_interval(mu, phi, LEVEL)
     coverage = ((test["count"] >= lo) & (test["count"] <= hi)).mean()
-    assert 0.88 <= coverage <= 0.995, coverage  # discrete counts make central intervals conservative
+    assert 0.88 <= coverage <= 0.995, (
+        coverage
+    )  # discrete counts make central intervals conservative
 
 
 def test_negative_binomial_interval_is_wider_when_overdispersed():
@@ -149,7 +164,9 @@ def test_empirical_bayes_pulls_thin_cells_towards_one():
 
 
 def test_poisson_deviance_is_zero_for_a_perfect_forecast_and_handles_soft_zeros():
-    assert poisson_deviance(pd.Series([0.6, 2.0]), pd.Series([0.6, 2.0])) == pytest.approx(0)
+    assert poisson_deviance(
+        pd.Series([0.6, 2.0]), pd.Series([0.6, 2.0])
+    ) == pytest.approx(0)
     assert poisson_deviance(pd.Series([0.0]), pd.Series([0.5])) == pytest.approx(1.0)
 
 
@@ -168,7 +185,9 @@ def test_walk_forward_backtest_beats_flat_average(event_type, k):
         "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0]),
     }
     for name, table in skills.items():
-        print(event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict())
+        print(
+            event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict()
+        )
     for table in skills.values():
         assert np.isfinite(table.skill).all() and (table.skill < 1).all()
     assert skills["glm"].skill.mean() > 0
@@ -225,7 +244,10 @@ def test_backtest_rows_carry_their_fold_number():
     frames = _frames("dark_small")
     fs = folds(frames[0].date.max(), 3, embargo_days=7, test_days=7)
     rows = pd.concat(
-        [expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL) for k, s in enumerate(fs, 1)]
+        [
+            expected_rows("glm", s, k, frames, DELTA, MIN_SE, LEVEL)
+            for k, s in enumerate(fs, 1)
+        ]
     )
     assert sorted(rows.fold.unique()) == [1, 2, 3]
     assert rows.groupby("fold").date.nunique().eq(7).all()
@@ -237,14 +259,19 @@ def test_choose_baseline_records_the_higher_mean_skill(tmp_path):
         "ewma": pd.DataFrame({"fold": [1, 2], "skill": [0.05, 0.10]}),
         "glm": pd.DataFrame({"fold": [1, 2], "skill": [0.20, 0.12]}),
     }
-    assert choose_baseline("slowdown", skills, str(decisions), "2026-11-28 10:00") == "glm"
+    assert (
+        choose_baseline("slowdown", skills, str(decisions), "2026-11-28 10:00") == "glm"
+    )
     line = decisions.read_text()
     assert "slowdown: glm" in line and "range 0.120 to 0.200" in line
 
 
 def test_choose_baseline_refuses_a_broken_backtest(tmp_path):
     decisions = tmp_path / "DECISIONS.md"
-    skills = {"ewma": pd.DataFrame({"fold": [1], "skill": [np.nan]}), "glm": pd.DataFrame({"fold": [1], "skill": [0.1]})}
+    skills = {
+        "ewma": pd.DataFrame({"fold": [1], "skill": [np.nan]}),
+        "glm": pd.DataFrame({"fold": [1], "skill": [0.1]}),
+    }
     with pytest.raises(ValueError, match="non-finite"):
         choose_baseline("dark_small", skills, str(decisions), "2026-11-28 10:00")
     assert not decisions.exists()
@@ -275,20 +302,45 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
     observed, cells = _all_observed()
     T = observed.date.max()
     forced = {"slowdown": "glm", "dark_small": "ewma"}
-    expected, report = run(observed, cells, T, CFG, str(tmp_path / "D.md"), "2026-11-28 10:00", forced)
+    expected, report = run(
+        observed, cells, T, CFG, str(tmp_path / "D.md"), "2026-11-28 10:00", forced
+    )
     assert list(expected.columns) == EXPECTED_COLUMNS
     folds_by_type = expected.groupby("event_type").fold.nunique()
-    assert folds_by_type["slowdown"] == 13 and folds_by_type["dark_small"] == 7  # fold 0 + K
-    assert set(expected.groupby("event_type").model.unique().map(tuple)) == {("glm",), ("ewma",)}
-    assert (expected.fold == 0).sum() == 2 * len(evaluation_split(T).test(observed[(observed.level == 2000) & (observed.event_type == "slowdown")]))
-    assert report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()  # forced: nothing recorded
-    assert (report.nb2_alpha < 0.1).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
+    assert (
+        folds_by_type["slowdown"] == 13 and folds_by_type["dark_small"] == 7
+    )  # fold 0 + K
+    assert set(expected.groupby("event_type").model.unique().map(tuple)) == {
+        ("glm",),
+        ("ewma",),
+    }
+    assert (expected.fold == 0).sum() == 2 * len(
+        evaluation_split(T).test(
+            observed[(observed.level == 2000) & (observed.event_type == "slowdown")]
+        )
+    )
+    assert (
+        report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()
+    )  # forced: nothing recorded
+    assert (
+        report.nb2_alpha < 0.1
+    ).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
     print(report.round(3).to_string())
 
 
-@pytest.mark.xfail(strict=True, reason="choose_baseline refuses NaN skill until the zero-rate gap is fixed")
+@pytest.mark.xfail(
+    strict=True,
+    reason="choose_baseline refuses NaN skill until the zero-rate gap is fixed",
+)
 def test_stage_run_chooses_a_baseline_unforced(tmp_path):
     from forecast import run
 
     observed, cells = _all_observed()
-    run(observed, cells, observed.date.max(), CFG, str(tmp_path / "D.md"), "2026-11-28 10:00")
+    run(
+        observed,
+        cells,
+        observed.date.max(),
+        CFG,
+        str(tmp_path / "D.md"),
+        "2026-11-28 10:00",
+    )

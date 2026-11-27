@@ -39,7 +39,9 @@ def exposure_rows(
     passes = exposure.assign(date=_utc_date(exposure["time_utc"]))
     small = passes.groupby(["cell_id", "date"], as_index=False)["exposure_small"].sum()
     small = grid[["cell_id", "date"]].merge(small, on=["cell_id", "date"], how="left")
-    small = small.assign(event_type="dark_small", exposure=small["exposure_small"].fillna(0.0))
+    small = small.assign(
+        event_type="dark_small", exposure=small["exposure_small"].fillna(0.0)
+    )
 
     slow = grid.assign(
         event_type="slowdown",
