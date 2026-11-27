@@ -180,6 +180,7 @@ def _plan(plan: dict) -> dict:
                 "arrival_utc": s["arrival_utc"],
                 "dwell_h": s["dwell_h"],
                 **_lonlat(s["x_m"], s["y_m"]),
+                **{k: s[k] for k in ("exploration", "not_significant", "stand_in") if k in s},
             }
             for s in stops
         ]

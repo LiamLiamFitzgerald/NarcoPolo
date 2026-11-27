@@ -137,7 +137,7 @@ def world(tmp_path_factory):
     stop = lambda i, t, x, y: {"id": i, "arrival_utc": t, "dwell_h": 1.0, "x_m": x, "y_m": y}
     plan = {  # what patrol writes
         "ship": [stop("base", "2026-11-27T06:00:00Z", s.x_m - 9000, s.y_m),
-                 stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m),
+                 {**stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m), "exploration": True},
                  stop("base", "2026-11-27T10:00:00Z", s.x_m - 9000, s.y_m)],
         "aircraft": [],
     }  # fmt: skip
@@ -193,6 +193,7 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
     assert snap["sites"] and all(inside(s) for s in snap["sites"])
     assert all(inside(p) for p in snap["piers"])
     assert all(inside(s) for s in snap["plan"]["ship"])
+    assert [s.get("exploration", False) for s in snap["plan"]["ship"]] == [False, True, False]
     assert all(p["P_j"] is None for p in snap["piers"])  # not available yet (issue 88)
 
 
