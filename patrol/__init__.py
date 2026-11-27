@@ -80,3 +80,9 @@ def ship_plan(*, out: Path = _PLAN) -> dict:
 def aircraft_plan(*, out: Path = _PLAN) -> dict:
     """TODO(P7): the same planner with air_hours and no exploration slot."""
     return _write("aircraft", _stops(["base", "S01", "S02", "S03", "base"], 0.2, AIR_DWELL_H), out)
+
+
+def run() -> None:
+    """Entry point for `make all` (DECISIONS.md, 2026-11-27 18:30). TODO(P7): real planner in issue 49."""
+    ship_plan()
+    aircraft_plan()

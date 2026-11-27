@@ -141,3 +141,8 @@ def build_snapshot(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(snap, indent=2))
     return snap
+
+
+def run() -> None:
+    """Entry point for `make all`. TODO(P7): real export in issue 50."""
+    build_snapshot()
