@@ -26,3 +26,17 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   drop_interval_days: 10
   pickup_prob: 0.8
   pickup_delay_days: [0.2, 4]
+
+# A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
+# Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
+reads:
+  reference/cells: [x0, y0, region_bbox]
+  reference/piers: [x0, y0, region_bbox]
+  reference/travel_hours: [x0, y0, region_bbox]
+  coverage/exposure: [x0, y0, region_bbox]
+  detect/detections: [x0, y0, region_bbox]
+  match/events: [x0, y0, region_bbox]
+  aggregate/observed: [x0, y0, region_bbox]
+  forecast/expected: [x0, y0, region_bbox, split]
+  fuse/cells: [x0, y0, region_bbox]
+  fuse/sites: [x0, y0, region_bbox]
