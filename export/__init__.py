@@ -135,6 +135,27 @@ def scan_identities(snapshot: dict) -> None:
         raise ValueError(f"possible vessel identifier in snapshot: {hit.group(0)!r}")
 
 
+def _legends(weeks: dict[str, list[dict]]) -> dict:
+    """Colour-scale breaks computed here, so the browser only maps a value to a colour.
+    Quantile breaks (6 points, 5 bins) over observed values of all shown weeks, so the same colour
+    means the same value in every week. Unusual is a fixed 0 to 1; observed versus expected is
+    clipped at +-3 (8 times more or less, per the spec)."""
+    rows = [r for rs in weeks.values() for r in rs]
+
+    def quantiles(key: str) -> list[float]:
+        v = [r[key] for r in rows if r[key] is not None and r["observed"]]
+        return (
+            sorted({round(float(q), 4) for q in np.quantile(v, np.linspace(0, 1, 6))}) if v else []
+        )
+
+    return {
+        "normal": {"breaks": quantiles("normal")},
+        "obs_vs_exp": {"clip": 3, "breaks": quantiles("obs_vs_exp")},
+        "unusual": {"breaks": [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]},
+        "exposure": {"breaks": quantiles("exposure")},
+    }
+
+
 def _lonlat(x: Any, y: Any) -> dict:
     lon, lat = to_wgs84(x, y)
     return {"lon": round(float(lon), 5), "lat": round(float(lat), 5)}
@@ -211,6 +232,10 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
     )
     label = data_label(_provenance(n) for n in _INPUTS)
 
+    cell_weeks = {
+        w: heatmap_values(f["forecast/expected"], f["fuse/cells"], f["coverage/exposure"], w)
+        for w in weeks
+    }
     snap = {
         "meta": {
             "data_label": label,
@@ -224,12 +249,15 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
         "basemap": basemap(unary_union(list(fine.geometry))),
         "cells": {
             "geometry": geometry,
-            "weeks": {
-                w: heatmap_values(
-                    f["forecast/expected"], f["fuse/cells"], f["coverage/exposure"], w
-                )
-                for w in weeks
+            "weeks": cell_weeks,
+            # Overlay layers (spec: inshore_frac >= 0.1, shipping lanes, exclusion zones)
+            "layers": {
+                "inshore": list(fine.loc[fine["inshore_frac"] >= 0.1, "cell_id"]),
+                "lane": list(fine.loc[fine["lane"], "cell_id"]),
+                "exclusion": list(fine.loc[fine["exclusion"], "cell_id"]),
             },
+            # Not a top-level key: core.schemas.check_json requires exactly the seven spec keys.
+            "legends": _legends(cell_weeks),
         },
         "sites": _sites(f["fuse/sites"]),
         "piers": _piers(f["reference/piers"]),

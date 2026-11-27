@@ -11,6 +11,7 @@ from core.config import load
 from core.crs import to_utm
 from core.schemas import check_json
 from export import (
+    _legends,
     _provenance,
     _weeks,
     basemap,
@@ -154,7 +155,15 @@ def test_provenance_comes_from_the_stage_file_stamps(world):
 
 def test_snapshot_has_the_spec_keys_and_a_data_driven_label(world):
     _, snap = world
-    assert set(snap) == {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
+    assert set(snap) == {
+        "meta",
+        "basemap",
+        "cells",
+        "sites",
+        "piers",
+        "plan",
+        "validation",
+    }
     assert snap["meta"]["data_label"] == "simulated"  # from the stamps, not typed in
     assert snap["meta"]["weeks"] == ["2026-W45", "2026-W46", "2026-W47", "2026-W48"]
     assert snap["meta"]["T"] == "2026-11-27"
@@ -205,3 +214,38 @@ def test_snapshot_sites_match_the_stage_file(world):
     assert all(len(s["top_piers"]) <= 3 and isinstance(s["reasons"], list) for s in snap["sites"])
     assert np.isfinite([s["S"] for s in snap["sites"]]).all()
     assert datetime.fromisoformat(snap["meta"]["generated_utc"])
+
+
+def test_legends_are_quantile_breaks_over_observed_values_only():
+    rows = {
+        "w1": [
+            {"observed": True, "normal": v, "unusual": 0.5, "exposure": v, "obs_vs_exp": None}
+            for v in (1.0, 2.0, 3.0, 4.0, 5.0)
+        ]
+        + [
+            {
+                "observed": False,
+                "normal": None,
+                "unusual": None,
+                "exposure": 0.0,
+                "obs_vs_exp": None,
+            }
+        ]
+    }
+    lg = _legends(rows)
+    assert lg["normal"]["breaks"] == [1.0, 1.8, 2.6, 3.4, 4.2, 5.0]  # quantiles of 1..5, no zeros
+    assert lg["exposure"]["breaks"] == lg["normal"]["breaks"]  # the unobserved 0.0 is left out
+    assert lg["unusual"]["breaks"] == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    assert lg["obs_vs_exp"] == {"clip": 3, "breaks": []}  # no values yet (issue 87)
+
+
+def test_snapshot_carries_legends_and_the_overlay_layers(world):
+    _, snap = world
+    geom = set(snap["cells"]["geometry"])
+    cells = io.read_stage("reference/cells")
+    fine = cells[cells["level"] == 2000]
+    assert set(snap["cells"]["layers"]["lane"]) == set(fine.loc[fine["lane"], "cell_id"])
+    assert set(snap["cells"]["layers"]["exclusion"]) == set(fine.loc[fine["exclusion"], "cell_id"])
+    assert set(snap["cells"]["layers"]["inshore"]) <= geom
+    breaks = snap["cells"]["legends"]["normal"]["breaks"]
+    assert breaks == sorted(set(breaks)) and len(breaks) >= 2
