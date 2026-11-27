@@ -20,7 +20,9 @@ def world(tmp_path_factory):
     mp.setenv("NARCO_RAW", str(tmp / "raw"))
     cfg = tmp / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
-    if "ewma_delta" not in cfg.read_text():  # P5's keys (docs/specs/P5.md Parameters) until config.yaml has them
+    if (
+        "ewma_delta" not in cfg.read_text()
+    ):  # P5's keys (docs/specs/P5.md Parameters) until config.yaml has them
         cfg.write_text(cfg.read_text() + "\newma_delta: 0.97\newma_min_se: 3\ninterval: 0.9\n")
     mp.setattr(io, "CONFIG_PATH", cfg)
     simulate(load(cfg)[0], 20261127)
