@@ -22,7 +22,6 @@ from core.grid import FINE, _origin
 from sim.world import SimWorld
 
 # TODO(P1): not in the spec; move into config.yaml sim: once the raw issue settles
-_SEED_OFFSET = 8  # next free slot after sim.seed_offsets
 _SHIP_LENGTH_M = (50.0, 300.0)  # GFW SAR length estimate of an AIS-carrying ship
 _GFW_LARGE_M = (
     12.0  # small boats this long or longer also show in GFW SAR (the sim's "large" size class)
@@ -155,7 +154,7 @@ def _era5(world: SimWorld, rng: np.random.Generator, path: Path) -> None:
 def write_raw(world: SimWorld) -> None:
     root = io.raw_root()
     root.mkdir(parents=True, exist_ok=True)
-    rng = np.random.default_rng(world.seed + _SEED_OFFSET)
+    rng = np.random.default_rng(world.seed + world.config["sim"]["seed_offsets"]["raw"])
     _gfw_sar(world, rng).to_parquet(root / "gfw_sar.parquet", index=False)
     _gfw_presence(world, rng).to_parquet(root / "gfw_presence.parquet", index=False)
     _era5(world, rng, root / "era5.nc")
