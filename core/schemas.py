@@ -163,7 +163,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "model": pa.Column(str, nullable=False),
             "fold": _num(
                 "Int64", nullable=True
-            ),  # null for the live forecast, fold number in backtests
+            ),  # 0 for the live forecast (evaluation window), fold number 1..k in backtests
         },
         pa.Check(lambda df: df["lo90"] <= df["hi90"], error="lo90 > hi90"),
     ),
