@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 P4_MATCH_DEFAULTS: dict[str, Any] = {
@@ -59,3 +60,12 @@ def check_events(df: pd.DataFrame) -> pd.DataFrame:
     assert df["p"].between(0, 1).all(), "p outside [0, 1]"
     assert len(df) == 0 or str(df["time_utc"].dt.tz) == "UTC", "time_utc must be tz-aware UTC"
     return df[EVENTS_COLUMNS]
+
+
+def cell_id(x_m, y_m, cfg: dict[str, Any] = CFG) -> np.ndarray:
+    """TODO(P3): the cell_id format is P3's; same stand-in as detect/_standin.cell_id."""
+    if cfg["x0"] is None or cfg["y0"] is None:
+        raise ValueError("x0/y0 not set: needs P1's config (TODO(P1))")
+    ix = np.floor((np.asarray(x_m) - cfg["x0"]) / cfg["cell_m"]).astype(int)
+    iy = np.floor((np.asarray(y_m) - cfg["y0"]) / cfg["cell_m"]).astype(int)
+    return np.char.add(np.char.add(ix.astype(str), "_"), iy.astype(str))

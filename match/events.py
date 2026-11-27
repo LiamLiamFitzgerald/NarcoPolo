@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from match._standin import CFG, EVENTS_COLUMNS, check_events
+from match._standin import CFG, EVENTS_COLUMNS, KN_TO_MS, cell_id, check_events
 
 log = logging.getLogger(__name__)
 
@@ -52,12 +52,84 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
     }).reset_index(drop=True)  # fmt: skip
 
 
-def slowdowns_from_presence(presence2km, cells, era5) -> pd.DataFrame:  # stub, issue #9
-    return pd.DataFrame(columns=EVENTS_COLUMNS)
+def _outside_exclusion_and_calm(ev: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+    """Keep events in known, non-exclusion cells whose daily max wave height is below storm_hs_m.
+
+    Cell-days with no wave data are dropped: without it a weather stop can't be ruled out.
+    """
+    hs = era5.groupby(["cell_id", "date"], as_index=False)["hs_m"].max()
+    ev = ev.merge(cells.loc[~cells["exclusion"].astype(bool), ["cell_id"]], on="cell_id")
+    ev = ev.merge(hs, on=["cell_id", "date"])
+    return ev[ev["hs_m"] < CFG["storm_hs_m"]]
 
 
-def slowdowns_from_tracks(ais) -> pd.DataFrame:  # stub, issue #9
-    return pd.DataFrame(columns=EVENTS_COLUMNS)
+def _events(ev: pd.DataFrame) -> pd.DataFrame:
+    return ev.assign(event_type="slowdown", p=1.0, matched=False)[EVENTS_COLUMNS].reset_index(drop=True)
+
+
+def slowdowns_from_presence(presence2km: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+    """One slowdown per cell-day with cargo or tanker presence-hours in the slowest GFW bin (issue 3).
+
+    TODO(P3): assumed columns. presence2km: cell_id, date, vessel_type ("cargo" | "tanker"),
+    speed_max_kn (upper edge of the speed bin), hours. cells: cell_id, exclusion, x_m, y_m
+    (centre). era5: cell_id, date, hs_m (any number of rows per day; the daily max is used).
+    time = slowdown_hour_utc on the date; duration_min = hours x 60; no ship_key.
+    """
+    slow = presence2km[presence2km["vessel_type"].isin(["cargo", "tanker"])
+                       & (presence2km["speed_max_kn"] <= CFG["presence_slow_kn"])]  # fmt: skip
+    ev = slow.groupby(["cell_id", "date"], as_index=False)["hours"].sum()
+    ev = _outside_exclusion_and_calm(ev[ev["hours"] > 0], cells, era5)
+    ev = ev.merge(cells[["cell_id", "x_m", "y_m"]], on="cell_id")
+    ev["time_utc"] = pd.to_datetime(ev["date"]).dt.tz_localize("UTC") + pd.Timedelta(hours=CFG["slowdown_hour_utc"])
+    ev["event_id"] = "slowdown-" + ev["cell_id"].astype(str) + "-" + pd.to_datetime(ev["date"]).dt.strftime("%Y%m%d")
+    return _events(ev.assign(duration_min=ev["hours"] * 60, ship_key=None))
+
+
+def _ship_slowdowns(t: pd.DataFrame) -> list[dict]:
+    """Per-ship rule on one ship's pings (sorted): cruise >= cruise_kn in the previous hour, then
+    a rolling median < slow_kn for >= slow_min, with enough pings and no gap > ais_window_min."""
+    gap = pd.Timedelta(minutes=CFG["ais_window_min"])
+    med = t.rolling(f"{CFG['rolling_median_min']}min", on="time_utc")["speed_ms"].median().to_numpy()
+    slow = med < CFG["slow_kn"] * KN_TO_MS
+    seg = np.cumsum(~slow | (t["time_utc"].diff() > gap).to_numpy())  # new id at every fast ping or long gap
+    out = []
+    for s_id in np.unique(seg[slow]):
+        g = t[(seg == s_id) & slow]
+        start, end = g["time_utc"].iloc[0], g["time_utc"].iloc[-1]
+        prev = t[(t["time_utc"] >= start - pd.Timedelta(hours=1)) & (t["time_utc"] < start)]
+        if (
+            len(g) >= CFG["min_pings_slow"]
+            and end - start >= pd.Timedelta(minutes=CFG["slow_min"])
+            and len(prev) >= CFG["min_pings_cruise_hour"]
+            and prev["speed_ms"].median() >= CFG["cruise_kn"] * KN_TO_MS
+        ):
+            out.append({"time_utc": start, "x_m": g["x_m"].median(), "y_m": g["y_m"].median(),
+                        "duration_min": (end - start).total_seconds() / 60})  # fmt: skip
+    return out
+
+
+def slowdowns_from_tracks(ais: pd.DataFrame, *, cells: pd.DataFrame, era5: pd.DataFrame) -> pd.DataFrame:
+    """Per-ship slowdowns, only if a track source turns up. Never interpolates a slowdown into existence.
+
+    TODO(P2): assumed ais columns: ship_id, time_utc, x_m, y_m, sog_kn, ship_type. Raw ids are
+    hashed to ship_key here and never leave this function.
+    """
+    types = np.zeros(len(ais), bool)
+    for lo, hi in CFG["ship_types"]:
+        types |= ais["ship_type"].between(lo, hi).to_numpy()
+    a = ais[types].assign(speed_ms=ais["sog_kn"] * KN_TO_MS).sort_values(["ship_id", "time_utc"])
+    rows = [
+        r | {"ship_key": ship_key(sid)} for sid, t in a.groupby("ship_id") for r in _ship_slowdowns(t.reset_index())
+    ]
+    ev = pd.DataFrame(rows, columns=["time_utc", "x_m", "y_m", "duration_min", "ship_key"])
+    ev["cell_id"] = cell_id(ev["x_m"], ev["y_m"]) if len(ev) else []
+    ev["date"] = ev["time_utc"].dt.strftime("%Y-%m-%d") if len(ev) else []
+    ev = _outside_exclusion_and_calm(ev, cells, era5)
+    ev["event_id"] = [
+        "slowdown-" + k[:12] + "-" + t.strftime("%Y%m%dT%H%M")
+        for k, t in zip(ev["ship_key"], ev["time_utc"], strict=True)
+    ]
+    return _events(ev)
 
 
 def ship_key(ship_id) -> str:  # stub, issue #10
