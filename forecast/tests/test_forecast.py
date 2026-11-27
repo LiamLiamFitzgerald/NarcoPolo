@@ -352,3 +352,26 @@ def test_p1_simulator_runs_through_both_p5_stages(tmp_path, monkeypatch):
     forecast_stage(T, p5, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00")
     live = read_stage("forecast/expected").query("fold == 0")
     assert set(live.event_type) == set(TYPES) and (live.mu >= 0).all()
+
+
+def test_unknown_coarse_covariate_does_not_inflate_its_childrens_mu():
+    from core.grid import parent
+
+    f2, f10, X2, X10, cells = _setup("slowdown")
+    hole = "10000_2_2"
+    X10 = X10.assign(log_dist_coast=X10.log_dist_coast.where(X10.cell_id != hole))
+    mu, _ = _glm(f2, f10, X2, X10)
+    test = SPLIT.test(f2)
+    kids = (test.cell_id.map(parent) == hole).to_numpy()
+    rate = fake_sim.planted_rate(cells[cells.level == 2000].set_index("cell_id"))
+    ratio = mu[kids].sum() / (test.cell_id[kids].map(rate) * test.exposure[kids]).sum()
+    assert 0.5 < ratio < 2, ratio  # before the fix, M = 0 for that cell, so theta blew up
+
+
+def test_backtest_leaves_out_a_fold_with_no_observed_rows():
+    f2, f10, *_ = _setup("dark_small")
+    fs = folds(f2.date.max().date(), 3)
+    f2 = f2.copy()
+    f2.loc[fs[0].test(f2).index, ["count", "exposure"]] = 0.0  # no calm pass in fold 1's week
+    table = backtest(f2, fs, lambda s: _ewma(f2, f10, s))
+    assert list(table.fold) == [2, 3]

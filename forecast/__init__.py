@@ -158,7 +158,8 @@ def glm_mu(
 ) -> tuple[pd.Series, float]:
     """Fit on 10 km, shrink per 10 km cell, predict the 2 km target rows. Returns (mu, phi)."""
     beta, phi = fit_glm(split, train10, X10)
-    seen = _with_x(train10[train10["exposure"] > 0], X10)
+    # same rows as the fit: a row with an unknown covariate has no M, so its O must not count either
+    seen = _with_x(train10[train10["exposure"] > 0], X10).dropna(subset=list(beta.index))
     seen = seen.assign(m=seen["exposure"] * np.exp(_xb(beta, seen)))
     totals = seen.groupby("cell_id")[["count", "m"]].sum()
     theta = empirical_bayes(totals["count"], totals["m"])
@@ -281,12 +282,15 @@ def backtest(
     """Walk-forward skill per fold: 1 - D_model / D_flat on observed test rows (E > 0).
 
     model(split) returns mu for split.test(frame2). Flat = each cell's training-average rate x E.
+    A fold with no observed test rows (no calm pass that week) has no skill and is left out.
     """
     out = []
     for k, split in enumerate(folds, start=1):
         test = split.test(frame2)
         mu = model(split)
         keep = test["exposure"] > 0
+        if not keep.any():
+            continue
         train = split.train(frame2)
         sums = train.groupby("cell_id")[["count", "exposure"]].sum()
         region = sums["count"].sum() / sums["exposure"].sum()
