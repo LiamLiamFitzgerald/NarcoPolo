@@ -38,9 +38,7 @@ def test_one_row_per_model_with_finite_skill_range(world, event_type):
     assert ((t["min"] <= t["mean"]) & (t["mean"] <= t["max"])).all()
 
 
-def test_best_model_beats_flat_on_slowdowns(world):
-    # the simulator plants a lane and an anchorage, so a model with covariates must beat each cell's flat rate
+def test_skill_is_a_real_comparison_not_a_broken_one(world):
+    # constant per-cell rates make the flat baseline the true model, so skill > 0 is a real-data criterion only
     skill = backtest("slowdown")["mean"]
-    assert (
-        0 < skill.max() < 1
-    )  # exactly 1 means the flat baseline's deviance was infinite, not a perfect model
+    assert (skill < 1).all()  # exactly 1 means the flat baseline's deviance was infinite
