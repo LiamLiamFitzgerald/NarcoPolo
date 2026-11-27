@@ -2,22 +2,45 @@
 
 import numpy as np
 import pandas as pd
+from scipy import ndimage, stats
+
+from detect._standin import CFG
 
 
-def estimate_enl(img, patch) -> float:  # stub, issue #3
-    return 4.4
+def estimate_enl(img: np.ndarray, patch: tuple[slice, slice]) -> float:
+    """Equivalent number of looks, mean^2 / variance, on a patch of open calm sea."""
+    v = img[patch]
+    v = v[np.isfinite(v)]
+    return float(v.mean() ** 2 / v.var())
 
 
-def background(img, outer=41, guard=11):  # stub, issue #3
-    return np.full_like(img, np.nan)
+def _box_sum(a: np.ndarray, size: int) -> np.ndarray:
+    return ndimage.uniform_filter(a, size=size, mode="constant", cval=0.0) * size**2
 
 
-def alpha(L, p_fa=1e-7) -> float:  # stub, issue #3
-    return np.inf
+def background(img: np.ndarray, outer: int = CFG["cfar_outer"], guard: int = CFG["cfar_guard"]) -> np.ndarray:
+    """Mean of the ring between the outer window and the guard window, skipping NaN pixels.
+
+    Linear power only. Masked (NaN) pixels count neither in the sum nor in the pixel count,
+    so the coast does not drag the background down. Pixels with an empty ring get NaN.
+    """
+    valid = np.isfinite(img)
+    vals = np.where(valid, img, 0.0)
+    s = _box_sum(vals, outer) - _box_sum(vals, guard)
+    n = _box_sum(valid.astype(np.float64), outer) - _box_sum(valid.astype(np.float64), guard)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(n > 0.5, s / n, np.nan)
 
 
-def flag(img, mu_b, alpha):  # stub, issue #3
-    return np.zeros(img.shape, bool)
+def alpha(L: float, p_fa: float = CFG["p_fa"]) -> float:
+    """Threshold multiplier from the gamma speckle tail: P(I / mean > alpha) = p_fa."""
+    return float(stats.gamma.isf(p_fa, a=L, scale=1 / L))
+
+
+def flag(img: np.ndarray, mu_b: np.ndarray, alpha: float) -> np.ndarray:
+    """Pixels brighter than alpha times their background. NaN pixels are never flagged."""
+    with np.errstate(invalid="ignore"):
+        return img > alpha * mu_b
 
 
 def clusters(mask, img, mu_b) -> pd.DataFrame:  # stub, issue #4
