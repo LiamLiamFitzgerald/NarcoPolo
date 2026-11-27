@@ -173,7 +173,9 @@ def run_cells() -> None:
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
     T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
-    m = m[(m["date"] >= start) & (m["date"] <= T)].reset_index(drop=True)
+    m = m[pd.to_datetime(m["date"]).between(pd.Timestamp(start), pd.Timestamp(T))].reset_index(
+        drop=True
+    )
     layers = io.read_stage("reference/cells")[["cell_id", "inshore_frac", "lane", "dist_coast_m"]]
     m = m.merge(layers, on="cell_id", how="left")
     # TODO(P6): post_storm is not in coverage/exposure yet (P3 contract #85); unknown until it is.
