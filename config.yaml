@@ -1,0 +1,28 @@
+# Every threshold and global setting lives here; no module hardcodes them (docs/shared.md, Global settings).
+seed: 20261127            # global; each use adds its own fixed number written next to it
+
+region_bbox: {lon_min: -10.6, lon_max: -7.9, lat_min: 51.1, lat_max: 51.95}  # TODO(P3): trim to where inshore maps exist
+# Grid origin: bbox min UTM x and y rounded down to a multiple of 10 000 m (2 km cells nest in 10 km cells)
+x0: 380000
+y0: 5660000
+
+split:
+  embargo_days: 7
+  test_days: 7
+  n_folds_slowdown: 12
+  n_folds_small: 6
+
+sim:                      # docs/specs/P1.md, "Simulator defaults"
+  days: 120
+  beta0: -4
+  beta1_inshore: 2
+  beta2_lane: 1
+  gamma: 0.3
+  det_a: -4
+  det_b: 0.4              # per metre of length
+  det_c: 0.5              # per m/s of wind
+  small_boat_length_m: [6, 15]
+  false_alarm_per_km2_pass: 0.002
+  drop_interval_days: 10
+  pickup_prob: 0.8
+  pickup_delay_days: [0.2, 4]
