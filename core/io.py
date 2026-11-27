@@ -28,6 +28,11 @@ def stage_path(name: str) -> Path:
     return root / ("reference/layers.gpkg" if name in _GPKG else f"{name}.parquet")
 
 
+def truth_path() -> Path:
+    """sim/truth.parquet under the data root; only validate reads it."""
+    return stage_path("aggregate/observed").parent.parent / "sim" / "truth.parquet"
+
+
 def _plain(x: Any) -> Any:
     if isinstance(x, Mapping):
         return {k: _plain(v) for k, v in x.items()}

@@ -485,7 +485,19 @@ def simulate(config: Config, seed: int) -> None:
     # forecast/expected: the planted normal rates, Poisson 90% range (phi = 1)
     f = obs.copy()
     ci_ = f["cell_id"].map(dict(zip(cell_ids, range(n), strict=True))).to_numpy()
-    rate = np.where(f["event_type"] == "dark_small", lam[f["day"].to_numpy(), ci_], ship_rate[ci_])
+    # expected soft count of a dark small boat per unit exposure: true rate x P(detected) x mean p_boat (0.75), plus false alarms (p_boat 0.15)
+    pdet_day = np.array(
+        [
+            _p_det(config, np.linspace(*s["small_boat_length_m"], 50), w).mean()
+            for w in weather["wind_ms"]
+        ]
+    )
+    small_rate = (
+        lam * (0.75 * pdet_day)[:, None] + s["false_alarm_per_km2_pass"] * (FINE / 1000) ** 2 * 0.15
+    )
+    rate = np.where(
+        f["event_type"] == "dark_small", small_rate[f["day"].to_numpy(), ci_], ship_rate[ci_]
+    )
     mu = f["exposure"].to_numpy() * rate
     expected = pd.DataFrame(
         {
@@ -599,6 +611,6 @@ def simulate(config: Config, seed: int) -> None:
         ],
         ignore_index=True,
     )
-    out = io.stage_path("aggregate/observed").parent.parent / "sim" / "truth.parquet"
+    out = io.truth_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.to_parquet(out, index=False)
