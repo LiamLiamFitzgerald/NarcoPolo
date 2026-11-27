@@ -12,6 +12,11 @@ split:
   n_folds_slowdown: 12
   n_folds_small: 6
 
+# P5 forecast (docs/specs/P5.md, Parameters; ewma_min_se from the EWMA step, issue #69)
+ewma_delta: 0.97    # per day, half-life about 23 days
+ewma_min_se: 3      # fine cell uses its 10 km parent's rate until S_E reaches this
+interval: 0.9       # central interval level for lo90 / hi90
+
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
   beta0: -4
@@ -47,6 +52,6 @@ reads:
   detect/detections: [x0, y0, region_bbox]
   match/events: [x0, y0, region_bbox]
   aggregate/observed: [x0, y0, region_bbox]
-  forecast/expected: [x0, y0, region_bbox, split]
+  forecast/expected: [x0, y0, region_bbox, split, ewma_delta, ewma_min_se, interval]
   fuse/cells: [x0, y0, region_bbox]
   fuse/sites: [x0, y0, region_bbox]

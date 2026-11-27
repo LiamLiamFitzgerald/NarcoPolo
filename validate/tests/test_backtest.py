@@ -1,5 +1,6 @@
 import shutil
 
+import numpy as np
 import pytest
 
 from core import io
@@ -20,10 +21,6 @@ def world(tmp_path_factory):
     mp.setenv("NARCO_RAW", str(tmp / "raw"))
     cfg = tmp / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
-    if (
-        "ewma_delta" not in cfg.read_text()
-    ):  # P5's keys (docs/specs/P5.md Parameters) until config.yaml has them
-        cfg.write_text(cfg.read_text() + "\newma_delta: 0.97\newma_min_se: 3\ninterval: 0.9\n")
     mp.setattr(io, "CONFIG_PATH", cfg)
     simulate(load(cfg)[0], 20261127)
     yield
@@ -35,9 +32,15 @@ def test_one_row_per_model_with_finite_skill_range(world, event_type):
     t = backtest(event_type)
     assert list(t.columns) == COLUMNS and set(t["model"]) == {"ewma", "glm"}
     assert (t["event_type"] == event_type).all()
+    assert np.isfinite(
+        t[["mean", "min", "max"]].to_numpy()
+    ).all()  # infinite deviance (zero forecasts, #58) fails here
     assert ((t["min"] <= t["mean"]) & (t["mean"] <= t["max"])).all()
 
 
 def test_best_model_beats_flat_on_slowdowns(world):
     # the simulator plants a lane and an anchorage, so a model with covariates must beat each cell's flat rate
-    assert backtest("slowdown")["mean"].max() > 0
+    skill = backtest("slowdown")["mean"]
+    assert (
+        0 < skill.max() < 1
+    )  # exactly 1 means the flat baseline's deviance was infinite, not a perfect model
