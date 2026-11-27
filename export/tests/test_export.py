@@ -9,6 +9,7 @@ from shapely.geometry import Polygon
 from core import io
 from core.config import load
 from core.crs import to_utm
+from core.schemas import check_json
 from export import (
     _legends,
     _provenance,
@@ -35,6 +36,19 @@ def test_data_label_comes_from_provenance():
     for bad in ([], ["demo"]):
         with pytest.raises(ValueError):
             data_label(bad)
+
+
+def test_scan_identities_ignores_hex_hashes_that_end_in_nine_digits():
+    # a config hash is 64 hex characters; about 1 in 70 end in 9 digits, which is not an MMSI
+    h = "3fa9c1d0e7b24a5f8c6d1e0b9a7f3c2d4e5f60718293a4b5c6d7e8f9" + "a" + "123456789"
+    scan_identities({"meta": {"config_hash": h}, "k": "x" + h})
+    for bad in (
+        "id 123456789",
+        "123456789",
+        "mmsi=123456789",
+    ):  # a real stand-alone number still fails
+        with pytest.raises(ValueError):
+            scan_identities({"v": bad})
 
 
 def test_scan_identities_flags_ids_but_not_iso_times_or_decimals():
@@ -128,8 +142,7 @@ def world(tmp_path_factory):
                  stop("base", "2026-11-27T10:00:00Z", s.x_m - 9000, s.y_m)],
         "aircraft": [],
     }  # fmt: skip
-    (root / "data" / "patrol").mkdir(parents=True)
-    (root / "data" / "patrol" / "plan.json").write_text(json.dumps(plan))
+    io.write_json_stage("patrol/plan", plan, "simulated")
     (root / "reports").mkdir()
     (root / "reports" / "validation.json").write_text(json.dumps({"brier": 0.1, "recall": []}))
     yield root, build_snapshot()
@@ -146,7 +159,6 @@ def test_snapshot_has_the_spec_keys_and_a_data_driven_label(world):
         "meta",
         "basemap",
         "cells",
-        "legends",
         "sites",
         "piers",
         "plan",
@@ -164,6 +176,9 @@ def test_snapshot_is_written_to_the_data_root_and_is_small(world):
     assert json.loads(path.read_text()) == json.loads(json.dumps(snap))  # tuples become lists
     assert path.stat().st_size < 5_000_000
     scan_identities(snap)
+    check_json("export/snapshot", json.loads(path.read_text()))  # the contract check
+    assert io.read_json_stage("export/snapshot") == json.loads(path.read_text())  # and the stamp
+    check_json("patrol/plan", io.read_json_stage("patrol/plan"))
 
 
 def test_snapshot_cells_are_per_week_and_unobserved_cells_are_not_zero(world):
@@ -194,9 +209,8 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
 def test_snapshot_sites_match_the_stage_file(world):
     _, snap = world
     sites = io.read_stage("fuse/sites")
-    assert [s["id"] for s in snap["sites"]] == sorted(
-        sites["site_id"], key=lambda i: -float(sites.set_index("site_id").loc[i, "S"])
-    )
+    score = dict(zip(sites["site_id"], sites["S"], strict=True))
+    assert [s["id"] for s in snap["sites"]] == sorted(score, key=lambda i: -score[i])
     assert all(len(s["top_piers"]) <= 3 and isinstance(s["reasons"], list) for s in snap["sites"])
     assert np.isfinite([s["S"] for s in snap["sites"]]).all()
     assert datetime.fromisoformat(snap["meta"]["generated_utc"])
@@ -233,5 +247,5 @@ def test_snapshot_carries_legends_and_the_overlay_layers(world):
     assert set(snap["cells"]["layers"]["lane"]) == set(fine.loc[fine["lane"], "cell_id"])
     assert set(snap["cells"]["layers"]["exclusion"]) == set(fine.loc[fine["exclusion"], "cell_id"])
     assert set(snap["cells"]["layers"]["inshore"]) <= geom
-    breaks = snap["legends"]["normal"]["breaks"]
+    breaks = snap["cells"]["legends"]["normal"]["breaks"]
     assert breaks == sorted(set(breaks)) and len(breaks) >= 2

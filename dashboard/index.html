@@ -127,7 +127,7 @@ function hatchUnobserved() {
 }
 
 function colour(name, v) {
-  const lg = snap.legends[name];
+  const lg = snap.cells.legends[name];
   if (MAPS[name].div) {
     const t = Math.max(-1, Math.min(1, v / lg.clip)), a = Math.abs(t);
     return `hsl(${t < 0 ? 215 : 8} ${Math.round(65 * a)}% ${Math.round(86 - 38 * a)}%)`; // grey at 0
@@ -139,7 +139,7 @@ function colour(name, v) {
 }
 
 function drawLegend(name, week) {
-  const lg = snap.legends[name], box = document.getElementById("legend");
+  const lg = snap.cells.legends[name], box = document.getElementById("legend");
   const row = document.createElement("div");
   row.className = "row";
   const add = (cls, bg, label) => {
@@ -163,7 +163,7 @@ function drawHeatmap(name, week) {
   hatchUnobserved();
   const g = group("heat"), cells = snap.cells.weeks[week];
   for (const c of cells) {
-    const v = c[name], hatched = v === null || (name === "exposure" && !c.observed) || !snap.legends[name].breaks.length;
+    const v = c[name], hatched = v === null || (name === "exposure" && !c.observed) || !snap.cells.legends[name].breaks.length;
     el("rect", { ...cellRect(c.cell_id), fill: hatched ? "url(#hatch)" : colour(name, v), "fill-opacity": 0.9 }, g,
       hatched ? "not observed" : `${MAPS[name].title}: ${Number(v).toFixed(3)}`);
   }
@@ -240,7 +240,7 @@ function drawPlan() {
     h.append(Object.assign(document.createElement("strong"), { textContent: names[asset] ?? asset }));
     for (const s of stops) {
       const li = document.createElement("li");
-      li.textContent = `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC: ` + (s.id === "base" ? "base" : `${s.id}, ${s.dwell_h} h on station`) +
+      li.textContent = `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC: ` + (s.id === "base" ? "base" + (s.stand_in ? " (simulated stand-in: base port or start time not set yet)" : "") : `${s.id}, ${s.dwell_h} h on station`) +
         (s.exploration ? " (exploration visit)" : "") + (s.not_significant ? " (not significant)" : "");
       ul.appendChild(li);
     }
