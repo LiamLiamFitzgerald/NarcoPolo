@@ -10,7 +10,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | aggregate.run() and forecast.run() on core.io and snapshot.json; observed, EWMA, GLM + EB, NB intervals, fold 0 + backtest rows (PR #66) | waits for P3 cells/coverage and P4 events | #90 (sim small-boat events on rough passes); #58 (lane bias, zero rates); #69 (P5 config keys, testpaths); #74 |
 | P6 detectors, fuse | stubs: `detectors.run()` and `fuse.run()` write schema-valid placeholder fuse/cells and fuse/sites (#24) | — | P6 tests not in pytest testpaths (P1) |
-| P7 patrol, export, dashboard | patrol, export and dashboard run on the simulator end to end (PRs 81, 97, 99 and the dashboard PR) | — | `obs_vs_exp`, pier score and exploration bootstrap wait on contract issues 87, 88, 98; sea raster, config keys and base port on issue 89 |
+| P7 patrol, export, dashboard | merged (PRs 81, 97, 99, 102): patrol, export and dashboard run on the simulator; plan and snapshot pass `core.schemas.check_json`; dashboard shows agreement dots on cells | — | `obs_vs_exp`, pier score, exploration bootstrap: contract issues 87, 88, 98; coastline: 105; base port and start time stay simulated stand-ins until config has them (103); sea raster, config keys: 89 |
 
 ## Checkpoints
 

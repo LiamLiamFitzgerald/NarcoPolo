@@ -99,6 +99,7 @@ def test_heatmap_values_recover_a_hand_computed_answer():
             ],
             "event_type": ["slowdown", "dark_small", "dark_small", "slowdown"],
             "U": [0.4, 0.9, 0.99, 0.7],
+            "agreement": [1, 3, 4, 2],
         }
     )
     got = {c["cell_id"]: c for c in heatmap_values(exp, fz, ex, WEEK)}
@@ -107,6 +108,8 @@ def test_heatmap_values_recover_a_hand_computed_answer():
     assert a["observed"] and a["exposure"] == 1.25
     assert a["normal"] == pytest.approx(0.1833, abs=1e-4)
     assert a["unusual"] == 0.9  # weekly max over both event types; last week's 0.99 is ignored
+    assert a["agreement"] == 3  # the badge of the row that gave the weekly max, not last week's 4
+    assert got["D"]["agreement"] == 2 and got["B"]["agreement"] is None
     for c in ("B", "C", "D"):  # unobserved: never a zero in the value fields (principle 4)
         assert not got[c]["observed"] and got[c]["normal"] is None and got[c]["exposure"] == 0.0
     assert got["B"]["unusual"] is None and got["D"]["unusual"] == 0.7
