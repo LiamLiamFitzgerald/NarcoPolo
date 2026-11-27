@@ -19,6 +19,10 @@ from shapely.geometry import Point, box
 from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
+from sim.raw import write_raw
+from sim.scenes import write_scenes
+from sim.static import write_static
+from sim.world import SimWorld
 
 NX, NY = 75, 13  # 150 km along the coast x 26 km out: 975 fine cells; iy = NY - 1 touches the shore
 SHORE_FRAC = 0.6  # the shore row is 60% sea
@@ -590,6 +594,11 @@ def simulate(config: Config, seed: int) -> None:
     io.write_snapshot(
         {"latest": {"radar": last, "gfw_presence": last, "gfw_sar": last, "era5": last}}
     )
+
+    world = SimWorld(config, seed, start, days, fine, weather, passes, boats, ships, detections)
+    write_scenes(world)
+    write_raw(world)
+    write_static(world)
 
     # truth: every true boat, every planted drop and pick-up. Only validate reads it.
     tb = boats.assign(
