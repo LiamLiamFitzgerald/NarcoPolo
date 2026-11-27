@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 
 from core import io
+from validate.backtest import backtest
+from validate.injection import injection_test
+from validate.null import null_test
 
 LENGTH_BINS = [("<8", 0, 8), ("8-12", 8, 12), ("12-15", 12, 15), ("15-24", 15, 24)]
 KEYS = ("recall", "injection", "skill", "calibration", "brier", "null")
@@ -158,28 +161,6 @@ def simulator_recovery() -> dict[str, Any]:
     }
 
 
-# These three call other modules' public functions; until those exist they return empty results.
-def injection_test(
-    pass_ids: list[str], brightness_db: list[float], n_per_pass: int, seed: int
-) -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=["brightness_db", "recall", "false_alarms_per_km2"]
-    )  # TODO(P1): detect.run_pass
-
-
-def null_test(runs: int = 200, seed: int = 0) -> dict[str, Any]:
-    return {
-        "runs": 0,
-        "share_with_any_flag": None,
-    }  # TODO(P1): fuse.run on circularly shifted events
-
-
-def backtest(event_type: str) -> pd.DataFrame:
-    return pd.DataFrame(
-        columns=["event_type", "model", "mean", "min", "max"]
-    )  # TODO(P1): forecast.backtest
-
-
 def _clean(x: Any) -> Any:
     if isinstance(x, pd.DataFrame):
         return _clean(x.to_dict("records"))
@@ -244,5 +225,6 @@ def run() -> Path:
             "recovery": simulator_recovery(),
             "injection": injection_test([], [], 0, 0),
             "null": null_test(),
+            "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
         }
     )

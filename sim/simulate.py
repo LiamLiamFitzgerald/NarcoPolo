@@ -19,6 +19,10 @@ from shapely.geometry import Point, box
 from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
+from sim.raw import write_raw
+from sim.scenes import write_scenes
+from sim.static import write_static
+from sim.world import SimWorld
 
 NX, NY = 75, 13  # 150 km along the coast x 26 km out: 975 fine cells; iy = NY - 1 touches the shore
 SHORE_FRAC = 0.6  # the shore row is 60% sea
@@ -318,7 +322,9 @@ def simulate(config: Config, seed: int) -> None:
         & (bxc <= passes["b"].to_numpy()[bpass])
     )
     wind_b = weather["wind_ms"].to_numpy()[bday]
-    detected = inside & (
+    # principle 5: small boats are looked for on calm passes only, so a rough pass detects nothing (#90)
+    calm_b = inside & ~weather["rough"].to_numpy()[bday]
+    detected = calm_b & (
         rng.random(len(boats)) < _p_det(config, boats["length_m"].to_numpy(), wind_b)
     )
     boats["detected"], boats["pass"] = detected, np.where(inside, bpass, -1)
@@ -379,6 +385,9 @@ def simulate(config: Config, seed: int) -> None:
         rows,
         columns=["k", "x_m", "y_m", "vv", "pol_agree", "n_px", "size_class", "ghost", "p_boat"],
     )
+    det = det[~pw["rough"].to_numpy()[det["k"].to_numpy(int)]].reset_index(
+        drop=True
+    )  # false alarms and ghosts too
     detections = pd.DataFrame(
         {
             "det_id": [f"det_{i:05d}" for i in range(len(det))],
@@ -590,6 +599,11 @@ def simulate(config: Config, seed: int) -> None:
     io.write_snapshot(
         {"latest": {"radar": last, "gfw_presence": last, "gfw_sar": last, "era5": last}}
     )
+
+    world = SimWorld(config, seed, start, days, fine, weather, passes, boats, ships, detections)
+    write_scenes(world)
+    write_static(world)
+    write_raw(world)  # last: the manifest lists every file the others wrote
 
     # truth: every true boat, every planted drop and pick-up. Only validate reads it.
     tb = boats.assign(

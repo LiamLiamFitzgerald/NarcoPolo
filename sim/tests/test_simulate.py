@@ -92,3 +92,13 @@ def test_no_raw_ship_identifier_in_any_file(world):
     ev = io.read_stage("match/events")
     assert ev["ship_key"].dropna().str.fullmatch("[0-9a-f]{16}").all()
     assert not {"mmsi", "imo", "name", "call_sign"} & set(ev.columns)
+
+
+def test_no_dark_small_event_on_a_rough_pass(world):  # #90: rough passes look for nobody
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    ex = io.read_stage("coverage/exposure")
+    ev = io.read_stage("match/events")
+    rough = set(ex.loc[~ex["calm"], "time_utc"])
+    assert rough and not ev[ev["event_type"] == "dark_small"]["time_utc"].isin(rough).any()
+    assert not io.read_stage("detect/detections")["time_utc"].isin(rough).any()
