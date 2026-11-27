@@ -43,20 +43,25 @@ def ewma(
 ) -> pd.Series:
     """Exposure-aware EWMA frozen at the cutoff (A7): mu = r_hat x E for each target row.
 
-    Until a fine cell's S_E reaches min_se, its 10 km parent's rate is used (not divided by 25).
+    Rates are shrunk towards the level above with min_se units of prior exposure (P5 rule for #58,
+    DECISIONS.md): r_cell = (S_C + min_se x r_parent) / (S_E + min_se), and the 10 km parent the
+    same way towards the region. A thinly seen cell sits near its parent, as the spec intends,
+    and a cell with no events yet gets a small rate instead of 0 (which made deviance infinite).
     """
     fine = _decayed_sums(split, train2, delta)
     coarse = _decayed_sums(split, train10, delta)
-    coarse_rate = coarse["s_c"] / coarse["s_e"]
-    # shortcut: a parent never imaged in training falls back to the region-wide rate; ask P1 if
-    # the spec should say something else
     region_rate = coarse["s_c"].sum() / coarse["s_e"].sum()
+    coarse_rate = _shrink(coarse["s_c"], coarse["s_e"], region_rate, min_se)
 
-    se = target2["cell_id"].map(fine["s_e"]).fillna(0.0)
-    own = target2["cell_id"].map(fine["s_c"] / fine["s_e"])
-    from_parent = target2["cell_id"].map(parent).map(coarse_rate).fillna(region_rate)
-    rate = own.where(se >= min_se, from_parent)
-    return rate * target2["exposure"]
+    up = target2["cell_id"].map(parent).map(coarse_rate).fillna(region_rate)
+    s_c = target2["cell_id"].map(fine["s_c"]).fillna(0.0)
+    s_e = target2["cell_id"].map(fine["s_e"]).fillna(0.0)
+    return _shrink(s_c, s_e, up, min_se) * target2["exposure"]
+
+
+def _shrink(s_c: pd.Series, s_e: pd.Series, prior_rate: Any, k: float) -> pd.Series:
+    """Rate with k units of prior exposure at prior_rate (a gamma-Poisson posterior mean)."""
+    return (s_c + k * prior_rate) / (s_e + k)
 
 
 def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str) -> pd.DataFrame:
@@ -278,10 +283,13 @@ def backtest(
     frame2: pd.DataFrame,
     folds: list[Split],
     model: Callable[[Split], pd.Series],
+    prior_exposure: float,
 ) -> pd.DataFrame:
     """Walk-forward skill per fold: 1 - D_model / D_flat on observed test rows (E > 0).
 
-    model(split) returns mu for split.test(frame2). Flat = each cell's training-average rate x E.
+    model(split) returns mu for split.test(frame2). Flat = each cell's training-average rate x E,
+    shrunk towards the region rate with the same prior exposure as the EWMA, so neither side
+    gets an infinite deviance from a rate of exactly 0 (#58).
     A fold with no observed test rows (no calm pass that week) has no skill and is left out.
     """
     out = []
@@ -294,7 +302,7 @@ def backtest(
         train = split.train(frame2)
         sums = train.groupby("cell_id")[["count", "exposure"]].sum()
         region = sums["count"].sum() / sums["exposure"].sum()
-        cell_rate = (sums["count"] / sums["exposure"]).replace([np.inf], np.nan)
+        cell_rate = _shrink(sums["count"], sums["exposure"], region, prior_exposure)
         flat = test["cell_id"].map(cell_rate).fillna(region) * test["exposure"]
         d_model = poisson_deviance(test["count"][keep], mu[keep])
         d_flat = poisson_deviance(test["count"][keep], flat[keep])
@@ -342,6 +350,7 @@ def forecast_all(
     }
     params = (_cfg(cfg, "ewma_delta"), _cfg(cfg, "ewma_min_se"), _cfg(cfg, "interval"))
     expected, report = [], []
+    observed = observed.assign(date=pd.to_datetime(observed["date"]))  # core may give plain dates
     for event_type, k in n_folds.items():
         f = observed[observed["event_type"] == event_type]
         f2, f10 = f[f["level"] == 2000], f[f["level"] == 10000]
@@ -353,7 +362,7 @@ def forecast_all(
 
         fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
         skills = {
-            name: backtest(f2, fs, _fold_model(name, frames, fs, params, fold_rows))
+            name: backtest(f2, fs, _fold_model(name, frames, fs, params, fold_rows), params[1])
             for name in ("ewma", "glm")
         }
         chosen = (baseline or {}).get(event_type) or _choose_or_default(

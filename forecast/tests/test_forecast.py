@@ -166,19 +166,14 @@ def test_poisson_deviance_is_zero_for_a_perfect_forecast_and_handles_soft_zeros(
     assert poisson_deviance(pd.Series([0.0]), pd.Series([0.5])) == pytest.approx(1.0)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="spec gap: cells with no training events get rate 0 (EWMA and flat), so one event "
-    "makes the deviance infinite and skill NaN or a fake 1.0; needs a P1 decision",
-)
 @pytest.mark.parametrize("event_type,k", [("dark_small", 6), ("slowdown", 12)])
 def test_walk_forward_backtest_beats_flat_average(event_type, k):
     f2, f10, X2, X10, _ = _setup(event_type)
     T = f2.date.max()
     fs = folds(T.date(), k)
     skills = {
-        "ewma": backtest(f2, fs, lambda s: _ewma(f2, f10, s)),
-        "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0]),
+        "ewma": backtest(f2, fs, lambda s: _ewma(f2, f10, s), MIN_SE),
+        "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0], MIN_SE),
     }
     for name, table in skills.items():
         print(event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict())
@@ -309,14 +304,15 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
 
 
 def test_undefined_skill_falls_back_to_ewma_and_records_nothing(tmp_path):
-    from forecast import forecast_all
+    from forecast import _choose_or_default
 
-    observed, cells = _all_observed()
     decisions = tmp_path / "D.md"
-    expected, _ = forecast_all(observed, cells, observed.date.max(), CFG, str(decisions), "x")
-    # dark_small skill is NaN on the fake simulator (#58): no comparison was made, nothing recorded
-    assert (expected[expected.event_type == "dark_small"].model == "ewma").all()
-    assert "dark_small" not in (decisions.read_text() if decisions.exists() else "")
+    skills = {
+        "ewma": pd.DataFrame({"fold": [1], "skill": [np.nan]}),
+        "glm": pd.DataFrame({"fold": [1], "skill": [0.2]}),
+    }
+    assert _choose_or_default("dark_small", skills, str(decisions), "x") == "ewma"
+    assert not decisions.exists()
 
 
 @pytest.mark.xfail(
@@ -373,5 +369,14 @@ def test_backtest_leaves_out_a_fold_with_no_observed_rows():
     fs = folds(f2.date.max().date(), 3)
     f2 = f2.copy()
     f2.loc[fs[0].test(f2).index, ["count", "exposure"]] = 0.0  # no calm pass in fold 1's week
-    table = backtest(f2, fs, lambda s: _ewma(f2, f10, s))
+    table = backtest(f2, fs, lambda s: _ewma(f2, f10, s), MIN_SE)
     assert list(table.fold) == [2, 3]
+
+
+def test_a_cell_with_no_events_yet_gets_a_small_rate_not_zero():
+    f2, f10, *_ = _setup("dark_small")
+    f2 = f2.assign(count=f2["count"].where(f2.cell_id != "2000_3_3", 0.0))
+    mu = _ewma(f2, f10)
+    test = SPLIT.test(f2)
+    seen = ((test.cell_id == "2000_3_3") & (test.exposure > 0)).to_numpy()
+    assert (mu[seen] > 0).all()  # before: rate 0, so one later event made the deviance infinite
