@@ -5,6 +5,7 @@ Fits take a Split and the caller's split.train(frame); they raise on any row at 
 cutoff, so look-ahead fails loudly instead of quietly improving the backtest (principle 6).
 """
 
+import gc
 import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -101,27 +102,35 @@ def _xb(beta: pd.Series, rows: pd.DataFrame) -> pd.Series:
 
 
 def _fit_rows(
-    split: Split, train10: pd.DataFrame, X10: pd.DataFrame
+    split: Split, train2: pd.DataFrame, X2: pd.DataFrame
 ) -> tuple[pd.DataFrame, list[str]]:
     """Training rows with E > 0 and known covariates, and the columns that can be fitted."""
-    split.assert_train(train10)
-    rows = _with_x(train10[train10["exposure"] > 0], X10)
-    cols = [c for c in X10.columns if c not in _ID]
+    split.assert_train(train2)
+    rows = _with_x(train2[train2["exposure"] > 0], X2)
+    cols = [c for c in X2.columns if c not in _ID]
     rows = rows.dropna(subset=cols)
     # a column with no variation in training (e.g. no missing inshore anywhere) can't be fitted
     return rows, [c for c in cols if c == "intercept" or rows[c].nunique() > 1]
 
 
-def fit_glm(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.Series, float]:
-    """Quasi-Poisson GLM on 10 km rows with E > 0, offset log E. Returns (beta, phi)."""
-    rows, cols = _fit_rows(split, train10, X10)
-    res = sm.GLM(
-        rows["count"],
-        rows[cols],
-        family=sm.families.Poisson(),
-        offset=np.log(rows["exposure"]),
-    ).fit(scale="X2")
-    return res.params, float(res.scale)
+def fit_glm(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> tuple[pd.Series, float]:
+    """Quasi-Poisson GLM on 2 km rows with E > 0, offset log E (#58). Returns (beta, phi)."""
+    rows, cols = _fit_rows(split, train2, X2)
+    # Each IRLS step leaves ~400 MB of cyclic garbage on ~700k rows; few Python objects are made, so the default
+    # collector never runs mid-fit and memory passed 6 GB. Collect every generation often while fitting only.
+    old = gc.get_threshold()
+    gc.set_threshold(100, 1, 1)
+    try:
+        res = sm.GLM(
+            rows["count"],
+            rows[cols],
+            family=sm.families.Poisson(),
+            offset=np.log(rows["exposure"]),
+        ).fit(scale="X2")
+        return res.params, float(res.scale)
+    finally:
+        gc.set_threshold(*old)
+        gc.collect()
 
 
 def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
@@ -133,12 +142,12 @@ def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
     return (a + O) / (a + M)
 
 
-def nb2_alpha(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> float:
+def nb2_alpha(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> float:
     """NB2 fit on the same rows as fit_glm, as a check: variance = mu + alpha x mu^2.
 
     alpha near 0 agrees with phi near 1; a large alpha alongside phi near 1 means they disagree.
     """
-    rows, cols = _fit_rows(split, train10, X10)
+    rows, cols = _fit_rows(split, train2, X2)
     res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
         disp=0
     )
@@ -156,17 +165,17 @@ def predict_glm(beta: pd.Series, theta: pd.Series, rows2: pd.DataFrame) -> pd.Se
 
 def glm_mu(
     split: Split,
-    train10: pd.DataFrame,
-    X10: pd.DataFrame,
+    train2: pd.DataFrame,
     target2: pd.DataFrame,
     X2: pd.DataFrame,
 ) -> tuple[pd.Series, float]:
-    """Fit on 10 km, shrink per 10 km cell, predict the 2 km target rows. Returns (mu, phi)."""
-    beta, phi = fit_glm(split, train10, X10)
+    """Fit on 2 km, shrink per 10 km cell, predict the 2 km target rows. Returns (mu, phi)."""
+    beta, phi = fit_glm(split, train2, X2)
     # same rows as the fit: a row with an unknown covariate has no M, so its O must not count either
-    seen = _with_x(train10[train10["exposure"] > 0], X10).dropna(subset=list(beta.index))
+    seen = _with_x(train2[train2["exposure"] > 0], X2).dropna(subset=list(beta.index))
     seen = seen.assign(m=seen["exposure"] * np.exp(_xb(beta, seen)))
-    totals = seen.groupby("cell_id")[["count", "m"]].sum()
+    # O and M per 10 km cell, summed over its 2 km children
+    totals = seen.groupby(seen["cell_id"].map(parent))[["count", "m"]].sum()
     theta = empirical_bayes(totals["count"], totals["m"])
     return predict_glm(beta, theta, _with_x(target2, X2)).set_axis(target2.index), phi
 
@@ -210,7 +219,7 @@ def expected_rows(
     model: str,
     split: Split,
     fold: int,
-    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
     delta: float,
     min_se: float,
     level: float,
@@ -218,13 +227,13 @@ def expected_rows(
 ) -> pd.DataFrame:
     """Expected rows for split.test of the 2 km frame, fitted on split.train only.
 
-    frames = (fine, coarse, X2, X10) for one event type. The GLM's dispersion is used for the
+    frames = (fine, coarse, X2) for one event type. The GLM's dispersion is used for the
     EWMA's intervals too: phi describes the data, and the EWMA has no fit of its own to give one.
     glm: this fold's (mu, phi) from glm_mu if already computed, so it isn't fitted twice.
     """
-    f2, f10, X2, X10 = frames
+    f2, f10, X2 = frames
     target = split.test(f2)
-    mu_glm, phi = glm or glm_mu(split, split.train(f10), X10, target, X2)
+    mu_glm, phi = glm or glm_mu(split, split.train(f2), target, X2)
     if model == "ewma":
         mu = ewma(split, split.train(f2), split.train(f10), target, delta, min_se)
     elif model == "glm":
@@ -250,7 +259,7 @@ def evaluation_split(T: pd.Timestamp) -> Split:
 def forecast_window(
     model: str,
     T: pd.Timestamp,
-    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
     delta: float,
     min_se: float,
     level: float,
@@ -330,7 +339,7 @@ def backtest(
 
 def _fold_model(
     name: str,
-    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
     fs: list[Split],
     params: tuple[float, float, float],
     store: dict[tuple[str, int], pd.DataFrame],
@@ -341,8 +350,8 @@ def _fold_model(
     def predict(split: Split) -> pd.Series:
         fold = fs.index(split) + 1
         if fold not in glm_fits:
-            f2, f10, X2, X10 = frames
-            glm_fits[fold] = glm_mu(split, split.train(f10), X10, split.test(f2), X2)
+            f2, _, X2 = frames
+            glm_fits[fold] = glm_mu(split, split.train(f2), split.test(f2), X2)
         rows = expected_rows(name, split, fold, frames, *params, glm=glm_fits[fold])
         store[(name, fold)] = rows
         return rows["mu"].set_axis(split.test(frames[0]).index)
@@ -378,8 +387,7 @@ def forecast_all(
         f2, f10 = f[f["level"] == 2000], f[f["level"] == 10000]
         dates = pd.DatetimeIndex(sorted(f2["date"].unique()))
         X2 = design_matrix(cells[cells["level"] == 2000], dates, event_type)
-        X10 = design_matrix(cells[cells["level"] == 10000], dates, event_type)
-        frames = (f2, f10, X2, X10)
+        frames = (f2, f10, X2)
         fs = folds(T.date(), k)  # core fixes the 7-day embargo and 7-day test window
 
         fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
@@ -397,7 +405,7 @@ def forecast_all(
         expected += [window, *(fold_rows[(chosen, i)] for i in range(1, k + 1))]
 
         prod = evaluation_split(T)
-        alpha = nb2_alpha(prod, prod.train(f10), X10)
+        alpha = nb2_alpha(prod, prod.train(f2), X2)
         for name, table in skills.items():
             report.append(
                 {
