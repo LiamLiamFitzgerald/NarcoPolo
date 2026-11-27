@@ -1,25 +1,103 @@
-"""Patrol plans (P7). TEMPORARY PLACEHOLDERS (issue 25): schema-valid output so the pipeline runs
-end to end. Replace each TODO(P7) with the real step from docs/specs/P7.md in issue 49."""
+"""Patrol plans (P7): a ship route and an aircraft route over the top drop sites, within a time budget.
+Orienteering by greedy insertion and 2-opt (docs/specs/P7.md). Ships always use sea distances."""
 
 import json
+from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
+from typing import Any
 
 import numpy as np
+import pandas as pd
+import pyarrow.parquet as pq
+from scipy.ndimage import distance_transform_edt
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import dijkstra
+
+from core import io
+from core.config import load
+from core.crs import to_utm
+from core.grid import FINE, cell_index
+from core.time import iso_week
 
 KN_MS = 0.514444  # 1 kn in m/s (docs/shared.md, Units)
-# TODO(P7): these belong in config.yaml (P1 owns it): ship_kn, aircraft_kn, budgets, dwells, n_boot.
-SHIP_KN, AIR_KN = 12, 180
+# TODO(P7): these belong in config.yaml (P1 owns it; asked for in issue 89).
+TOP_SITES = 15
+SHIP_KN, AIR_KN = 12, 180  # aircraft_kn: TODO(confirm with the team)
 SHIP_BUDGET_H, SHIP_DWELL_H = 24, 1
 AIR_BUDGET_H, AIR_DWELL_H = 4, 0.2
-# TODO(P7): replace with the real stop times derived from the snapshot date T.
-_T0 = "2026-11-23T06:00:00Z"
-_PLAN = Path("patrol/plan.json")
+N_BOOT = 200
+SEA_RES_M = 250  # the spec's sea_250m.tif resolution
+# TODO(P7): base_port belongs in config.yaml (issue 89). Haulbowline, Cork Harbour: approximate.
+HAULBOWLINE_LONLAT = (-8.32, 51.84)
 
 
-def sea_hours(nodes: list[dict], sea: np.ndarray, kn: float = SHIP_KN) -> np.ndarray:
-    """Hours between nodes by sea. TODO(P7): MCP_Geometric on sea_250m.tif; constant 1 h for now."""
-    n = len(nodes)
-    return np.ones((n, n)) - np.eye(n)
+@dataclass(frozen=True)
+class _Sea:
+    """True = sea. Row 0 is the southern edge; pixel (row, col) covers [x0 + col*res, ...) in metres."""
+
+    mask: np.ndarray
+    x0: float
+    y0: float
+    res: float
+
+
+def _data_root() -> Path:
+    return io.stage_path("aggregate/observed").parent.parent  # NARCO_DATA, default data/
+
+
+def _sea_from_cells(cells: pd.DataFrame) -> _Sea:
+    """Sea grid at 250 m from the 2 km cells of reference/layers.gpkg.
+    shortcut: the spec reads reference/sea_250m.tif (MCP_Geometric); no raster or reader exists yet
+    (issue 89). Switch to the raster when it does."""
+    fine = cells[cells["level"] == FINE]
+    c = fine.geometry.centroid
+    ix, iy = cell_index(c.x, c.y, FINE)
+    ix0, iy0 = ix.min(), iy.min()
+    coarse = np.zeros((iy.max() - iy0 + 1, ix.max() - ix0 + 1), bool)
+    coarse[iy - iy0, ix - ix0] = True
+    k = FINE // SEA_RES_M
+    cfg, _ = load(io.CONFIG_PATH)
+    return _Sea(
+        np.kron(coarse, np.ones((k, k), bool)),
+        cfg["x0"] + ix0 * FINE,
+        cfg["y0"] + iy0 * FINE,
+        float(SEA_RES_M),
+    )
+
+
+def sea_hours(nodes: list[dict], sea: _Sea, kn: float = SHIP_KN) -> np.ndarray:
+    """Hours between nodes (dicts with x_m, y_m) by sea only: the shortest path over sea pixels, 8
+    neighbours, a diagonal step costs sqrt(2) (the MCP_Geometric cost model). Land is impassable, so
+    a headland is gone round, never crossed; unreachable pairs are inf. A node on land (a pier) moves
+    to the nearest sea pixel."""
+    mask = sea.mask
+    ny, nx = mask.shape
+    ids = np.full(mask.shape, -1)
+    ids[mask] = np.arange(mask.sum())
+    src, dst, cost = [], [], []
+    for dy, dx, w in ((0, 1, 1.0), (1, 0, 1.0), (1, 1, 2**0.5), (1, -1, 2**0.5)):
+        a = ids[: ny - dy, max(0, -dx) : nx - max(0, dx)]
+        b = ids[dy:, max(0, dx) : nx - max(0, -dx)]
+        both = (a >= 0) & (b >= 0)
+        src.append(a[both])
+        dst.append(b[both])
+        cost.append(np.full(both.sum(), w * sea.res))
+    n = int(mask.sum())
+    graph = csr_matrix(
+        (np.concatenate(cost), (np.concatenate(src), np.concatenate(dst))), shape=(n, n)
+    )
+
+    _, (near_r, near_c) = distance_transform_edt(~mask, return_indices=True)  # pyright: ignore[reportGeneralTypeIssues]
+    col = np.clip(
+        ((np.array([p["x_m"] for p in nodes]) - sea.x0) // sea.res).astype(int), 0, nx - 1
+    )
+    row = np.clip(
+        ((np.array([p["y_m"] for p in nodes]) - sea.y0) // sea.res).astype(int), 0, ny - 1
+    )
+    at = ids[near_r[row, col], near_c[row, col]]
+    metres = dijkstra(graph, directed=False, indices=at)[:, at]
+    return metres / (kn * KN_MS * 3600)
 
 
 def air_hours(nodes: list[dict], kn: float = AIR_KN) -> np.ndarray:
@@ -29,60 +107,173 @@ def air_hours(nodes: list[dict], kn: float = AIR_KN) -> np.ndarray:
     return d / (kn * KN_MS * 3600)
 
 
-def greedy_route(
-    nodes: list[dict], S: np.ndarray, hours: np.ndarray, budget_h: float, dwell_h: float
+def _total(route: list[int], hours: np.ndarray, dwell_h: float) -> float:
+    return sum(hours[a, b] for a, b in pairwise(route)) + dwell_h * (len(route) - 2)
+
+
+def _greedy(
+    route: list[int], S: np.ndarray, hours: np.ndarray, budget_h: float, dwell_h: float
 ) -> list[int]:
-    """Node indices, base (0) first and last. TODO(P7): insertion by S / extra hours; this adds
-    nodes by S, at the end of the route, while the trip back still fits the budget."""
-    route, total = [0], 0.0
-    for i in sorted(range(1, len(nodes)), key=lambda i: -S[i]):
-        extra = hours[route[-1], i] + dwell_h + hours[i, 0] - hours[route[-1], 0]
-        if total + extra + hours[route[-1], 0] <= budget_h:
-            total += hours[route[-1], i] + dwell_h
-            route.append(i)
-    return [*route, 0]
+    """Add, one at a time, the node with the highest S / extra hours at its cheapest position,
+    while the whole trip (legs and dwells) stays within the budget."""
+    route = list(route)
+    left = set(range(1, len(S))) - set(route)
+    while True:
+        total, best = _total(route, hours, dwell_h), None
+        for i in sorted(left):
+            legs = [hours[a, i] + hours[i, b] - hours[a, b] for a, b in pairwise(route)]
+            pos = int(np.argmin(legs))
+            extra = legs[pos] + dwell_h
+            if not np.isfinite(extra) or total + extra > budget_h:
+                continue  # over budget, or unreachable
+            if best is None or S[i] / extra > best[0]:
+                best = (S[i] / extra, i, pos + 1)
+        if best is None:
+            return route
+        route.insert(best[2], best[1])
+        left.remove(best[1])
+
+
+def greedy_route(
+    nodes: list[Any], S: np.ndarray, hours: np.ndarray, budget_h: float, dwell_h: float
+) -> list[int]:
+    """Node indices, node 0 (the base) first and last. S[0] is unused."""
+    return _greedy([0, 0], S, hours, budget_h, dwell_h)
 
 
 def two_opt(route: list[int], hours: np.ndarray) -> list[int]:
-    """TODO(P7): reverse segments that shorten the route. Returns the route unchanged for now."""
+    """Reverse any segment that shortens the route, until none does. The ends (the base) stay put."""
+    route = list(route)
+    better = True
+    while better:
+        better = False
+        for i in range(1, len(route) - 2):
+            for j in range(i + 1, len(route) - 1):
+                a, b, c, d = route[i - 1], route[i], route[j], route[j + 1]
+                if hours[a, c] + hours[b, d] < hours[a, b] + hours[c, d] - 1e-9:
+                    route[i : j + 1] = route[i : j + 1][::-1]
+                    better = True
     return route
 
 
-def exploration_pick(sites_4_to_15: list[str], n_boot: int = 200, seed: int = 0) -> str:
-    """One site id. TODO(P7): bootstrap each site's L, draw once each, take the highest.
-    Seeded (seed = global seed + ISO week) so the demo plan never changes between runs."""
-    return sites_4_to_15[np.random.default_rng(seed).integers(len(sites_4_to_15))]
+def exploration_pick(sites_4_to_15: list[str], n_boot: int = N_BOOT, seed: int = 0) -> str:
+    """One site id to visit so the system does not only confirm itself. Seeded (seed = global seed + ISO
+    week), so the plan never changes between runs.
+    shortcut: a uniform seeded draw. The spec bootstraps each site's link scores L (n_boot resamples) and
+    takes the highest Thompson draw, but no stage file holds L (contract issue 98)."""
+    return sites_4_to_15[int(np.random.default_rng(seed).integers(len(sites_4_to_15)))]
 
 
-def _stops(ids: list[str], hours: float, dwell_h: float) -> list[dict]:
-    """Placeholder stops: equal legs of `hours`, arrival as an ISO string (A12)."""
-    t0 = np.datetime64(_T0.rstrip("Z"))
-    out = []
-    for k, i in enumerate(ids):
-        at = t0 + np.timedelta64(round(k * (hours + dwell_h) * 3600), "s")
-        out.append({"id": i, "arrival_utc": f"{at}Z", "dwell_h": 0 if i == "base" else dwell_h})
-    return out
+def _greedy_inputs(sites: pd.DataFrame) -> pd.DataFrame:
+    """The top 15 candidates: flagged sites by S, filled with unflagged ones by S when fewer."""
+    ranked = sites.sort_values(["bh_flag", "S"], ascending=[False, False], kind="stable")
+    return ranked.head(TOP_SITES)
 
 
-def _write(asset: str, stops: list[dict], out: Path) -> dict:
-    plan = json.loads(out.read_text()) if out.exists() else {}
+def _plan_asset(
+    sites: pd.DataFrame,
+    base: tuple[float, float],
+    hours_fn,
+    *,
+    budget_h: float,
+    dwell_h: float,
+    start: pd.Timestamp,
+    explore_seed: int | None = None,
+) -> list[dict]:
+    cand = _greedy_inputs(sites).reset_index(drop=True)
+    nodes = [
+        {"x_m": base[0], "y_m": base[1]},
+        *({"x_m": r.x_m, "y_m": r.y_m} for r in cand.itertuples()),
+    ]
+    S = np.array([0.0, *cand["S"]])
+    hours = hours_fn(nodes)
+
+    route, explore = [0, 0], None
+    if explore_seed is not None and len(cand) >= 4:  # fewer than 4 sites: skip the slot
+        pick = exploration_pick(list(cand["site_id"].iloc[3:TOP_SITES]), N_BOOT, explore_seed)
+        j = 1 + int(cand.index[cand["site_id"] == pick][0])
+        if 2 * hours[0, j] + dwell_h <= budget_h:  # reserve the visit before the greedy fill
+            route, explore = [0, j, 0], j
+    route = two_opt(_greedy(route, S, hours, budget_h, dwell_h), hours)
+
+    stops, t = [], start
+    for k, i in enumerate(route):
+        if k:
+            t += pd.Timedelta(hours=float(hours[route[k - 1], i]) + (dwell_h if k > 1 else 0))
+        stop = {
+            "id": "base" if i == 0 else cand["site_id"][i - 1],
+            "arrival_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "dwell_h": 0 if i == 0 else dwell_h,
+            "x_m": nodes[i]["x_m"],
+            "y_m": nodes[i]["y_m"],
+        }
+        if i and not cand["bh_flag"][i - 1]:
+            stop["not_significant"] = True
+        if i == explore:
+            stop["exploration"] = True
+        stops.append(stop)
+    return stops
+
+
+def _provenance(name: str) -> str:
+    """shortcut: reads core.io's stamp layout directly; ask P1 for a public read_stamp (issue 89)."""
+    path = io.stage_path(name)
+    if name.startswith("reference/"):
+        raw = path.with_name(f"layers.{name.split('/')[1]}.stamp.json").read_bytes()
+    else:
+        raw = (pq.read_schema(path).metadata or {})[b"narco"]
+    return json.loads(raw)["provenance"]
+
+
+def _base() -> tuple[float, float]:
+    """Haulbowline on real data; on simulated data (its map may not reach Cork Harbour) the
+    road-access pier nearest to it."""
+    hx, hy = (float(v) for v in to_utm(*HAULBOWLINE_LONLAT))
+    if _provenance("reference/piers") == "real":
+        return hx, hy
+    piers = io.read_stage("reference/piers")
+    piers = piers[piers["road_access"]]
+    d = np.hypot(piers.geometry.x - hx, piers.geometry.y - hy)
+    p = piers.geometry.iloc[int(np.argmin(d))]
+    return float(p.x), float(p.y)
+
+
+def _write(asset: str, stops: list[dict], path: Path | None) -> dict:
+    path = path or _data_root() / "patrol" / "plan.json"
+    plan = json.loads(path.read_text()) if path.exists() else {}
     plan[asset] = stops
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(plan, indent=2))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(plan, indent=1))
     return plan
 
 
-def ship_plan(*, out: Path = _PLAN) -> dict:
-    """TODO(P7): top sites from fuse/sites.parquet, sea_hours, greedy_route, two_opt, exploration."""
-    return _write("ship", _stops(["base", "S01", "S02", "base"], 1.5, SHIP_DWELL_H), out)
+def _start() -> pd.Timestamp:
+    """TODO(P7): the plan starts at 00:00 UTC on the day after T; the spec gives no start time."""
+    return pd.Timestamp(io.read_snapshot()["T"], tz="UTC") + pd.Timedelta(days=1)
 
 
-def aircraft_plan(*, out: Path = _PLAN) -> dict:
-    """TODO(P7): the same planner with air_hours and no exploration slot."""
-    return _write("aircraft", _stops(["base", "S01", "S02", "S03", "base"], 0.2, AIR_DWELL_H), out)
+def ship_plan(*, path: Path | None = None) -> dict:
+    """Ship route over the top sites, with one exploration visit; merged into patrol/plan.json."""
+    sites = io.read_stage("fuse/sites")
+    sea = _sea_from_cells(io.read_stage("reference/cells"))
+    seed = int(load(io.CONFIG_PATH)[0]["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    stops = _plan_asset(
+        sites, _base(), lambda n: sea_hours(n, sea, SHIP_KN),
+        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=_start(), explore_seed=seed,
+    )  # fmt: skip
+    return _write("ship", stops, path)
+
+
+def aircraft_plan(*, path: Path | None = None) -> dict:
+    """The same planner with straight-line distances and no exploration slot."""
+    stops = _plan_asset(
+        io.read_stage("fuse/sites"), _base(), lambda n: air_hours(n, AIR_KN),
+        budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=_start(),
+    )  # fmt: skip
+    return _write("aircraft", stops, path)
 
 
 def run() -> None:
-    """Entry point for `make all` (DECISIONS.md, 2026-11-27 18:30). TODO(P7): real planner in issue 49."""
+    """Entry point for `make all`."""
     ship_plan()
     aircraft_plan()
