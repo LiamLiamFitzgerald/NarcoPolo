@@ -3,15 +3,17 @@
 Dates are tz-naive pandas Timestamps at midnight, meaning the UTC date.
 """
 
-import sqlite3
+import json
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
+import pyarrow.parquet as pq
 
+from core.config import load
 from core.grid import parent
-from core.io import read_stage, stage_path, write_stage
+from core.io import CONFIG_PATH, read_snapshot, read_stage, stage_path, write_stage
 from core.observed import Observed
 
 EVENT_TYPES = ("dark_small", "slowdown")
@@ -31,7 +33,10 @@ def soft_counts(events: pd.DataFrame) -> pd.DataFrame:
 
 def history_dates(T: pd.Timestamp, cfg: Mapping[str, Any]) -> dict[str, pd.DatetimeIndex]:
     """Each type's own history up to T: ship data for slowdowns, radar for dark_small."""
-    days = {"slowdown": cfg["ship_history_days"], "dark_small": cfg["radar_history_days"]}
+    days = {
+        "slowdown": _cfg(cfg, "ship_history_days"),
+        "dark_small": _cfg(cfg, "radar_history_days"),
+    }
     return {t: pd.date_range(end=T.normalize(), periods=n) for t, n in days.items()}
 
 
@@ -81,7 +86,7 @@ def to_coarse(observed: Observed) -> Observed:
     return Observed(coarse.assign(level=10000))
 
 
-def run(
+def build(
     events: pd.DataFrame,
     exposure: pd.DataFrame,
     cells: pd.DataFrame,
@@ -96,13 +101,8 @@ def run(
 
 
 def read_cells() -> pd.DataFrame:
-    """Attributes of the cells layer of reference/layers.gpkg (a GeoPackage is a SQLite file).
-
-    P5 needs no geometry, so this skips geopandas; P3 validates the layer when it writes it.
-    """
-    with sqlite3.connect(Path(stage_path("reference/cells"))) as con:
-        cells = pd.read_sql("SELECT * FROM cells", con)
-    return cells.drop(columns=[c for c in ("fid", "geom", "geometry") if c in cells.columns])
+    """Attributes of the cells layer of reference/layers.gpkg, validated by core.io; P5 needs no geometry."""
+    return pd.DataFrame(read_stage("reference/cells").drop(columns="geometry"))
 
 
 def stage(
@@ -112,7 +112,7 @@ def stage(
     provenance: Literal["simulated", "real"],
 ) -> Path:
     """make all: read P4's events, P3's exposure and cells; write aggregate/observed.parquet."""
-    observed = run(
+    observed = build(
         read_stage("match/events"),
         read_stage("coverage/exposure"),
         read_cells(),
@@ -120,3 +120,30 @@ def stage(
         slowdown_last_date,
     )
     return write_stage("aggregate/observed", observed.frame, provenance)
+
+
+def _provenance(name: str) -> Literal["simulated", "real"]:
+    """Inherit 'simulated' or 'real' from an input stage file's core.io stamp.
+
+    shortcut: reads core.io's parquet metadata key directly; swap for a core.io helper if P1 adds one.
+    """
+    meta = pq.read_schema(stage_path(name)).metadata or {}
+    return json.loads(meta[b"narco"])["provenance"]
+
+
+def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
+    if key not in cfg:
+        raise KeyError(f"config.yaml has no {key!r}; P5's keys are listed in issue #69")
+    return cfg[key]
+
+
+def run() -> None:
+    """make all entry point: T and GFW presence's latest date come from data/snapshot.json (A11)."""
+    cfg, _ = load(CONFIG_PATH)
+    snap = read_snapshot()
+    stage(
+        pd.Timestamp(snap["T"]),
+        pd.Timestamp(snap["gfw_presence"]),
+        cfg,
+        _provenance("match/events"),
+    )

@@ -5,18 +5,20 @@ Fits take a Split and the caller's split.train(frame); they raise on any row at 
 cutoff, so look-ahead fails loudly instead of quietly improving the backtest (principle 6).
 """
 
-import sqlite3
+import json
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import statsmodels.api as sm
 from scipy import stats
 
+from core.config import load
 from core.grid import parent
-from core.io import read_stage, stage_path, write_stage
+from core.io import CONFIG_PATH, ROOT, read_snapshot, read_stage, stage_path, write_stage
 from core.split import Split, folds
 
 _ID = ["cell_id", "date"]
@@ -314,7 +316,7 @@ def _fold_model(
     return predict
 
 
-def run(
+def forecast_all(
     observed: pd.DataFrame,
     cells: pd.DataFrame,
     T: pd.Timestamp,
@@ -334,7 +336,7 @@ def run(
         "slowdown": cfg["split"]["n_folds_slowdown"],
         "dark_small": cfg["split"]["n_folds_small"],
     }
-    params = (cfg["ewma_delta"], cfg["ewma_min_se"], cfg["interval"])
+    params = (_cfg(cfg, "ewma_delta"), _cfg(cfg, "ewma_min_se"), _cfg(cfg, "interval"))
     expected, report = [], []
     for event_type, k in n_folds.items():
         f = observed[observed["event_type"] == event_type]
@@ -350,7 +352,7 @@ def run(
             name: backtest(f2, fs, _fold_model(name, frames, fs, params, fold_rows))
             for name in ("ewma", "glm")
         }
-        chosen = (baseline or {}).get(event_type) or choose_baseline(
+        chosen = (baseline or {}).get(event_type) or _choose_or_default(
             event_type, skills, decisions, when
         )
         window = forecast_window(chosen, T, frames, *params)
@@ -375,14 +377,8 @@ def run(
 
 
 def _read_cells() -> pd.DataFrame:
-    """Attributes of the cells layer of reference/layers.gpkg (SQLite), without geometry.
-
-    shortcut: duplicates aggregate.read_cells because forecast may import only core; move to core.io
-    if P1 agrees (#69).
-    """
-    with sqlite3.connect(Path(stage_path("reference/cells"))) as con:
-        cells = pd.read_sql("SELECT * FROM cells", con)
-    return cells.drop(columns=[c for c in ("fid", "geom", "geometry") if c in cells.columns])
+    """Attributes of the cells layer of reference/layers.gpkg, validated by core.io; P5 needs no geometry."""
+    return pd.DataFrame(read_stage("reference/cells").drop(columns="geometry"))
 
 
 def stage(
@@ -399,5 +395,47 @@ def stage(
     """
     observed = read_stage("aggregate/observed")
     observed["date"] = pd.to_datetime(observed["date"])
-    expected, report = run(observed, _read_cells(), T, cfg, decisions, when, baseline)
+    expected, report = forecast_all(observed, _read_cells(), T, cfg, decisions, when, baseline)
     return write_stage("forecast/expected", expected, provenance), report
+
+
+def _provenance(name: str) -> Literal["simulated", "real"]:
+    """Inherit 'simulated' or 'real' from an input stage file's core.io stamp.
+
+    shortcut: reads core.io's parquet metadata key directly; swap for a core.io helper if P1 adds one.
+    """
+    meta = pq.read_schema(stage_path(name)).metadata or {}
+    return json.loads(meta[b"narco"])["provenance"]
+
+
+def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
+    if key not in cfg:
+        raise KeyError(f"config.yaml has no {key!r}; P5's keys are listed in issue #69")
+    return cfg[key]
+
+
+def _choose_or_default(
+    event_type: str, skills: dict[str, pd.DataFrame], decisions: str, when: str
+) -> str:
+    """choose_baseline, or EWMA (the spec's "build first" baseline) while skill is undefined (#58).
+
+    Nothing is written to DECISIONS.md in the fallback: no comparison was made.
+    """
+    try:
+        return choose_baseline(event_type, skills, decisions, when)
+    except ValueError as e:
+        print(f"forecast: {e}; using ewma for {event_type} until #58 is fixed")
+        return "ewma"
+
+
+def run() -> None:
+    """make all entry point: reads aggregate/observed and the cells layer, writes forecast/expected."""
+    cfg, _ = load(CONFIG_PATH)
+    when = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M")
+    stage(
+        pd.Timestamp(read_snapshot()["T"]),
+        cfg,
+        _provenance("aggregate/observed"),
+        str(ROOT / "DECISIONS.md"),
+        when,
+    )

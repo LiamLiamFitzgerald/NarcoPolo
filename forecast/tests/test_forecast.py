@@ -283,12 +283,12 @@ def _all_observed():
 
 
 def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
-    from forecast import run
+    from forecast import forecast_all
 
     observed, cells = _all_observed()
     T = observed.date.max()
     forced = {"slowdown": "glm", "dark_small": "ewma"}
-    expected, report = run(
+    expected, report = forecast_all(
         observed, cells, T, CFG, str(tmp_path / "D.md"), "2026-11-28 10:00", forced
     )
     assert list(expected.columns) == EXPECTED_COLUMNS
@@ -308,39 +308,47 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
     print(report.round(3).to_string())
 
 
+def test_undefined_skill_falls_back_to_ewma_and_records_nothing(tmp_path):
+    from forecast import forecast_all
+
+    observed, cells = _all_observed()
+    decisions = tmp_path / "D.md"
+    expected, _ = forecast_all(observed, cells, observed.date.max(), CFG, str(decisions), "x")
+    # dark_small skill is NaN on the fake simulator (#58): no comparison was made, nothing recorded
+    assert (expected[expected.event_type == "dark_small"].model == "ewma").all()
+    assert "dark_small" not in (decisions.read_text() if decisions.exists() else "")
+
+
 @pytest.mark.xfail(
     strict=True,
-    reason="choose_baseline refuses NaN skill until the zero-rate gap is fixed",
+    reason="#90: the simulator writes dark_small events on rough passes (exposure 0), "
+    "which core.Observed rightly refuses",
 )
-def test_stage_run_chooses_a_baseline_unforced(tmp_path):
-    from forecast import run
-
-    observed, cells = _all_observed()
-    run(
-        observed,
-        cells,
-        observed.date.max(),
-        CFG,
-        str(tmp_path / "D.md"),
-        "2026-11-28 10:00",
-    )
-
-
-def test_stage_round_trips_through_core_io(tmp_path, monkeypatch):
-    from core.io import read_stage, stage_path, write_stage
-    from forecast import stage
+def test_p1_simulator_runs_through_both_p5_stages(tmp_path, monkeypatch):
+    """End to end on sim.simulate's files: aggregate.stage then forecast.stage, schemas checked."""
+    from aggregate import stage as aggregate_stage
+    from core.config import load
+    from core.io import CONFIG_PATH, read_snapshot, read_stage
+    from forecast import stage as forecast_stage
+    from sim.simulate import simulate
 
     monkeypatch.setenv("NARCO_DATA", str(tmp_path))
-    observed, cells = _all_observed()
-    write_stage("aggregate/observed", observed, "simulated")
-    path = stage_path("reference/cells")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    import sqlite3
-
-    with sqlite3.connect(path) as con:
-        cells.assign(geom=b"").to_sql("cells", con, index=False)
-    forced = {"slowdown": "glm", "dark_small": "ewma"}
-    T = observed.date.max()
-    stage(T, CFG, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00", forced)
-    out = read_stage("forecast/expected")  # validates against core.schemas
-    assert set(out.event_type) == set(TYPES) and (out.fold == 0).any()
+    cfg, _ = load(CONFIG_PATH)
+    simulate(cfg, cfg["seed"])
+    # P5's keys until P1 adds them to config.yaml (#69); values from the spec
+    p5 = {
+        **cfg,
+        "ewma_delta": DELTA,
+        "ewma_min_se": MIN_SE,
+        "interval": LEVEL,
+        "ship_history_days": cfg["sim"]["days"],
+        "radar_history_days": 90,
+    }
+    snap = read_snapshot()
+    T = pd.Timestamp(snap["T"])
+    aggregate_stage(T, pd.Timestamp(snap["gfw_presence"]), p5, "simulated")
+    obs = read_stage("aggregate/observed")
+    assert set(obs.level) == {2000, 10000} and set(obs.event_type) == set(TYPES)
+    forecast_stage(T, p5, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00")
+    live = read_stage("forecast/expected").query("fold == 0")
+    assert set(live.event_type) == set(TYPES) and (live.mu >= 0).all()

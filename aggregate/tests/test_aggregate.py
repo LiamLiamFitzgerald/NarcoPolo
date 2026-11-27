@@ -103,8 +103,8 @@ def test_to_coarse_sums_the_25_children():
     assert (coarse["level"] == 10000).all()
 
 
-def test_run_writes_both_levels_and_both_types_with_no_gaps():
-    from aggregate import run
+def test_build_writes_both_levels_and_both_types_with_no_gaps():
+    from aggregate import build
 
     ids = [f"2000_{i}_0" for i in range(6)]
     events = pd.DataFrame(
@@ -122,7 +122,7 @@ def test_run_writes_both_levels_and_both_types_with_no_gaps():
             "exposure_small": [0.9],
         }
     )
-    f = run(events, exposure, _cells(ids), _both(D1, D2), D2).frame
+    f = build(events, exposure, _cells(ids), _both(D1, D2), D2).frame
     fine, coarse = f[f.level == 2000], f[f.level == 10000]
     assert len(fine) == 6 * 2 * 2  # cells x dates x types, unobserved rows included
     assert set(coarse.cell_id) == {"10000_0_0", "10000_1_0"}
@@ -140,22 +140,32 @@ def test_each_type_gets_its_own_history_window():
     assert d["dark_small"][0] == pd.Timestamp("2026-11-24") - pd.Timedelta(days=89)
 
 
-def _write_cells_layer(path, cells):
-    """A GeoPackage is SQLite; P5 reads only the attribute columns of the `cells` table."""
-    import sqlite3
+def _write_cells_layer(cells):
+    """A schema-valid cells layer through core.io: P3's columns, a simple square geometry."""
+    from shapely.geometry import box
 
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as con:
-        cells.assign(fid=range(1, len(cells) + 1), geom=b"").to_sql("cells", con, index=False)
+    from core.io import write_stage
+
+    full = cells.assign(
+        geometry=[box(0, 0, 1, 1)] * len(cells),
+        inshore_frac=0.5,
+        lane=False,
+        anchorage=False,
+        port_zone=False,
+        exclusion=False,
+        dist_coast_m=5000.0,
+        static_frac=0.0,
+    )
+    write_stage("reference/cells", full, "simulated")
 
 
 def test_stage_reads_inputs_and_writes_a_valid_observed_file(tmp_path, monkeypatch):
     from aggregate import stage
-    from core.io import read_stage, stage_path, write_stage
+    from core.io import read_stage, write_stage
 
     monkeypatch.setenv("NARCO_DATA", str(tmp_path))
     ids = [f"2000_{i}_0" for i in range(6)]
-    _write_cells_layer(stage_path("reference/cells"), _cells(ids))
+    _write_cells_layer(_cells(ids))
     t = pd.Timestamp("2026-10-01 06:00", tz="UTC")
     write_stage(
         "coverage/exposure",
