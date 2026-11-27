@@ -38,7 +38,7 @@ def test_manifest_entry_has_request_hash_utc_time_and_licence(tmp_path):
     f = tmp_path / "gfw_sar.parquet"
     f.write_bytes(b"x")
     cache.record(REQ, f, "CC BY-NC 4.0", raw_dir=tmp_path)
-    (entry,) = json.loads((tmp_path / "manifest.json").read_text())
+    (entry,) = json.loads((tmp_path / "manifest.json").read_text())["files"]
     assert entry["path"] == "gfw_sar.parquet"
     assert entry["request"] == REQ
     assert entry["hash"] == cache.request_key(REQ)
@@ -52,7 +52,7 @@ def test_record_appends(tmp_path):
     b.write_bytes(b"y")
     cache.record(REQ, a, "lic", raw_dir=tmp_path)
     cache.record({**REQ, "date": "2026-11-21"}, b, "lic", raw_dir=tmp_path)
-    assert len(json.loads((tmp_path / "manifest.json").read_text())) == 2
+    assert len(json.loads((tmp_path / "manifest.json").read_text())["files"]) == 2
 
 
 def test_cached_is_none_when_file_deleted(tmp_path):
@@ -82,3 +82,19 @@ def test_record_rejects_file_outside_raw(tmp_path):
 def test_record_rejects_missing_file(tmp_path):
     with pytest.raises(FileNotFoundError):
         cache.record(REQ, tmp_path / "nope.tif", "lic", raw_dir=tmp_path)
+
+
+def test_record_keeps_latest_dates(tmp_path):
+    latest = {
+        "radar": "2026-11-25",
+        "gfw_presence": "2026-11-24",
+        "gfw_sar": "2026-11-22",
+        "era5": "2026-11-22",
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": [], "latest": latest}))
+    f = tmp_path / "era5.nc"
+    f.write_bytes(b"x")
+    cache.record(REQ, f, "lic", raw_dir=tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    assert manifest["latest"] == latest
+    assert len(manifest["files"]) == 1
