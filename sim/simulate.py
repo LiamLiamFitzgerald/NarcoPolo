@@ -586,6 +586,11 @@ def simulate(config: Config, seed: int) -> None:
     }.items():
         io.write_stage(name, frame, "simulated")
 
+    last = (start + timedelta(days=days - 1)).isoformat()  # the simulator has no feed lag
+    io.write_snapshot(
+        {"latest": {"radar": last, "gfw_presence": last, "gfw_sar": last, "era5": last}}
+    )
+
     # truth: every true boat, every planted drop and pick-up. Only validate reads it.
     tb = boats.assign(
         time_utc=[_day_time(start, v) for v in boats["day"]],
