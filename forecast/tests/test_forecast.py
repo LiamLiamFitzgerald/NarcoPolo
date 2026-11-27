@@ -1,0 +1,169 @@
+import numpy as np
+import pandas as pd
+import pytest
+
+from forecast import (
+    backtest,
+    design_matrix,
+    empirical_bayes,
+    ewma,
+    glm_mu,
+    nb_interval,
+    poisson_deviance,
+)
+from forecast._stand_in import Split, folds
+from forecast.tests import fake_sim
+
+TYPES = ["dark_small", "slowdown"]
+DELTA, MIN_SE, LEVEL = 0.97, 3.0, 0.9  # spec defaults; real runs read them from config
+SPLIT = Split(fake_sim.START + pd.Timedelta(days=90), embargo_days=0, test_days=30)
+
+
+def _setup(event_type, fine_frame=None):
+    fine, coarse, cells = fake_sim.observed(event_type)
+    f2 = fine.frame if fine_frame is None else fine_frame
+    f10 = coarse.frame
+    dates = pd.DatetimeIndex(f2.date.unique())
+    X2 = design_matrix(cells[cells.level == 2000], dates, event_type)
+    X10 = design_matrix(cells[cells.level == 10000], dates, event_type)
+    return f2, f10, X2, X10, cells
+
+
+def _ewma(f2, f10, split=SPLIT):
+    return ewma(split, split.train(f2), split.train(f10), split.test(f2), DELTA, MIN_SE)
+
+
+def _glm(f2, f10, X2, X10, split=SPLIT):
+    return glm_mu(split, split.train(f10), X10, split.test(f2), X2)
+
+
+def _recovery(test, mu, cells):
+    """sum(mu) / sum(true rate x E) per group of cells; 1.0 is perfect."""
+    fine = cells[cells.level == 2000].set_index("cell_id")
+    t = test.assign(mu=mu, true=test.cell_id.map(fake_sim.planted_rate(fine)) * test.exposure)
+    t = t[t.exposure > 0]
+    lane = t.cell_id.map(fine.lane) == 1
+    inshore = t.cell_id.map(fine.inshore_frac)
+    groups = {"lane": lane, "inshore": inshore > 0.7, "offshore": (inshore < 0.2) & ~lane}
+    return {g: t[m].mu.sum() / t[m].true.sum() for g, m in groups.items()}
+
+
+@pytest.mark.parametrize("event_type", TYPES)
+def test_ewma_recovers_planted_rates_within_20_percent(event_type):
+    f2, f10, _, _, cells = _setup(event_type)
+    ratios = _recovery(SPLIT.test(f2), _ewma(f2, f10), cells)
+    assert all(0.8 <= r <= 1.2 for r in ratios.values()), ratios
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="spec gap: fitting on 10 km and applying beta to 2 km over-predicts lane cells ~35% "
+    "(a 2-row lane band inside a 10 km cell); needs a P1/P3 decision",
+)
+@pytest.mark.parametrize("event_type", TYPES)
+def test_glm_recovers_planted_rates_within_20_percent(event_type):
+    f2, f10, X2, X10, cells = _setup(event_type)
+    mu, phi = _glm(f2, f10, X2, X10)
+    ratios = _recovery(SPLIT.test(f2), mu, cells)
+    assert all(0.8 <= r <= 1.2 for r in ratios.values()), ratios
+    assert phi == pytest.approx(1.0, abs=0.3)  # the simulator is Poisson
+
+
+def test_drop_site_days_are_not_absorbed_into_the_baseline():
+    f2, f10, X2, X10, _ = _setup("slowdown")
+    site = "2000_10_25"
+    drop_days = f2.date.isin(pd.date_range(fake_sim.START, periods=12, freq="10D"))
+    f2 = f2.copy()
+    f2.loc[(f2.cell_id == site) & drop_days, "count"] += 3
+    test = SPLIT.test(f2)
+    on_site = ((test.cell_id == site) & test.date.isin(f2.date[drop_days])).to_numpy()
+    assert on_site.any()
+    assert (_ewma(f2, f10)[on_site] < 3).all()
+    assert (_glm(f2, f10, X2, X10)[0][on_site] < 3).all()
+
+
+@pytest.mark.parametrize("event_type", TYPES)
+def test_future_row_in_training_data_makes_the_fit_raise(event_type):
+    f2, f10, X2, X10, _ = _setup(event_type)
+    leak = SPLIT.test(f2).head(1)
+    with pytest.raises(ValueError, match="look-ahead"):
+        ewma(SPLIT, pd.concat([SPLIT.train(f2), leak]), SPLIT.train(f10), SPLIT.test(f2), DELTA, MIN_SE)
+    leak10 = SPLIT.test(f10).head(1)
+    with pytest.raises(ValueError, match="look-ahead"):
+        glm_mu(SPLIT, pd.concat([SPLIT.train(f10), leak10]), X10, SPLIT.test(f2), X2)
+
+
+def test_unobserved_rows_get_mu_zero_and_no_surprise():
+    f2, f10, X2, X10, _ = _setup("dark_small")
+    test = SPLIT.test(f2)
+    unobserved = (test.exposure == 0).to_numpy()
+    assert unobserved.any()
+    for mu in (_ewma(f2, f10), _glm(f2, f10, X2, X10)[0]):
+        assert (mu[unobserved] == 0).all()
+        lo, hi = nb_interval(mu, 2.0, LEVEL)
+        assert (lo[unobserved] == 0).all() and (hi[unobserved] == 0).all()
+
+
+@pytest.mark.parametrize("event_type", TYPES)
+def test_no_negative_or_missing_mu_or_interval_where_exposure_positive(event_type):
+    f2, f10, X2, X10, _ = _setup(event_type)
+    seen = (SPLIT.test(f2).exposure > 0).to_numpy()
+    mu, phi = _glm(f2, f10, X2, X10)
+    lo, hi = nb_interval(mu, phi, LEVEL)
+    assert (mu[seen] >= 0).all() and mu[seen].notna().all()
+    assert np.isfinite(lo[seen]).all() and np.isfinite(hi[seen]).all()
+
+
+def test_interval_covers_about_ninety_percent():
+    f2, f10, X2, X10, _ = _setup("slowdown")
+    mu, phi = _glm(f2, f10, X2, X10)
+    test = SPLIT.test(f2)
+    lo, hi = nb_interval(mu, phi, LEVEL)
+    coverage = ((test["count"] >= lo) & (test["count"] <= hi)).mean()
+    assert 0.88 <= coverage <= 0.995, coverage  # discrete counts make central intervals conservative
+
+
+def test_negative_binomial_interval_is_wider_when_overdispersed():
+    mu = pd.Series([4.0])
+    lo1, hi1 = nb_interval(mu, 1.0, LEVEL)
+    lo3, hi3 = nb_interval(mu, 3.0, LEVEL)
+    assert hi3[0] > hi1[0] and lo3[0] <= lo1[0]
+
+
+def test_empirical_bayes_without_extra_variation_is_one():
+    M = pd.Series([2.0, 3.0, 5.0])
+    assert (empirical_bayes(M.copy(), M) == 1).all()
+
+
+def test_empirical_bayes_pulls_thin_cells_towards_one():
+    O = pd.Series([0.0, 30.0, 200.0])
+    M = pd.Series([1.0, 10.0, 100.0])
+    theta = empirical_bayes(O, M)
+    raw = O / M
+    assert (abs(theta - 1) <= abs(raw - 1)).all()
+
+
+def test_poisson_deviance_is_zero_for_a_perfect_forecast_and_handles_soft_zeros():
+    assert poisson_deviance(pd.Series([0.6, 2.0]), pd.Series([0.6, 2.0])) == pytest.approx(0)
+    assert poisson_deviance(pd.Series([0.0]), pd.Series([0.5])) == pytest.approx(1.0)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="spec gap: cells with no training events get rate 0 (EWMA and flat), so one event "
+    "makes the deviance infinite and skill NaN or a fake 1.0; needs a P1 decision",
+)
+@pytest.mark.parametrize("event_type,k", [("dark_small", 6), ("slowdown", 12)])
+def test_walk_forward_backtest_beats_flat_average(event_type, k):
+    f2, f10, X2, X10, _ = _setup(event_type)
+    T = f2.date.max()
+    fs = folds(T, k, embargo_days=7, test_days=7)
+    skills = {
+        "ewma": backtest(f2, fs, lambda s: _ewma(f2, f10, s)),
+        "glm": backtest(f2, fs, lambda s: _glm(f2, f10, X2, X10, s)[0]),
+    }
+    for name, table in skills.items():
+        print(event_type, name, table.skill.agg(["mean", "min", "max"]).round(4).to_dict())
+    for table in skills.values():
+        assert np.isfinite(table.skill).all() and (table.skill < 1).all()
+    assert skills["glm"].skill.mean() > 0
