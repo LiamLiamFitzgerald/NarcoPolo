@@ -269,12 +269,12 @@ CFG = {
 }
 
 
-def _all_observed():
-    parts, cells = [], None
+def _all_observed() -> tuple[pd.DataFrame, pd.DataFrame]:
+    parts = []
     for et in TYPES:
-        fine, coarse, cells = fake_sim.observed(et)
+        fine, coarse, _ = fake_sim.observed(et)
         parts += [fine.frame, coarse.frame]
-    return pd.concat(parts, ignore_index=True), cells
+    return pd.concat(parts, ignore_index=True), fake_sim.cells()
 
 
 def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
@@ -315,11 +315,6 @@ def test_undefined_skill_falls_back_to_ewma_and_records_nothing(tmp_path):
     assert not decisions.exists()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="#90: the simulator writes dark_small events on rough passes (exposure 0), "
-    "which core.Observed rightly refuses",
-)
 def test_p1_simulator_runs_through_both_p5_stages(tmp_path, monkeypatch):
     """End to end on sim.simulate's files: aggregate.stage then forecast.stage, schemas checked."""
     from aggregate import stage as aggregate_stage
@@ -331,21 +326,12 @@ def test_p1_simulator_runs_through_both_p5_stages(tmp_path, monkeypatch):
     monkeypatch.setenv("NARCO_DATA", str(tmp_path))
     cfg, _ = load(CONFIG_PATH)
     simulate(cfg, cfg["seed"])
-    # P5's keys until P1 adds them to config.yaml (#69); values from the spec
-    p5 = {
-        **cfg,
-        "ewma_delta": DELTA,
-        "ewma_min_se": MIN_SE,
-        "interval": LEVEL,
-        "ship_history_days": cfg["sim"]["days"],
-        "radar_history_days": 90,
-    }
     snap = read_snapshot()
     T = pd.Timestamp(snap["T"])
-    aggregate_stage(T, pd.Timestamp(snap["gfw_presence"]), p5, "simulated")
+    aggregate_stage(T, pd.Timestamp(snap["gfw_presence"]), cfg, "simulated")
     obs = read_stage("aggregate/observed")
     assert set(obs.level) == {2000, 10000} and set(obs.event_type) == set(TYPES)
-    forecast_stage(T, p5, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00")
+    forecast_stage(T, cfg, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00")
     live = read_stage("forecast/expected").query("fold == 0")
     assert set(live.event_type) == set(TYPES) and (live.mu >= 0).all()
 

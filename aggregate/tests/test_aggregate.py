@@ -150,7 +150,7 @@ def _write_cells_layer(cells):
     coarse = pd.DataFrame({"cell_id": sorted(set(cells.cell_id.map(parent))), "level": 10000})
     both = pd.concat([cells, coarse.assign(sea_frac=1.0)], ignore_index=True)
     full = both.assign(
-        geometry=[box(0, 0, 1, 1)] * len(both),
+        geometry=pd.Series([box(0, 0, 1, 1)] * len(both)),
         inshore_frac=0.5,
         lane=False,
         anchorage=False,

@@ -28,7 +28,7 @@ def _utc_date(times: pd.Series) -> pd.Series:
 def soft_counts(events: pd.DataFrame) -> pd.DataFrame:
     """C = sum of p per cell, UTC date and event type (principle 3: weak evidence adds up)."""
     e = events.assign(date=_utc_date(events["time_utc"]))
-    return e.groupby(_KEYS, as_index=False)["p"].sum().rename(columns={"p": "count"})
+    return e.groupby(_KEYS, as_index=False).agg(count=("p", "sum"))
 
 
 def history_dates(T: pd.Timestamp, cfg: Mapping[str, Any]) -> dict[str, pd.DatetimeIndex]:
