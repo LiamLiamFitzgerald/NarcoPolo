@@ -73,6 +73,7 @@ def heatmap_values(
     normal    mean over observed days of mu / E for dark_small     (forecast/expected, coverage)
     obs_vs_exp  always None: needs y in fuse/cells (contract issue 87)
     unusual   weekly max of U over both event types                (fuse/cells)
+    agreement the 0-4 badge of the row that gave that maximum      (fuse/cells)
     exposure  summed small-boat exposure in the week               (coverage/exposure)
     A value that cannot be computed is None, never 0 (Design principle 4)."""
     year, w = week.split("-W")
@@ -93,7 +94,8 @@ def heatmap_values(
     normal = (mu / daily[daily > 0]).dropna().groupby("cell_id").mean()
 
     dates = pd.to_datetime(cells["date"]).dt.date
-    unusual = cells[in_week(dates)].groupby("cell_id")["U"].max()
+    week_rows = cells[in_week(dates)]
+    top = week_rows.loc[week_rows.groupby("cell_id")["U"].idxmax()].set_index("cell_id")
 
     return [
         {
@@ -101,7 +103,8 @@ def heatmap_values(
             "observed": bool(e > 0),
             "normal": _num(normal.get(cid)) if e > 0 else None,
             "obs_vs_exp": None,  # TODO(P6): y in fuse/cells (contract issue 87)
-            "unusual": _num(unusual.get(cid)),
+            "unusual": _num(top["U"].get(cid)),
+            "agreement": None if cid not in top.index else int(top.at[cid, "agreement"]),
             "exposure": _num(e),
         }
         for cid, e in weekly.items()

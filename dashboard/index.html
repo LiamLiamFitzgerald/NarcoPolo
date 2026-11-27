@@ -65,6 +65,7 @@ const OVERLAYS = [
 ];
 let snap, ext, H;
 const view = { map: "normal", week: null };
+const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
 
 async function loadSnapshot() {
   if (!window.pywebview?.api)
@@ -210,6 +211,12 @@ function drawOverlays() {
     }
     for (let i = 0; i < s.agreement; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, fill: "#222" }, agree, `${s.agreement} of 4 detectors agree`);
   }
+  // beside cells the detectors rate U >= 0.9 this week (the spec's threshold): one dot per agreeing detector
+  for (const c of snap.cells.weeks[view.week]) {
+    if (c.unusual === null || c.unusual < AGREE_U || !c.agreement) continue;
+    const { x, y, width, height } = cellRect(c.cell_id);
+    for (let i = 0; i < c.agreement; i++) el("circle", { cx: x + width + 2 + i * 4, cy: y + height / 2, r: 1.6, fill: "#222" }, agree, `${c.agreement} of 4 detectors agree`);
+  }
 }
 
 function drawSiteList() {
@@ -282,6 +289,7 @@ function onWeekChange(week) {
   view.week = week;
   drawBanner();
   drawHeatmap(view.map, week);
+  drawOverlays(); // the cell agreement dots depend on the week
 }
 
 function setup() {
