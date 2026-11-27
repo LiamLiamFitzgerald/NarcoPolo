@@ -77,3 +77,18 @@ def test_to_coarse_sums_the_25_children():
     assert coarse.loc["10000_0_0", "count"] == pytest.approx(12.5)
     assert coarse.loc["10000_1_0", "exposure"] == 1
     assert (coarse["level"] == 10000).all()
+
+
+def test_run_writes_both_levels_and_both_types_with_no_gaps():
+    from aggregate import run
+
+    ids = [f"2000_{i}_0" for i in range(6)]
+    events = pd.DataFrame(
+        {"cell_id": ["2000_0_0"], "event_type": ["dark_small"], "time_utc": ["2026-10-01T06:10Z"], "p": [0.6]}
+    )
+    exposure = pd.DataFrame({"cell_id": ["2000_0_0"], "time_utc": ["2026-10-01T06:00Z"], "exposure_small": [0.9]})
+    f = run(events, exposure, _cells(ids), pd.DatetimeIndex([D1, D2]), D2).frame
+    fine, coarse = f[f.level == 2000], f[f.level == 10000]
+    assert len(fine) == 6 * 2 * 2  # cells x dates x types, unobserved rows included
+    assert set(coarse.cell_id) == {"10000_0_0", "10000_1_0"}
+    assert coarse["count"].sum() == pytest.approx(fine["count"].sum()) == pytest.approx(0.6)

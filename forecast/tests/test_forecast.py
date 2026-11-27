@@ -237,7 +237,7 @@ def test_choose_baseline_records_the_higher_mean_skill(tmp_path):
         "ewma": pd.DataFrame({"fold": [1, 2], "skill": [0.05, 0.10]}),
         "glm": pd.DataFrame({"fold": [1, 2], "skill": [0.20, 0.12]}),
     }
-    assert choose_baseline("slowdown", skills, str(decisions)) == "glm"
+    assert choose_baseline("slowdown", skills, str(decisions), "2026-11-28 10:00") == "glm"
     line = decisions.read_text()
     assert "slowdown: glm" in line and "range 0.120 to 0.200" in line
 
@@ -246,5 +246,49 @@ def test_choose_baseline_refuses_a_broken_backtest(tmp_path):
     decisions = tmp_path / "DECISIONS.md"
     skills = {"ewma": pd.DataFrame({"fold": [1], "skill": [np.nan]}), "glm": pd.DataFrame({"fold": [1], "skill": [0.1]})}
     with pytest.raises(ValueError, match="non-finite"):
-        choose_baseline("dark_small", skills, str(decisions))
+        choose_baseline("dark_small", skills, str(decisions), "2026-11-28 10:00")
     assert not decisions.exists()
+
+
+CFG = {
+    "ewma_delta": DELTA,
+    "ewma_min_se": MIN_SE,
+    "interval": LEVEL,
+    "n_folds_slowdown": 12,
+    "n_folds_small": 6,
+    "embargo_days": 7,
+    "test_days": 7,
+}
+
+
+def _all_observed():
+    parts, cells = [], None
+    for et in TYPES:
+        fine, coarse, cells = fake_sim.observed(et)
+        parts += [fine.frame, coarse.frame]
+    return pd.concat(parts, ignore_index=True), cells
+
+
+def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
+    from forecast import run
+
+    observed, cells = _all_observed()
+    T = observed.date.max()
+    forced = {"slowdown": "glm", "dark_small": "ewma"}
+    expected, report = run(observed, cells, T, CFG, str(tmp_path / "D.md"), "2026-11-28 10:00", forced)
+    assert list(expected.columns) == EXPECTED_COLUMNS
+    folds_by_type = expected.groupby("event_type").fold.nunique()
+    assert folds_by_type["slowdown"] == 13 and folds_by_type["dark_small"] == 7  # fold 0 + K
+    assert set(expected.groupby("event_type").model.unique().map(tuple)) == {("glm",), ("ewma",)}
+    assert (expected.fold == 0).sum() == 2 * len(evaluation_split(T).test(observed[(observed.level == 2000) & (observed.event_type == "slowdown")]))
+    assert report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()  # forced: nothing recorded
+    assert (report.nb2_alpha < 0.1).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
+    print(report.round(3).to_string())
+
+
+@pytest.mark.xfail(strict=True, reason="choose_baseline refuses NaN skill until the zero-rate gap is fixed")
+def test_stage_run_chooses_a_baseline_unforced(tmp_path):
+    from forecast import run
+
+    observed, cells = _all_observed()
+    run(observed, cells, observed.date.max(), CFG, str(tmp_path / "D.md"), "2026-11-28 10:00")

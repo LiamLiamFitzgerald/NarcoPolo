@@ -12,7 +12,7 @@ import pandas as pd
 import statsmodels.api as sm
 from scipy import stats
 
-from forecast._stand_in import Split, parent
+from forecast._stand_in import Split, folds, parent
 
 _ID = ["cell_id", "date"]
 
@@ -81,14 +81,19 @@ def _xb(beta: pd.Series, rows: pd.DataFrame) -> pd.Series:
     return rows[beta.index].to_numpy() @ beta.to_numpy()
 
 
-def fit_glm(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.Series, float]:
-    """Quasi-Poisson GLM on 10 km rows with E > 0, offset log E. Returns (beta, phi)."""
+def _fit_rows(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+    """Training rows with E > 0 and known covariates, and the columns that can be fitted."""
     split.assert_train(train10)
     rows = _with_x(train10[train10["exposure"] > 0], X10)
     cols = [c for c in X10.columns if c not in _ID]
     rows = rows.dropna(subset=cols)
     # a column with no variation in training (e.g. no missing inshore anywhere) can't be fitted
-    cols = [c for c in cols if c == "intercept" or rows[c].nunique() > 1]
+    return rows, [c for c in cols if c == "intercept" or rows[c].nunique() > 1]
+
+
+def fit_glm(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> tuple[pd.Series, float]:
+    """Quasi-Poisson GLM on 10 km rows with E > 0, offset log E. Returns (beta, phi)."""
+    rows, cols = _fit_rows(split, train10, X10)
     res = sm.GLM(
         rows["count"],
         rows[cols],
@@ -105,6 +110,18 @@ def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
         return pd.Series(1.0, index=O.index)
     a = (M**2).sum() / denom
     return (a + O) / (a + M)
+
+
+def nb2_alpha(split: Split, train10: pd.DataFrame, X10: pd.DataFrame) -> float:
+    """NB2 fit on the same rows as fit_glm, as a check: variance = mu + alpha x mu^2.
+
+    alpha near 0 agrees with phi near 1; a large alpha alongside phi near 1 means they disagree.
+    """
+    rows, cols = _fit_rows(split, train10, X10)
+    res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
+        disp=0
+    )
+    return float(res.params["alpha"])
 
 
 def predict_glm(beta: pd.Series, theta: pd.Series, rows2: pd.DataFrame) -> pd.Series:
@@ -208,7 +225,9 @@ def forecast_window(
     return expected_rows(model, evaluation_split(T), 0, frames, delta, min_se, level)
 
 
-def choose_baseline(event_type: str, skills: dict[str, pd.DataFrame], decisions: str) -> str:
+def choose_baseline(
+    event_type: str, skills: dict[str, pd.DataFrame], decisions: str, when: str
+) -> str:
     """Keep the model with the higher mean backtest skill and append the choice to DECISIONS.md.
 
     Refuses to choose on NaN or infinite skill, so a broken backtest can't be recorded as a win.
@@ -223,7 +242,8 @@ def choose_baseline(event_type: str, skills: dict[str, pd.DataFrame], decisions:
         for n, t in skills.items()
     )
     with open(decisions, "a", encoding="utf-8") as f:
-        f.write(f"- P5 baseline for {event_type}: {best} (walk-forward skill {ranges})\n")
+        # DECISIONS.md format: YYYY-MM-DD HH:MM · who · decision · why
+        f.write(f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n")
     return best
 
 
@@ -250,3 +270,67 @@ def backtest(
         d_flat = poisson_deviance(test["count"][keep], flat[keep])
         out.append({"fold": k, "skill": 1 - d_model / d_flat})
     return pd.DataFrame(out)
+
+
+def run(
+    observed: pd.DataFrame,
+    cells: pd.DataFrame,
+    T: pd.Timestamp,
+    cfg: dict,
+    decisions: str,
+    when: str,
+    baseline: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The whole forecast stage for both event types. Returns (expected rows, report).
+
+    expected: fold 0 (evaluation window) plus every backtest fold, all from the chosen model.
+    report: per type and model, backtest skill mean/min/max, phi and the NB2 alpha check.
+    baseline forces a model per type (skips choose_baseline), e.g. while backtest skill is broken.
+    shortcut: returns frames; once core/io exists this writes forecast/expected.parquet.
+    """
+    n_folds = {"slowdown": cfg["n_folds_slowdown"], "dark_small": cfg["n_folds_small"]}
+    params = (cfg["ewma_delta"], cfg["ewma_min_se"], cfg["interval"])
+    expected, report = [], []
+    for event_type, k in n_folds.items():
+        f = observed[observed["event_type"] == event_type]
+        f2, f10 = f[f["level"] == 2000], f[f["level"] == 10000]
+        dates = pd.DatetimeIndex(sorted(f2["date"].unique()))
+        X2 = design_matrix(cells[cells["level"] == 2000], dates, event_type)
+        X10 = design_matrix(cells[cells["level"] == 10000], dates, event_type)
+        frames = (f2, f10, X2, X10)
+        fs = folds(T, k, cfg["embargo_days"], cfg["test_days"])
+
+        fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
+
+        def model_fn(name: str) -> Callable[[Split], pd.Series]:
+            def predict(split: Split) -> pd.Series:
+                fold = fs.index(split) + 1
+                rows = expected_rows(name, split, fold, frames, *params)
+                fold_rows[(name, fold)] = rows
+                return rows["mu"].set_axis(split.test(f2).index)
+
+            return predict
+
+        skills = {name: backtest(f2, fs, model_fn(name)) for name in ("ewma", "glm")}
+        chosen = (baseline or {}).get(event_type) or choose_baseline(
+            event_type, skills, decisions, when
+        )
+        window = forecast_window(chosen, T, frames, *params)
+        expected += [window, *(fold_rows[(chosen, i)] for i in range(1, k + 1))]
+
+        prod = evaluation_split(T)
+        alpha = nb2_alpha(prod, prod.train(f10), X10)
+        for name, table in skills.items():
+            report.append(
+                {
+                    "event_type": event_type,
+                    "model": name,
+                    "chosen": name == chosen,
+                    "skill_mean": table["skill"].mean(),
+                    "skill_min": table["skill"].min(),
+                    "skill_max": table["skill"].max(),
+                    "phi": window["phi"].iloc[0],
+                    "nb2_alpha": alpha,
+                }
+            )
+    return pd.concat(expected, ignore_index=True), pd.DataFrame(report)

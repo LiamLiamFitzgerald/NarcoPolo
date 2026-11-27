@@ -8,7 +8,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | P2 ingest | — | — | — |
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
-| P5 aggregate, forecast | — | — | — |
+| P5 aggregate, forecast | Full stage runs on a stand-in simulator (core/sim placeholders): observed, EWMA, GLM + EB, NB intervals, fold 0 + backtest rows | — | #58 (lane bias, zero rates break backtest skill); core/, sim/, integration from P1 |
 | P6 detectors, fuse | — | — | — |
 | P7 patrol, export, dashboard | — | — | — |
 

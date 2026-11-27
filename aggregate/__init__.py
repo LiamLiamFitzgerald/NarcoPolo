@@ -57,6 +57,23 @@ def build_observed(counts: pd.DataFrame, exposure: pd.DataFrame) -> Observed:
     return Observed(frame)  # raises if an event landed where we never looked
 
 
+def run(
+    events: pd.DataFrame,
+    exposure: pd.DataFrame,
+    cells: pd.DataFrame,
+    dates: pd.DatetimeIndex,
+    slowdown_last_date: pd.Timestamp,
+) -> Observed:
+    """The whole aggregate stage: 2 km rows plus their 10 km roll-up, both event types.
+
+    shortcut: returns the frame; once core/io exists this writes aggregate/observed.parquet.
+    """
+    fine = build_observed(
+        soft_counts(events), exposure_rows(exposure, cells, dates, slowdown_last_date)
+    )
+    return Observed(pd.concat([fine.frame, to_coarse(fine).frame], ignore_index=True))
+
+
 def to_coarse(observed: Observed) -> Observed:
     """10 km cells: sum C and E over the 25 children."""
     f = observed.frame.assign(cell_id=observed.frame["cell_id"].map(parent))
