@@ -31,10 +31,11 @@ _INPUTS = (
     "reference/cells",
     "reference/piers",
 )
-# Stand-alone 9-digit numbers, IMO numbers, call-sign / MMSI fields, the internal ship_key (A12:
-# all times are ISO strings, so they never look like a bare 9-digit number).
+# Stand-alone 9-digit numbers (not part of a word, so the end of a hex hash such as the config hash
+# is not an MMSI), IMO numbers, call-sign / MMSI fields, the internal ship_key (A12: all times are
+# ISO strings, so they never look like a bare 9-digit number).
 _IDENTITY = re.compile(
-    r"(?<![\d.])\d{9}(?![\d.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign|\bmmsi\b|ship_key",
+    r"(?<![\w.])\d{9}(?![\w.])|\bIMO[\s:#-]*\d{7}\b|call[\s_-]?sign|\bmmsi\b|ship_key",
     re.IGNORECASE,
 )
 
@@ -139,15 +140,58 @@ def _lonlat(x: Any, y: Any) -> dict:
     return {"lon": round(float(lon), 5), "lat": round(float(lat), 5)}
 
 
-def build_snapshot(
-    *,
-    plan_path: Path | None = None,
-    validation_path: Path | None = None,
-    out: Path | None = None,
-) -> dict:
-    """Read the stage files and patrol/plan.json, write export/snapshot.json (under the data root)."""
+def _sites(df: pd.DataFrame) -> list[dict]:
+    return [
+        {
+            "id": r["site_id"],
+            **_lonlat(r["x_m"], r["y_m"]),
+            "S": _num(r["S"]),
+            "p_perm": _num(r["p_perm"]),
+            "bh_flag": bool(r["bh_flag"]),
+            "recurrence": int(r["recurrence"]),
+            "agreement": int(r["agreement"]),
+            "followup_unobserved": int(r["followup_unobserved"]),
+            "reasons": [str(x) for x in r["reasons"]],
+            "top_piers": [str(x) for x in r["top_piers"]][:3],
+        }
+        for r in df.sort_values("S", ascending=False).to_dict("records")
+    ]
+
+
+def _piers(df: pd.DataFrame) -> list[dict]:
+    """Road-access piers only. The pier score is in no stage file yet (contract issue 88)."""
+    return [
+        {
+            "id": r["pier_id"],
+            "name": r["name"],
+            **_lonlat(r["geometry"].x, r["geometry"].y),
+            "P_j": None,  # TODO(P6): contract issue 88
+        }
+        for r in df[df["road_access"]].to_dict("records")
+    ]
+
+
+def _plan(plan: dict) -> dict:
+    """Stops get WGS 84 positions for the map; x_m and y_m stay in patrol/plan.json."""
+    return {
+        asset: [
+            {
+                "id": s["id"],
+                "arrival_utc": s["arrival_utc"],
+                "dwell_h": s["dwell_h"],
+                **_lonlat(s["x_m"], s["y_m"]),
+                **{k: s[k] for k in ("exploration", "not_significant", "stand_in") if k in s},
+            }
+            for s in stops
+        ]
+        for asset, stops in plan.items()
+    }
+
+
+def build_snapshot(*, validation_path: Path | None = None) -> dict:
+    """Read the stage files and patrol/plan.json, write export/snapshot.json (under the data root)
+    through core.io, which checks it with core.schemas.check_json and stamps it."""
     cfg, cfg_hash = load(io.CONFIG_PATH)
-    root = _data_root()
     t = io.read_snapshot()["T"]
     f = {n: io.read_stage(n) for n in _INPUTS}
 
@@ -161,18 +205,15 @@ def build_snapshot(
     }
 
     weeks = _weeks(t)
-    sites = f["fuse/sites"].sort_values("S", ascending=False)
-    piers = f["reference/piers"]
-    piers = piers[piers["road_access"]]
-    plan = json.loads((plan_path or root / "patrol" / "plan.json").read_text())
     vpath = (
         validation_path
         or Path(os.environ.get("NARCO_REPORTS", io.ROOT / "reports")) / "validation.json"
     )
+    label = data_label(_provenance(n) for n in _INPUTS)
 
     snap = {
         "meta": {
-            "data_label": data_label(_provenance(n) for n in _INPUTS),
+            "data_label": label,
             "generated_utc": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "region": dict(cfg["region_bbox"]),
             "T": t.isoformat(),
@@ -190,51 +231,15 @@ def build_snapshot(
                 for w in weeks
             },
         },
-        "sites": [
-            {
-                "id": r.site_id,
-                **_lonlat(r.x_m, r.y_m),
-                "S": _num(r.S),
-                "p_perm": _num(r.p_perm),
-                "bh_flag": bool(r.bh_flag),
-                "recurrence": int(r.recurrence),
-                "agreement": int(r.agreement),
-                "followup_unobserved": int(r.followup_unobserved),
-                "reasons": [str(x) for x in r.reasons],
-                "top_piers": [str(x) for x in r.top_piers][:3],
-            }
-            for r in sites.itertuples()
-        ],
-        "piers": [
-            {
-                "id": r.pier_id,
-                "name": r.name,
-                **_lonlat(r.geometry.x, r.geometry.y),
-                "P_j": None,  # TODO(P6): pier score is in no stage file yet (contract issue 88)
-            }
-            for r in piers.itertuples()
-        ],
-        "plan": {
-            asset: [
-                {
-                    "id": s["id"],
-                    "arrival_utc": s["arrival_utc"],
-                    "dwell_h": s["dwell_h"],
-                    **_lonlat(s["x_m"], s["y_m"]),
-                    **{k: s[k] for k in ("exploration", "not_significant") if k in s},
-                }
-                for s in stops
-            ]
-            for asset, stops in plan.items()
-        },
-        "validation": json.loads(vpath.read_text())
-        if vpath.exists()
-        else None,  # make validate not run
+        "sites": _sites(f["fuse/sites"]),
+        "piers": _piers(f["reference/piers"]),
+        "plan": _plan(io.read_json_stage("patrol/plan")),
+        "validation": json.loads(vpath.read_text()) if vpath.exists() else None,  # not run yet
     }
     scan_identities(snap)
-    path = out or root / "export" / "snapshot.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(snap, allow_nan=False))
+    # the stamp only decides which config keys make the file stale: a mixed snapshot uses the
+    # simulated set, which is a superset of the real one
+    io.write_json_stage("export/snapshot", snap, "real" if label == "real" else "simulated")
     return snap
 
 

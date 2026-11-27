@@ -24,7 +24,7 @@ for folder in sys.argv[1:]:
     for f in root.rglob("*"):
         if not f.is_file() or f.suffix not in SUFFIXES or "tests" in f.parts:
             continue
-        text = f.read_text(errors="ignore")
+        text = f.read_text(encoding="utf-8", errors="ignore")
         for name, pat in PATTERNS.items():
             for m in pat.finditer(text):
                 hits.append(f"{f}: {name}: {m.group(0)!r}")

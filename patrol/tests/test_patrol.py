@@ -8,13 +8,17 @@ import pytest
 
 from core import io
 from core.config import load
+from core.crs import to_utm
+from core.schemas import check_json
 from export import build_snapshot
 from patrol import (
     KN_MS,
+    _base,
     _greedy_inputs,
     _plan_asset,
     _Sea,
     _sea_from_cells,
+    _start,
     air_hours,
     aircraft_plan,
     exploration_pick,
@@ -142,10 +146,9 @@ def test_plan_labels_unflagged_fill_sites_and_one_exploration_visit():
     assert sum(s.get("exploration", False) for s in stops) == 1
     explored = next(s["id"] for s in stops if s.get("exploration"))
     assert explored in set(sites["site_id"].iloc[3:15])  # ranks 4 to 15
+    flagged = dict(zip(sites["site_id"], sites["bh_flag"], strict=True))
     for s in stops[1:-1]:  # unflagged sites are labelled "not significant"
-        assert s.get("not_significant", False) == (
-            not sites.set_index("site_id").loc[s["id"], "bh_flag"]
-        )
+        assert s.get("not_significant", False) == (not flagged[s["id"]])
     assert [s["arrival_utc"] for s in stops] == sorted(s["arrival_utc"] for s in stops)
 
 
@@ -205,3 +208,30 @@ def test_patrol_plan_feeds_the_export(world):
     assert date.fromisoformat(snap["meta"]["T"]) < date.fromisoformat(
         plan["ship"][0]["arrival_utc"][:10]
     )
+
+
+def test_base_and_start_come_from_config_never_from_a_guess(world, monkeypatch):
+    import patrol
+
+    (x, y), stand_in = _base({"base_port": {"lon": -8.0, "lat": 51.5}})
+    ex, ey = to_utm(-8.0, 51.5)
+    assert (x, y) == pytest.approx((float(ex), float(ey))) and not stand_in
+    start, stand_in = _start({"patrol_start_hour_utc": 6})
+    assert start == pd.Timestamp("2026-11-28 06:00", tz="UTC") and not stand_in
+    # no config: simulated data gets a stand-in (the first road pier), flagged as such
+    (px, py), stand_in = _base({})
+    piers = io.read_stage("reference/piers")
+    first = piers[piers["road_access"]].sort_values("pier_id").geometry.iloc[0]
+    assert (px, py) == (first.x, first.y) and stand_in
+    assert _start({})[0] == pd.Timestamp("2026-11-28 00:00", tz="UTC") and _start({})[1]
+    # no config: real data refuses to run
+    monkeypatch.setattr(patrol, "_provenance", lambda name: "real")
+    for call in (_base, _start):
+        with pytest.raises(ValueError, match="issue 103"):
+            call({})
+
+
+def test_plans_with_stand_ins_say_so_and_pass_the_contract(world):
+    _, plan = world
+    assert all(s.get("stand_in") for a in plan.values() for s in (a[0], a[-1]))
+    check_json("patrol/plan", io.read_json_stage("patrol/plan"))

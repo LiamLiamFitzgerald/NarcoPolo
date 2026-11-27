@@ -2,10 +2,11 @@
 Orienteering by greedy insertion and 2-opt (docs/specs/P7.md). Ships always use sea distances."""
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -28,8 +29,6 @@ SHIP_BUDGET_H, SHIP_DWELL_H = 24, 1
 AIR_BUDGET_H, AIR_DWELL_H = 4, 0.2
 N_BOOT = 200
 SEA_RES_M = 250  # the spec's sea_250m.tif resolution
-# TODO(P7): base_port belongs in config.yaml (issue 89). Haulbowline, Cork Harbour: approximate.
-HAULBOWLINE_LONLAT = (-8.32, 51.84)
 
 
 @dataclass(frozen=True)
@@ -179,6 +178,7 @@ def _plan_asset(
     dwell_h: float,
     start: pd.Timestamp,
     explore_seed: int | None = None,
+    stand_in: bool = False,
 ) -> list[dict]:
     cand = _greedy_inputs(sites).reset_index(drop=True)
     nodes = [
@@ -207,6 +207,10 @@ def _plan_asset(
             "x_m": nodes[i]["x_m"],
             "y_m": nodes[i]["y_m"],
         }
+        if i == 0 and stand_in:
+            stop["stand_in"] = (
+                True  # base position or start time is a simulated stand-in (issue 103)
+            )
         if i and not cand["bh_flag"][i - 1]:
             stop["not_significant"] = True
         if i == explore:
@@ -215,7 +219,7 @@ def _plan_asset(
     return stops
 
 
-def _provenance(name: str) -> str:
+def _provenance(name: str) -> Literal["simulated", "real"]:
     """shortcut: reads core.io's stamp layout directly; ask P1 for a public read_stamp (issue 89)."""
     path = io.stage_path(name)
     if name.startswith("reference/"):
@@ -225,52 +229,68 @@ def _provenance(name: str) -> str:
     return json.loads(raw)["provenance"]
 
 
-def _base() -> tuple[float, float]:
-    """Haulbowline on real data; on simulated data (its map may not reach Cork Harbour) the
-    road-access pier nearest to it."""
-    hx, hy = (float(v) for v in to_utm(*HAULBOWLINE_LONLAT))
+def _base(cfg: Mapping[str, Any]) -> tuple[tuple[float, float], bool]:
+    """((x_m, y_m), stand_in). The base is `base_port` {lon, lat} in config.yaml (the spec: Haulbowline,
+    Cork Harbour). It is not there yet (issue 103), and P7 does not guess a position: simulated data uses
+    the first road-access pier as a stand-in, real data refuses to run."""
+    bp = cfg.get("base_port")
+    if bp:
+        x, y = to_utm(bp["lon"], bp["lat"])
+        return (float(x), float(y)), False
     if _provenance("reference/piers") == "real":
-        return hx, hy
+        raise ValueError("base_port {lon, lat} is not in config.yaml: see issue 103")
     piers = io.read_stage("reference/piers")
-    piers = piers[piers["road_access"]]
-    d = np.hypot(piers.geometry.x - hx, piers.geometry.y - hy)
-    p = piers.geometry.iloc[int(np.argmin(d))]
-    return float(p.x), float(p.y)
+    p = piers[piers["road_access"]].sort_values("pier_id").geometry.iloc[0]
+    return (float(p.x), float(p.y)), True
 
 
-def _write(asset: str, stops: list[dict], path: Path | None) -> dict:
-    path = path or _data_root() / "patrol" / "plan.json"
-    plan = json.loads(path.read_text()) if path.exists() else {}
+def _start(cfg: Mapping[str, Any]) -> tuple[pd.Timestamp, bool]:
+    """(start, stand_in). The plan starts `patrol_start_hour_utc` hours into the day after T; the spec
+    gives no start time (issue 103), so simulated data starts at 00:00 as a stand-in and real data refuses."""
+    hour = cfg.get("patrol_start_hour_utc")
+    stand_in = hour is None
+    if stand_in:
+        if _provenance("fuse/sites") == "real":
+            raise ValueError("patrol_start_hour_utc is not in config.yaml: see issue 103")
+        hour = 0
+    start = pd.Timestamp(io.read_snapshot()["T"], tz="UTC") + pd.Timedelta(days=1, hours=hour)
+    return start, stand_in
+
+
+def _write(asset: str, stops: list[dict]) -> dict:
+    try:
+        plan = io.read_json_stage("patrol/plan")
+    except ValueError:  # no plan yet, or one made with an older config: start again
+        plan = {}
     plan[asset] = stops
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(plan, indent=1))
+    io.write_json_stage("patrol/plan", plan, _provenance("fuse/sites"))
     return plan
 
 
-def _start() -> pd.Timestamp:
-    """TODO(P7): the plan starts at 00:00 UTC on the day after T; the spec gives no start time."""
-    return pd.Timestamp(io.read_snapshot()["T"], tz="UTC") + pd.Timedelta(days=1)
-
-
-def ship_plan(*, path: Path | None = None) -> dict:
+def ship_plan() -> dict:
     """Ship route over the top sites, with one exploration visit; merged into patrol/plan.json."""
-    sites = io.read_stage("fuse/sites")
+    cfg, _ = load(io.CONFIG_PATH)
     sea = _sea_from_cells(io.read_stage("reference/cells"))
-    seed = int(load(io.CONFIG_PATH)[0]["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
+    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
     stops = _plan_asset(
-        sites, _base(), lambda n: sea_hours(n, sea, SHIP_KN),
-        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=_start(), explore_seed=seed,
+        io.read_stage("fuse/sites"), base, lambda n: sea_hours(n, sea, SHIP_KN),
+        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=start, explore_seed=seed,
+        stand_in=base_stand_in or start_stand_in,
     )  # fmt: skip
-    return _write("ship", stops, path)
+    return _write("ship", stops)
 
 
-def aircraft_plan(*, path: Path | None = None) -> dict:
+def aircraft_plan() -> dict:
     """The same planner with straight-line distances and no exploration slot."""
+    cfg, _ = load(io.CONFIG_PATH)
+    (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
     stops = _plan_asset(
-        io.read_stage("fuse/sites"), _base(), lambda n: air_hours(n, AIR_KN),
-        budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=_start(),
+        io.read_stage("fuse/sites"), base, lambda n: air_hours(n, AIR_KN),
+        budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=start,
+        stand_in=base_stand_in or start_stand_in,
     )  # fmt: skip
-    return _write("aircraft", stops, path)
+    return _write("aircraft", stops)
 
 
 def run() -> None:
