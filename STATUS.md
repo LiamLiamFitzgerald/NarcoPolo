@@ -5,7 +5,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 | Module | Simulator | Real data | Blocked |
 | --- | --- | --- | --- |
 | P1 core, sim, validate, CI | core, sim (all raw files), make targets, validate: 8 of 10 checks incl. backtest; #58, #74, #90 settled | n/a until P2 data | validate injection and null tests (prompts A, B) wait for P4 detect and P6 fuse; #117 (CI on every module) waits for other modules' type errors |
-| P2 ingest | `ingest/cache` (request_key, cached, record) tested, manifest matches sim/raw.py, PR #53 | — | #21 stubs still open |
+| P2 ingest | `ingest/cache` (PR #53); offline stubs for probe, s1, gfw, era5, osm, static, run write sim-shaped raw/ files recorded with a licence, `fetch_all` exported (#21) | — | real fetchers not started; P2 tests not in pytest testpaths (P1, see #117) |
 | P3 reference, coverage | — | — | — |
 | P4 detect, match | — | — | — |
 | P5 aggregate, forecast | aggregate.run() and forecast.run() on core.io and snapshot.json; observed, EWMA, GLM + EB, NB intervals, fold 0 + backtest rows (PR #66) | waits for P3 cells/coverage and P4 events | #90 (sim small-boat events on rough passes); #58 (lane bias, zero rates); #69 (P5 config keys, testpaths); #74 |
