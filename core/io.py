@@ -29,6 +29,11 @@ def stage_path(name: str) -> Path:
     return root / ("reference/layers.gpkg" if name in _GPKG else f"{name}.parquet")
 
 
+def raw_root() -> Path:
+    """raw/ (or $NARCO_RAW): the shape of what P2 downloads, which the simulator imitates."""
+    return Path(os.environ.get("NARCO_RAW", ROOT / "raw"))
+
+
 def truth_path() -> Path:
     """sim/truth.parquet under the data root; only validate reads it."""
     return stage_path("aggregate/observed").parent.parent / "sim" / "truth.parquet"
