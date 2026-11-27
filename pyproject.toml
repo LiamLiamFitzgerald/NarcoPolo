@@ -12,9 +12,12 @@ line-length = 100
 extend-exclude = ["scripts", ".claude"]  # tooling scripts, not pipeline code
 
 [tool.pytest.ini_options]
-testpaths = ["core/tests", "sim/tests"]
+# every module folder, so each module's tests/ runs in make test and CI (#96)
+testpaths = ["core", "sim", "validate", "ingest", "reference", "coverage", "detect", "match",
+             "aggregate", "forecast", "detectors", "fuse", "patrol", "export", "dashboard"]
 pythonpath = ["."]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
-include = ["core", "sim"]
+include = ["core", "sim", "validate", "ingest", "reference", "coverage", "detect", "match",
+           "aggregate", "forecast", "detectors", "fuse", "patrol", "export", "dashboard"]

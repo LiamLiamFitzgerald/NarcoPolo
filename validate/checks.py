@@ -5,7 +5,7 @@ import math
 import os
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -219,7 +219,7 @@ def run() -> Path:
     det = io.read_stage("detect/detections")
     truth = pd.read_parquet(io.truth_path())
     exposure = io.read_stage("coverage/exposure")
-    calm = exposure.groupby("pass_id")["calm"].first().to_dict()
+    calm = cast("dict[str, bool]", exposure.groupby("pass_id")["calm"].first().to_dict())
     recall = recall_curve(det, truth, calm)
     real = det[~det["ghost"]]
     boats = truth[(truth["kind"] != "drop") & (truth["pass_index"] >= 0)].assign(

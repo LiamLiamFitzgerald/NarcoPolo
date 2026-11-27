@@ -1,4 +1,5 @@
 import json
+from typing import cast
 
 import numpy as np
 import pandas as pd
@@ -58,7 +59,10 @@ def test_interval_coverage_of_the_true_poisson_rates_on_slowdowns(sim_world):
 def test_recall_curve_counts_every_boat_in_a_footprint(sim_world):
     truth = pd.read_parquet(io.truth_path())
     det = io.read_stage("detect/detections")
-    calm = io.read_stage("coverage/exposure").groupby("pass_id")["calm"].first().to_dict()
+    calm = cast(
+        "dict[str, bool]",
+        io.read_stage("coverage/exposure").groupby("pass_id")["calm"].first().to_dict(),
+    )
     r = recall_curve(det, truth, calm)
     inside = truth[
         (truth["kind"] != "drop") & (truth["pass_index"] >= 0) & (truth["length_m"] < 24)
