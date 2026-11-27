@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from core import io
+from core.config import load
 from validate.backtest import backtest
 from validate.injection import injection_test
 from validate.null import null_test
@@ -173,6 +174,16 @@ def _clean(x: Any) -> Any:
     return None if isinstance(x, float) and math.isnan(x) else x
 
 
+def _injection() -> pd.DataFrame:
+    """injection_test on the first chips in raw/s1, with the levels and counts from config `validate:`."""
+    cfg, _ = load(io.CONFIG_PATH)
+    v = cfg["validate"]
+    ids = sorted(p.stem for p in (io.raw_root() / "s1").glob("*.json"))[: v["injection_passes"]]
+    return injection_test(
+        ids, list(v["injection_brightness_db"]), v["injection_n_per_pass"], cfg["seed"]
+    )
+
+
 def write_report(results: Mapping[str, Any]) -> Path:
     """reports/validation.json with the keys P7 reads; a missing key becomes an empty result."""
     out = {
@@ -223,7 +234,7 @@ def run() -> Path:
             "brier": brier,
             "interval_coverage": coverage,
             "recovery": simulator_recovery(),
-            "injection": injection_test([], [], 0, 0),
+            "injection": _injection(),
             "null": null_test(),
             "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
         }

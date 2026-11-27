@@ -17,7 +17,7 @@ _SITE_COLUMNS = {
 }  # fmt: skip
 _CELL_COLUMNS = {
     "cell_id": str, "date": object, "event_type": str, "p_mid": float, "bh_flag": bool, "gi_z": float,
-    "cusum_s": float, "context": float, "U": float, "agreement": int,
+    "cusum_s": float, "context": float, "U": float, "y": float, "y_week": float, "agreement": int,
 }  # fmt: skip
 
 

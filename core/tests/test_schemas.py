@@ -38,6 +38,7 @@ VALID = {
         hs_m=1.0,
         calm=True,
         exposure_small=0.5,
+        post_storm=False,
     ),
     "detect/detections": row(
         det_id="d1",
@@ -94,6 +95,8 @@ VALID = {
         cusum_s=0.0,
         context=0.5,
         U=0.9,
+        y=1.4,
+        y_week=1.1,
         agreement=2,
     ),
     "fuse/sites": row(
@@ -110,6 +113,8 @@ VALID = {
         reasons=["recurs"],
         top_piers=["p1"],
     ),
+    "fuse/piers": row(pier_id="p1", P_j=0.3),
+    "fuse/links": row(site_id="s1", L=0.6, age_days=4.0),
 }
 
 

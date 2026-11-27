@@ -164,6 +164,17 @@ def _weekly_gi(m: pd.DataFrame) -> np.ndarray:
     )
 
 
+def _weekly_y(m: pd.DataFrame) -> np.ndarray:
+    """Each row gets its cell's weekly y = (sum C + 0.5) / (sum mu + 0.5) over the same ISO week as gi_z (#87)."""
+    week = pd.to_datetime(m["date"]).dt.to_period("W-SUN")
+    sums = (
+        m.assign(week=week)
+        .groupby(["event_type", "week", "cell_id"])[["count", "mu"]]
+        .transform("sum")
+    )
+    return ((sums["count"] + 0.5) / (sums["mu"] + 0.5)).to_numpy()
+
+
 def run_cells() -> None:
     """aggregate/observed + forecast/expected -> fuse/cells.parquet, observed rows (E > 0) in the evaluation
     window only. CUSUM runs over all observed history so a build-up before the window still counts."""
@@ -194,6 +205,8 @@ def run_cells() -> None:
         gi_z=_weekly_gi(m),
         cusum_s=m["cusum_s"],
         context=np.where(small, context_small(m, post_storm), context_slowdown(m, hours)),
+        y=((m["count"] + 0.5) / (m["mu"] + 0.5)).to_numpy(),  # #87
+        y_week=_weekly_y(m),
     )
     scores["U"], scores["agreement"] = fuse(scores)
     io.write_stage("fuse/cells", scores, _provenance("aggregate/observed"))  # type: ignore[arg-type]
