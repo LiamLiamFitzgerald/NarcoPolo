@@ -169,6 +169,10 @@ def read_stage(name: str) -> pd.DataFrame:
     _stale(load(CONFIG_PATH)[0], name, stamp)
     frame = check(name, read())
     _check_cells_exist(name, frame)
+    if (
+        "date" in frame.columns
+    ):  # one type for every reader: midnight timestamps, whatever the writer used
+        frame["date"] = pd.to_datetime(frame["date"])
     return frame
 
 
