@@ -30,6 +30,16 @@ def stage_path(name: str) -> Path:
     return root / ("reference/layers.gpkg" if name in _GPKG else f"{name}.parquet")
 
 
+RASTERS = ("reference/sea_250m", "reference/land_mask_10m", "reference/static_mask_10m")
+
+
+def raster_path(name: str) -> Path:
+    """Where P3 writes and P4/P7 read the reference rasters (#85); check them with core.schemas.check_raster."""
+    if name not in RASTERS:
+        raise KeyError(f"unknown raster {name!r}")
+    return stage_path("aggregate/observed").parent.parent / f"{name}.tif"
+
+
 def raw_root() -> Path:
     """raw/ (or $NARCO_RAW): the shape of what P2 downloads, which the simulator imitates."""
     return Path(os.environ.get("NARCO_RAW", ROOT / "raw"))

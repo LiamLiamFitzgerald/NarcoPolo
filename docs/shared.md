@@ -134,13 +134,15 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | `reference/layers.gpkg` piers layer (P3) | `pier_id` str; `name` str; `geometry` point; `road_access` bool | tens |
 | `reference/sea_250m.tif` (P3) | uint8: 1 sea, 0 land | about 750 × 380 px (the whole bounding box, land included) |
 | `reference/travel_hours.parquet` (P3) | `cell_id`, `pier_id`, `hours` float | cells × piers, \~50k |
-| `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1 | \~60 passes × \~940 cells, \~56k |
+| `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1, `post_storm` bool (≥ 24 h of hs > 2.5 m in the 72 h before the pass, A9) | \~60 passes × \~940 cells, \~56k |
 | `detect/detections.parquet` (P4) | `det_id`, `pass_id`, `time_utc`, `x_m`, `y_m`, `peak_ratio_vv_db`, `peak_ratio_vh_db`, `pol_agree` bool, `n_px` int, `size_class` {small, medium, large}, `ghost` bool, `p_boat` float 0–1 | tens to hundreds per pass |
 | `match/events.parquet` (P4) | `event_id`, `event_type` {dark\_small, slowdown}, `time_utc`, `x_m`, `y_m`, `cell_id`, `p` float 0–1, `duration_min` (slowdowns), `ship_key` (salted hash, internal only), `matched` bool | thousands |
 | `aggregate/observed.parquet` (P5) | `cell_id`, `level`, `date`, `event_type`, `count` float ≥ 0, `exposure` float ≥ 0 | \~690k slowdown + \~85k small, \~770k |
 | `forecast/expected.parquet` (P5) | `cell_id`, `date`, `event_type`, `mu` float, `phi` float, `lo90`, `hi90`, `model` str, `fold` int | same as observed |
-| `fuse/cells.parquet` (P6) | `cell_id`, `date`, `event_type`, `p_mid`, `bh_flag` bool, `gi_z`, `cusum_s`, `context` 0–1, `U` 0–1, `agreement` 0–4 | same as observed, observed rows only |
+| `fuse/cells.parquet` (P6) | `cell_id`, `date`, `event_type`, `p_mid`, `bh_flag` bool, `gi_z`, `cusum_s`, `context` 0–1, `U` 0–1, `y` float ≥ 0 = (C + 0.5) ÷ (μ + 0.5), `y_week` float ≥ 0 = (ΣC + 0.5) ÷ (Σμ + 0.5) over the cell's ISO week, `agreement` 0–4 | same as observed, observed rows only |
 | `fuse/sites.parquet` (P6) | `site_id`, `x_m`, `y_m`, `n_slowdowns`, `S` float, `p_perm`, `bh_flag` bool, `recurrence` int, `followup_unobserved` int, `agreement` 0–4, `reasons` list\[str\], `top_piers` list\[str\] | tens |
+| `fuse/piers.parquet` (P6) | `pier_id` str (in the piers layer), `P_j` float ≥ 0 = Σ over scored sites of S × exp(−T ÷ 1 h) | one row per pier |
+| `fuse/links.parquet` (P6) | `site_id` str (in fuse/sites), `L` 0–1, `age_days` float ≥ 0; per site, Σ L × 0.5^(age\_days ÷ 30) = S | one row per slowdown with a link score |
 | `patrol/plan.json` (P7) | per asset: ordered stops (site or pier id, arrival time, dwell) | small |
 | `export/snapshot.json` (P7) | see P7 | < 5 MB |
 
