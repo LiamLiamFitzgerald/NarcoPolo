@@ -39,3 +39,24 @@ def test_snapshot_date_is_the_earliest_feed():
 def test_snapshot_date_needs_every_feed():
     with pytest.raises(KeyError):
         snapshot_date({"latest": {"radar": "2026-11-25"}})
+
+
+def test_snapshot_file_round_trip(tmp_path, monkeypatch):
+    from core import io
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path))
+    m = {
+        "latest": {
+            "radar": "2026-11-25",
+            "gfw_presence": "2026-11-24",
+            "gfw_sar": "2026-11-22",
+            "era5": "2026-11-23",
+        }
+    }
+    io.write_snapshot(m)
+    snap = io.read_snapshot()
+    assert (
+        snap["T"] == date(2026, 11, 22)
+        and snap["gfw_presence"] == date(2026, 11, 24)
+        and set(snap) == {"T", "radar", "gfw_presence", "gfw_sar", "era5"}
+    )

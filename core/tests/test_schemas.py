@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 import pytest
+from shapely.geometry import Point, box
 
 from core.schemas import SCHEMAS, check
 
@@ -16,7 +17,7 @@ VALID = {
     "reference/cells": row(
         cell_id="2000_0_0",
         level=2000,
-        geometry="POLYGON EMPTY",
+        geometry=box(0, 0, 2000, 2000),
         inshore_frac=np.nan,
         lane=False,
         anchorage=False,
@@ -26,7 +27,7 @@ VALID = {
         static_frac=0.1,
         sea_frac=0.9,
     ),
-    "reference/piers": row(pier_id="p1", name="Pier", geometry="POINT EMPTY", road_access=True),
+    "reference/piers": row(pier_id="p1", name="Pier", geometry=Point(1, 1), road_access=True),
     "reference/travel_hours": row(cell_id="2000_0_0", pier_id="p1", hours=0.5),
     "coverage/exposure": row(
         cell_id="2000_0_0",

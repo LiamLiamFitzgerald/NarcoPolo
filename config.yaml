@@ -26,6 +26,16 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   drop_interval_days: 10
   pickup_prob: 0.8
   pickup_delay_days: [0.2, 4]
+  # TODO(P1): the values below are not in the spec; chosen so the simulator has a rough and a calm world
+  start_date: "2026-07-31"       # day 0; day 119 is 2026-11-27
+  rough_wind_ms: 8               # a day at or above this wind is rough (P3 owns the real calm rule)
+  rough_pickup_delay_prob: 0.7   # spec: 70% of rough-day pick-ups move to the next calm day
+  ghost_offset_m: 3000           # azimuth-ambiguity offset for simulated ghosts
+  boat_speed_kn: 15              # travel_hours = straight-line distance / this speed
+  slowdown_rate_hot: 1.0         # ship slowdowns per cell-day in the anchorage and port zones
+  slowdown_rate_cold: 0.01       # ... everywhere else
+  pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
+  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7}
 
 # A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
 # Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
