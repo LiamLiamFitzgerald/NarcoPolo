@@ -315,25 +315,26 @@ def test_undefined_skill_falls_back_to_ewma_and_records_nothing(tmp_path):
     assert not decisions.exists()
 
 
-def test_p1_simulator_runs_through_both_p5_stages(tmp_path, monkeypatch):
-    """End to end on sim.simulate's files: aggregate.stage then forecast.stage, schemas checked."""
-    from aggregate import stage as aggregate_stage
+def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatch):
+    """make all's calls on sim.simulate's files: aggregate.run() then forecast.run()."""
+    import aggregate
+    import forecast
     from core.config import load
-    from core.io import CONFIG_PATH, read_snapshot, read_stage
-    from forecast import stage as forecast_stage
+    from core.io import CONFIG_PATH, ROOT, read_stage
     from sim.simulate import simulate
 
     monkeypatch.setenv("NARCO_DATA", str(tmp_path))
     cfg, _ = load(CONFIG_PATH)
     simulate(cfg, cfg["seed"])
-    snap = read_snapshot()
-    T = pd.Timestamp(snap["T"])
-    aggregate_stage(T, pd.Timestamp(snap["gfw_presence"]), cfg, "simulated")
+    log = ROOT / "DECISIONS.md"
+    before = log.read_bytes()
+    aggregate.run()
     obs = read_stage("aggregate/observed")
     assert set(obs.level) == {2000, 10000} and set(obs.event_type) == set(TYPES)
-    forecast_stage(T, cfg, "simulated", str(tmp_path / "D.md"), "2026-11-28 10:00")
+    forecast.run()
     live = read_stage("forecast/expected").query("fold == 0")
     assert set(live.event_type) == set(TYPES) and (live.mu >= 0).all()
+    assert log.read_bytes() == before  # simulated runs record no decision
 
 
 def test_unknown_coarse_covariate_does_not_inflate_its_childrens_mu():
@@ -366,3 +367,33 @@ def test_a_cell_with_no_events_yet_gets_a_small_rate_not_zero():
     test = SPLIT.test(f2)
     seen = ((test.cell_id == "2000_3_3") & (test.exposure > 0)).to_numpy()
     assert (mu[seen] > 0).all()  # before: rate 0, so one later event made the deviance infinite
+
+
+def test_choose_baseline_records_nothing_without_a_path_and_no_repeats(tmp_path):
+    decisions = tmp_path / "DECISIONS.md"
+    glm_wins = {
+        "ewma": pd.DataFrame({"fold": [1], "skill": [0.01]}),
+        "glm": pd.DataFrame({"fold": [1], "skill": [0.05]}),
+    }
+    assert choose_baseline("slowdown", glm_wins, None, "t0") == "glm"
+    assert not decisions.exists()
+    for when in ("t1", "t2"):
+        choose_baseline("slowdown", glm_wins, str(decisions), when)
+    assert decisions.read_text().count("slowdown: glm") == 1  # same choice, written once
+    ewma_wins = {"ewma": glm_wins["glm"], "glm": glm_wins["ewma"]}
+    choose_baseline("slowdown", ewma_wins, str(decisions), "t3")
+    assert decisions.read_text().count("slowdown: ewma") == 1  # a change is written
+
+
+def test_glm_is_fitted_once_per_fold(monkeypatch):
+    import forecast
+    from forecast import forecast_all
+
+    calls = []
+    real = forecast.glm_mu
+    monkeypatch.setattr(forecast, "glm_mu", lambda *a: calls.append(1) or real(*a))
+    observed, cells = _all_observed()
+    forced = {"slowdown": "glm", "dark_small": "ewma"}
+    forecast_all(observed, cells, observed.date.max(), CFG, None, "x", forced)
+    # one fit per backtest fold plus one for the evaluation window, per event type
+    assert len(calls) == (12 + 1) + (6 + 1)

@@ -214,15 +214,17 @@ def expected_rows(
     delta: float,
     min_se: float,
     level: float,
+    glm: tuple[pd.Series, float] | None = None,
 ) -> pd.DataFrame:
     """Expected rows for split.test of the 2 km frame, fitted on split.train only.
 
     frames = (fine, coarse, X2, X10) for one event type. The GLM's dispersion is used for the
     EWMA's intervals too: phi describes the data, and the EWMA has no fit of its own to give one.
+    glm: this fold's (mu, phi) from glm_mu if already computed, so it isn't fitted twice.
     """
     f2, f10, X2, X10 = frames
     target = split.test(f2)
-    mu_glm, phi = glm_mu(split, split.train(f10), X10, target, X2)
+    mu_glm, phi = glm or glm_mu(split, split.train(f10), X10, target, X2)
     if model == "ewma":
         mu = ewma(split, split.train(f2), split.train(f10), target, delta, min_se)
     elif model == "glm":
@@ -258,11 +260,13 @@ def forecast_window(
 
 
 def choose_baseline(
-    event_type: str, skills: dict[str, pd.DataFrame], decisions: str, when: str
+    event_type: str, skills: dict[str, pd.DataFrame], decisions: str | None, when: str
 ) -> str:
     """Keep the model with the higher mean backtest skill and append the choice to DECISIONS.md.
 
     Refuses to choose on NaN or infinite skill, so a broken backtest can't be recorded as a win.
+    decisions=None records nothing (simulator runs); a choice equal to the last one P5 recorded
+    for this event type isn't written again, so repeated runs don't fill the log.
     """
     means = {name: t["skill"].mean() for name, t in skills.items()}
     bad = [n for n, t in skills.items() if not np.isfinite(t["skill"]).all()]
@@ -273,10 +277,24 @@ def choose_baseline(
         f"{n}: mean {means[n]:.3f}, range {t['skill'].min():.3f} to {t['skill'].max():.3f}"
         for n, t in skills.items()
     )
+    if decisions is None or _last_choice(decisions, event_type) == best:
+        return best
     with open(decisions, "a", encoding="utf-8") as f:
         # DECISIONS.md format: YYYY-MM-DD HH:MM · who · decision · why
-        f.write(f"{when} · P5 · baseline for {event_type}: {best} · walk-forward skill {ranges}\n")
+        f.write(f"{when} · P5 · {_TAG}{event_type}: {best} · walk-forward skill {ranges}\n")
     return best
+
+
+_TAG = "baseline for "
+
+
+def _last_choice(decisions: str, event_type: str) -> str | None:
+    """The model in the last line P5 wrote for this event type, if any."""
+    mark = f" · P5 · {_TAG}{event_type}: "
+    path = Path(decisions)
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    last = [ln for ln in lines if mark in ln][-1:]
+    return last[0].split(mark)[1].split(" · ")[0] if last else None
 
 
 def backtest(
@@ -316,12 +334,16 @@ def _fold_model(
     fs: list[Split],
     params: tuple[float, float, float],
     store: dict[tuple[str, int], pd.DataFrame],
+    glm_fits: dict[int, tuple[pd.Series, float]],
 ) -> Callable[[Split], pd.Series]:
-    """A backtest model that also keeps each fold's expected rows, so they're computed once."""
+    """A backtest model that keeps each fold's expected rows and GLM fit, so each is made once."""
 
     def predict(split: Split) -> pd.Series:
         fold = fs.index(split) + 1
-        rows = expected_rows(name, split, fold, frames, *params)
+        if fold not in glm_fits:
+            f2, f10, X2, X10 = frames
+            glm_fits[fold] = glm_mu(split, split.train(f10), X10, split.test(f2), X2)
+        rows = expected_rows(name, split, fold, frames, *params, glm=glm_fits[fold])
         store[(name, fold)] = rows
         return rows["mu"].set_axis(split.test(frames[0]).index)
 
@@ -333,7 +355,7 @@ def forecast_all(
     cells: pd.DataFrame,
     T: pd.Timestamp,
     cfg: Mapping[str, Any],
-    decisions: str,
+    decisions: str | None,
     when: str,
     baseline: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -361,8 +383,11 @@ def forecast_all(
         fs = folds(T.date(), k)  # core fixes the 7-day embargo and 7-day test window
 
         fold_rows: dict[tuple[str, int], pd.DataFrame] = {}
+        glm_fits: dict[int, tuple[pd.Series, float]] = {}
         skills = {
-            name: backtest(f2, fs, _fold_model(name, frames, fs, params, fold_rows), params[1])
+            name: backtest(
+                f2, fs, _fold_model(name, frames, fs, params, fold_rows, glm_fits), params[1]
+            )
             for name in ("ewma", "glm")
         }
         chosen = (baseline or {}).get(event_type) or _choose_or_default(
@@ -398,7 +423,7 @@ def stage(
     T: pd.Timestamp,
     cfg: Mapping[str, Any],
     provenance: Literal["simulated", "real"],
-    decisions: str,
+    decisions: str | None,
     when: str,
     baseline: dict[str, str] | None = None,
 ) -> tuple[Path, pd.DataFrame]:
@@ -428,7 +453,7 @@ def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
 
 
 def _choose_or_default(
-    event_type: str, skills: dict[str, pd.DataFrame], decisions: str, when: str
+    event_type: str, skills: dict[str, pd.DataFrame], decisions: str | None, when: str
 ) -> str:
     """choose_baseline, or EWMA (the spec's "build first" baseline) while skill is undefined (#58).
 
@@ -445,10 +470,7 @@ def run() -> None:
     """make all entry point: reads aggregate/observed and the cells layer, writes forecast/expected."""
     cfg, _ = load(CONFIG_PATH)
     when = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M")
-    stage(
-        pd.Timestamp(read_snapshot()["T"]),
-        cfg,
-        _provenance("aggregate/observed"),
-        str(ROOT / "DECISIONS.md"),
-        when,
-    )
+    provenance = _provenance("aggregate/observed")
+    # a choice made on simulated data isn't a team decision, so only real runs are recorded
+    decisions = str(ROOT / "DECISIONS.md") if provenance == "real" else None
+    stage(pd.Timestamp(read_snapshot()["T"]), cfg, provenance, decisions, when)
