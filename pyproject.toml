@@ -35,7 +35,9 @@ markers = ["slow: takes 10 s or more (whole simulated seasons); skipped by defau
 [tool.basedpyright]
 typeCheckingMode = "standard"
 # every module but ingest (#185), detectors and fuse (#224) and patrol (#225); each joins once clean
+# "coverage*"/"exposure*": globs, so the check passes before and after P3 moves coverage/ to exposure/ (#336);
+# TODO(P1): back to plain "exposure" once #336 merges
 include = [
-    "core", "sim", "validate", "reference", "exposure", "detect", "match", "aggregate", "forecast",
+    "core", "sim", "validate", "reference", "coverage*", "exposure*", "detect", "match", "aggregate", "forecast",
     "export", "dashboard",
 ]
