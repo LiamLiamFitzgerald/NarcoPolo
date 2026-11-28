@@ -58,7 +58,7 @@ def test_events_file_is_schema_valid_and_never_holds_the_raw_id(data):
     )
     dets = pd.DataFrame({"det_id": ["p-0"], "pass_id": "p", "time_utc": pd.Timestamp("2026-11-03T06:30Z"),
                          "x_m": 1500.0, "y_m": 1500.0, "cell_id": "2000_0_0", "size_class": "small", "p_boat": 0.4,
-                         "matched": False})  # fmt: skip
+                         "matched": False, "ghost": False})  # fmt: skip
     frames = [
         f.assign(cell_id=data) for f in (dark_small_events(dets), slow)
     ]  # a cell reference/cells has

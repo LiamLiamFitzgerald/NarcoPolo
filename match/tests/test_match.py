@@ -12,7 +12,7 @@ def _dets():
         "time_utc": [T] * 4 + [T + pd.Timedelta(days=6)],
         "x_m": [0.0, 300.0, 5000.0, 10_000.0, 0.0], "y_m": [0.0] * 5,
         "size_class": ["large", "large", "small", "medium", "small"], "p_boat": [0.9, 0.8, 0.6, 0.3, 0.5],
-        "cell_id": ["c0"] * 5,
+        "cell_id": ["c0"] * 5, "ghost": [False] * 5,
     })  # fmt: skip
 
 
@@ -47,3 +47,40 @@ def test_dark_small_events_keep_unmatched_small_and_medium():
         and (ev["event_type"] == "dark_small").all()
         and not ev["matched"].any()
     )
+
+
+def test_ghosts_never_become_dark_small_events():  # #353
+    d = _dets().assign(matched=False, ghost=[False, False, True, False, False])
+    assert "dark_small-c" not in set(dark_small_events(d)["event_id"])
+
+
+def _on(c, truth, tol_px=2):
+    """det_ids of candidates within tol_px of a truth position."""
+    d = np.hypot(c["row"].to_numpy()[:, None] - truth["row"].to_numpy(),
+                 c["col"].to_numpy()[:, None] - truth["col"].to_numpy())  # fmt: skip
+    return "dark_small-" + c["det_id"][d.min(axis=1) <= tol_px]
+
+
+def test_simulated_ship_ghost_is_dropped_and_real_boats_survive():
+    """#353: a bright ship and its planted azimuth ghost, run through the real detector, then dark_small_events."""
+    from detect.pipeline import run_pass
+    from detect.scene import to_linear
+    from detect.tests._scene import make_scene
+
+    dropped = kept = n_ghosts = n_boats = 0
+    for seed in range(5):
+        s = make_scene(seed, shape=(1200, 1200), n_boats=5, n_ships=1)
+        c = run_pass(
+            f"sim{seed}", (to_linear(s.vv), to_linear(s.vh), s.meta), masks=(s.land, s.static)
+        )
+        ev = set(dark_small_events(c.assign(matched=False, p_boat=0.5))["event_id"])
+        g, b = _on(c, s.ghosts), _on(c, s.boats)
+        n_ghosts, n_boats = n_ghosts + len(g), n_boats + len(b)
+        dropped += int((~g.isin(ev)).sum())
+        kept += int(b.isin(ev).sum())
+    assert (
+        n_ghosts > 0 and dropped / n_ghosts >= 0.8
+    )  # spec: ghosts flagged at least 80% of the time
+    assert (
+        n_boats > 0 and kept == n_boats
+    )  # a boat with no bright partner is never dropped as a ghost

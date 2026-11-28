@@ -45,10 +45,12 @@ def match(
 
 
 def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
-    """Unmatched small and medium detections -> dark_small events with p = p_boat.
+    """Unmatched small and medium detections that are not radar ghosts -> dark_small events with p = p_boat.
 
-    dets needs the matched column from match(). Logs the share of large detections that matched:
-    a sudden drop signals a matching bug, and areas where most large ships are unmatched have poor AIS.
+    dets needs the matched column from match() and detect's ghost flag. Ghosts are faint azimuth copies of a much
+    brighter target, a false-alarm source, never a boat (#353); the simulator's events leave them out too.
+    Logs the share of large detections that matched: a sudden drop signals a matching bug, and areas where most
+    large ships are unmatched have poor AIS.
     """
     large = dets["size_class"] == "large"
     if large.any():
@@ -57,7 +59,11 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
             dets.loc[large, "matched"].mean(),
             large.sum(),
         )
-    d = dets[dets["size_class"].isin(["small", "medium"]) & ~dets["matched"].astype(bool)]
+    d = dets[
+        dets["size_class"].isin(["small", "medium"])
+        & ~dets["matched"].astype(bool)
+        & ~dets["ghost"].astype(bool)
+    ]
     return pd.DataFrame({
         "event_id": "dark_small-" + d["det_id"].astype(str), "event_type": "dark_small", "time_utc": d["time_utc"],
         "x_m": d["x_m"], "y_m": d["y_m"], "cell_id": d["cell_id"], "p": d["p_boat"].astype(float),
