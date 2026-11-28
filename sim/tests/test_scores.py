@@ -69,6 +69,27 @@ def test_simulated_links_are_dated_at_their_slowdowns(tmp_path, monkeypatch):
     simulate(cfg, 1)
     links, sites = io.read_stage("fuse/links"), io.read_stage("fuse/sites")
     drops = pd.read_parquet(io.truth_path()).query("kind == 'drop'")
+    links = links[
+        links["site_id"].isin(drops["cell_id"])
+    ]  # planted sites only, not the #104 stand-ins
+    sites = sites[sites["site_id"].isin(drops["cell_id"])]
     assert len(links) == len(drops) and links["age_days"].nunique() > 1
     assert links["age_days"].between(0, cfg["sim"]["days"]).all()
     assert links["L"].sum() == sites["recurrence"].sum()  # every pick-up follows one slowdown
+
+
+def test_stand_in_sites_give_patrol_16_sites_with_the_planted_one_first(tmp_path, monkeypatch):
+    """#104: 16+ fuse/sites rows, planted first and highest on S, at least site_gap_m apart, flags mixed."""
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("NARCO_RAW", str(tmp_path / "raw"))
+    cfg = load(io.CONFIG_PATH)[0]
+    simulate(cfg, 1)
+    sites = io.read_stage("fuse/sites")
+    planted = set(pd.read_parquet(io.truth_path()).query("kind == 'drop'")["cell_id"])
+    assert len(sites) >= 16 and sites["site_id"].iloc[0] in planted
+    assert sites["S"].idxmax() == 0 and sites["bh_flag"].any() and not sites["bh_flag"].all()
+    assert sites["agreement"].nunique() > 1 and (sites["followup_unobserved"] == 0).any()
+    xy = sites[["x_m", "y_m"]].to_numpy()
+    d = np.hypot(*(xy[:, None, :] - xy[None, :, :]).transpose(2, 0, 1))
+    assert d[np.triu_indices(len(xy), 1)].min() > cfg["sim"]["site_gap_m"]
+    assert not set(sites["site_id"].iloc[1:]) & planted  # stand-ins carry no drops
