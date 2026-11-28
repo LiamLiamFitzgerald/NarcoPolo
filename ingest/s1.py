@@ -22,7 +22,7 @@ import netCDF4
 import numpy as np
 import pandas as pd
 import shapely
-from pyproj import Transformer
+from pyproj import Geod, Transformer
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
@@ -49,7 +49,7 @@ _conn_lock = threading.Lock()  # ingest/run fetches passes in parallel (#33): on
 
 def list_passes(bbox: _stub.Bbox, start: date, end: date) -> pd.DataFrame:
     """Every IW GRD pass over bbox starting in [start, end] (UTC days):
-    pass_id, time, orbit_dir, rel_orbit, footprint (WGS84 WKT), end_time."""
+    pass_id, time, orbit_dir, rel_orbit, footprint (WGS84 WKT), end_time, heading_deg (NaN if one slice)."""
     rows: dict[str, dict] = {}
     for p in _products(bbox, start, end):
         a = {x["Name"]: x["Value"] for x in p["Attributes"]}
@@ -74,9 +74,23 @@ def list_passes(bbox: _stub.Bbox, start: date, end: date) -> pd.DataFrame:
             "end_time": pd.Series(
                 [max(r["end_time"]) for r in rows.values()], dtype="datetime64[ns, UTC]"
             ),
+            "heading_deg": pd.Series(
+                [_heading(r["time"], r["geoms"]) for r in rows.values()], dtype="float64"
+            ),
         }
     )
     return out.sort_values("time", ignore_index=True)
+
+
+def _heading(times: list[pd.Timestamp], geoms: list[Any]) -> float:
+    """Platform heading (deg clockwise from north) measured from the pass itself: the WGS84 bearing from the
+    first slice's centre to the last's, in acquisition order (#291). NaN for a one-slice pass: unknown."""
+    order = sorted(range(len(times)), key=lambda i: times[i])
+    first, last = geoms[order[0]].centroid, geoms[order[-1]].centroid
+    if len(order) < 2 or times[order[0]] == times[order[-1]] or first.equals(last):
+        return math.nan
+    az, _, _ = Geod(ellps="WGS84").inv(first.x, first.y, last.x, last.y)
+    return float(az) % 360.0
 
 
 def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
@@ -159,19 +173,28 @@ def fetch_scene(pass_: Mapping[str, Any]) -> Path:
         "relative_orbit": int(pass_["rel_orbit"]),
         "footprint": str(pass_["footprint"]),
         "footprint_crs": "EPSG:4326",
-        # openEO gives no annotation metadata (issue 6)
+        # openEO gives no annotation metadata (issue 6); heading is measured from the pass instead
         "incidence_min": None,
         "incidence_max": None,
         "prf_hz": None,
         "slant_range_m": None,
         "satellite_speed_ms": None,
-        "heading_deg": None,
+        "heading_deg": _float_or_none(pass_.get("heading_deg")),  # measured from the slices (#291)
     }
     meta_path = path.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=1))
     record(req, path, LICENCE)
     record({**req, "part": "metadata"}, meta_path, LICENCE)
     return path
+
+
+def _float_or_none(v: Any) -> float | None:
+    """A finite number rounded to 0.01, else None (unknown stays null in the metadata, never 0)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f, 2) if math.isfinite(f) else None
 
 
 def _catalogue(url: str, params: dict | None) -> dict:

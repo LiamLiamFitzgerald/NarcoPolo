@@ -94,6 +94,7 @@ def test_list_passes_recovers_simulated_passes(simraw, raw, catalogue):
         "rel_orbit",
         "footprint",
         "end_time",
+        "heading_deg",
     ]
     assert len(out) == len(scenes)  # two slices each, one pass
     want = sorted(pd.Timestamp(m["start_time"]) for m in scenes)
@@ -263,7 +264,9 @@ def test_fetch_scene_recovers_simulator_chip(simraw, raw, monkeypatch):
     }
     assert fmt == "GTiff"
     meta = json.loads(tif.with_suffix(".json").read_text())
-    assert set(meta) == set(sim_meta) and meta["prf_hz"] is None and meta["heading_deg"] is None
+    assert (
+        set(meta) == set(sim_meta) and meta["prf_hz"] is None and meta["heading_deg"] is None
+    )  # no heading given
     assert meta["start_time"] == row["time"].isoformat()
     files = json.loads((raw / "manifest.json").read_text())["files"]
     for p in (tif, tif.with_suffix(".json")):
@@ -312,3 +315,30 @@ def test_parallel_fetches_share_one_openeo_login(monkeypatch):
     for th in threads:
         th.join()
     assert len(logins) == 1 and len({id(c) for c in got}) == 1
+
+
+def test_heading_is_the_bearing_from_first_to_last_slice():
+    """#291: the fake catalogue's slices go north half first, then south: a descending track, about 180 deg.
+    The same slices in reverse time order fly north (about 0 deg); one slice gives no heading (NaN, never 0)."""
+    north, south = box(-9.0, 51.5, -8.0, 52.0), box(-9.0, 51.0, -8.0, 51.5)
+    t0 = pd.Timestamp("2026-11-22T06:47:00Z")
+    t1 = t0 + pd.Timedelta(seconds=25)
+    assert abs(s1._heading([t0, t1], [north, south]) - 180.0) < 1.0
+    assert (
+        s1._heading([t1, t0], [north, south]) < 1.0 or s1._heading([t1, t0], [north, south]) > 359.0
+    )
+    assert np.isnan(s1._heading([t0], [north]))
+
+
+def test_list_passes_heading_on_simulated_passes(simraw, raw, catalogue):
+    out = s1.list_passes(BBOX, date(2000, 1, 1), date(2100, 1, 1))
+    assert ((out["heading_deg"] - 180.0).abs() < 1.0).all()  # every fake pass flies north to south
+
+
+def test_fetch_scene_writes_the_measured_heading(simraw, raw, monkeypatch):
+    sim_tif = min((simraw / "s1").glob("*.tif"))
+    meta = json.loads(sim_tif.with_suffix(".json").read_text())
+    monkeypatch.setattr(s1, "_connection", lambda: FakeCube([], sim_tif))
+    tif = s1.fetch_scene(_row(meta) | {"heading_deg": 193.456})
+    assert json.loads(tif.with_suffix(".json").read_text())["heading_deg"] == 193.46
+    assert s1._float_or_none(float("nan")) is None and s1._float_or_none(None) is None
