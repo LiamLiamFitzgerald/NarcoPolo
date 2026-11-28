@@ -178,3 +178,37 @@ def test_merged_list_without_link_gives_p_comb_one_not_a_crash(data_root):
     (data_root / "reports" / "signals.json").write_text(json.dumps({"merged": [["oe"]]}))
     out = learn._add_learning_columns(_stub_sites(), 0.1)
     assert (out["p_comb"] == 1.0).all() and not out["comb_flag"].any()
+
+
+def test_null_pvalue_is_the_empirical_tail_share():
+    null = np.arange(1, 100)  # 99 samples
+    p = combine.null_pvalue(pd.Series([0.0, 50.0, 1000.0, np.nan]), null)
+    assert p.iloc[0] == pytest.approx(1.0)  # below every sample
+    assert p.iloc[1] == pytest.approx((1 + 50) / 100)  # 50..99 are >= 50
+    assert p.iloc[2] == pytest.approx(1 / 100)  # rarer than all, never 0
+    assert np.isnan(p.iloc[3])
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_null_pvalue_is_uniform_under_the_null(seed):
+    rng = np.random.default_rng(seed)
+    p = combine.null_pvalue(pd.Series(rng.normal(size=4000)), rng.normal(size=5000))
+    assert (p <= 0.05).mean() == pytest.approx(0.05, abs=0.015)
+
+
+def test_scores_with_null_samples_join_the_combination(data_root):
+    (data_root / "reports").mkdir()
+    null = sorted(np.random.default_rng(0).normal(size=999).tolist())
+    (data_root / "reports" / "signals.json").write_text(
+        json.dumps({"merged": [["oe"], ["link"]], "null": {"oe": null}})
+    )
+    s = _stub_sites().assign(score_oe=np.linspace(-1, 5, 12))
+    pv = learn._agent_pvalues(s, ["oe", "link"])
+    assert list(pv.columns) == ["link", "oe"] and pv["oe"].is_monotonic_decreasing
+    out = learn._add_learning_columns(s, 0.1)
+    assert not np.allclose(out["p_comb"], out["p_perm"])  # oe now counts
+
+
+def test_score_without_null_samples_is_left_out(data_root):
+    s = _stub_sites().assign(score_gi=1.0)
+    assert list(learn._agent_pvalues(s, ["gi", "link"]).columns) == ["link"]

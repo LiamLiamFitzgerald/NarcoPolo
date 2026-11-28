@@ -20,14 +20,32 @@ def _bh(p: np.ndarray, q: float) -> np.ndarray:
     return multipletests(p, alpha=q, method="fdr_bh")[0] if len(p) else np.zeros(0, bool)
 
 
+def signals() -> dict:
+    """reports/signals.json written by L2 (validate.signals, #153), or {} before it exists or if unreadable."""
+    path = Path(os.environ.get("NARCO_REPORTS", io.ROOT / "reports")) / "signals.json"
+    try:
+        return json.loads(path.read_text()) if path.exists() else {}
+    except (OSError, ValueError) as e:
+        log.warning("reports/signals.json unreadable (%s): agents unmerged, no null samples", e)
+        return {}
+
+
 def groups() -> list[list[str]]:
     """Merged agents: reports/signals.json "merged" once L2 has written it, else one group per learn.agents."""
-    path = Path(os.environ.get("NARCO_REPORTS", io.ROOT / "reports")) / "signals.json"
-    if path.exists():
-        merged = json.loads(path.read_text()).get("merged")
-        if merged:
-            return [list(g) for g in merged]
+    merged = signals().get("merged")
+    if merged:
+        return [list(g) for g in merged]
     return [[a] for a in load(io.CONFIG_PATH)[0]["learn"]["agents"]]
+
+
+def null_pvalue(scores: pd.Series, null) -> pd.Series:
+    """Site-level p of an agent score against its null-regime samples (#164): (1 + #null >= score) / (1 + n).
+    Never 0, so an extreme score is "rarer than every null sample", not impossible. NaN score stays NaN."""
+    ref = np.sort(np.asarray(null, float))
+    s = scores.to_numpy(float)
+    ge = len(ref) - np.searchsorted(ref, s, side="left")  # null samples >= score
+    p = np.where(np.isfinite(s), (1 + ge) / (1 + len(ref)), np.nan)
+    return pd.Series(p, index=scores.index, name=scores.name)
 
 
 def weights(columns, merged: list[list[str]]) -> pd.Series:

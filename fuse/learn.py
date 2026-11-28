@@ -88,10 +88,18 @@ def site_value(sites: pd.DataFrame, model: dict[str, Any] | None) -> pd.Series:
 
 
 def _agent_pvalues(sites: pd.DataFrame, agents) -> pd.DataFrame:
-    """One-sided p per agent per site. link = p_perm (the lag-link permutation p); any other agent once its
-    site-level p is on the working frame as p_<agent> (oe, gi, cusum need L2's null distributions first)."""
+    """One-sided p per agent per site. link = p_perm (the lag-link permutation p). Any other agent: its p_<agent>
+    column if the working frame has one, else its score_<agent> (higher = more unusual) against the agent's
+    null-regime samples in reports/signals.json (#164). Agents with neither are left out, not given p = 1."""
+    null = combine.signals().get("null") or {}
     cols = {"link": sites["p_perm"]} if "link" in agents else {}
-    cols |= {a: sites[f"p_{a}"] for a in agents if a != "link" and f"p_{a}" in sites.columns}
+    for a in agents:
+        if a == "link":
+            continue
+        if f"p_{a}" in sites.columns:
+            cols[a] = sites[f"p_{a}"]
+        elif f"score_{a}" in sites.columns and len(null.get(a) or []):
+            cols[a] = combine.null_pvalue(sites[f"score_{a}"], null[a])
     return pd.DataFrame(cols, index=sites.index)
 
 
