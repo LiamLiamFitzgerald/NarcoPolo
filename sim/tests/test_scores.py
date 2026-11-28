@@ -59,3 +59,16 @@ def test_simulated_cells_carry_gi_and_cusum_signal_at_the_planted_site(tmp_path,
     assert alarms[site] >= 0.8 * len(drops)
     assert alarms.rank(ascending=False)[site] <= 0.05 * len(alarms)
     assert slow.loc[slow["cell_id"] == site, "gi_z"].max() > 1.96
+
+
+def test_simulated_links_are_dated_at_their_slowdowns(tmp_path, monkeypatch):
+    """#167: one link per planted slowdown, aged from its day to T; L = 1 where a pick-up followed it."""
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("NARCO_RAW", str(tmp_path / "raw"))
+    cfg = load(io.CONFIG_PATH)[0]
+    simulate(cfg, 1)
+    links, sites = io.read_stage("fuse/links"), io.read_stage("fuse/sites")
+    drops = pd.read_parquet(io.truth_path()).query("kind == 'drop'")
+    assert len(links) == len(drops) and links["age_days"].nunique() > 1
+    assert links["age_days"].between(0, cfg["sim"]["days"]).all()
+    assert links["L"].sum() == sites["recurrence"].sum()  # every pick-up follows one slowdown
