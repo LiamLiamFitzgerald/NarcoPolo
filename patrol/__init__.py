@@ -1,5 +1,6 @@
 """Patrol plans (P7): a ship route and an aircraft route over the top drop sites, within a time budget.
-Orienteering by greedy insertion and 2-opt (docs/specs/P7.md). Ships always use sea distances."""
+Orienteering by greedy insertion and 2-opt (docs/specs/P7.md); with a bandit draw and at most learn.exact_max_nodes
+nodes, the exact solver instead (D4, #176: never worse, ship +2.4% on the simulator). Ships always use sea distances."""
 
 import json
 from collections.abc import Mapping
