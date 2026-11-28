@@ -348,18 +348,34 @@ def _rare_slowdown(cells: pd.DataFrame, cell_ids, dates) -> np.ndarray:
     return top.reindex(key).fillna(False).to_numpy(bool)
 
 
+_ROUTINE = ("lane", "anchorage", "port_zone")
+
+
+def _routine_stop(lay, sid: pd.Series) -> np.ndarray:
+    """True where the site's cell is a lane, anchorage or port zone (reference/cells), or where that is unknown."""
+    if lay is None or not all(c in lay.columns for c in _ROUTINE):
+        return np.ones(len(sid), bool)
+    flags = lay[list(_ROUTINE)].reindex(sid)
+    known = flags.notna().all(axis=1).to_numpy()
+    return ~known | flags.fillna(False).astype(bool).any(axis=1).to_numpy()
+
+
 def _evidence(
     sites_: pd.DataFrame, slow: pd.DataFrame, strongest: pd.DataFrame, lay
 ) -> pd.DataFrame:
-    """#320 checks per site (rows as sites_). rare: the strongest link's slowdown (strongest["rare_slowdown"]);
-    followup_seen: some slowdown has L > 0, i.e. a small boat seen on a calm pass (A5: U_small = 0 where C = 0);
-    outside_fishing: inshore_frac < inshore_max, NA without an inshore map (unknown is never yes)."""
+    """#320 checks per site (rows as sites_). rare: the strongest link's slowdown (strongest["rare_slowdown"]) is in
+    the top top_frac of slowdown mid-p ranks AND the site's cell is not a lane, anchorage or port zone, where ships
+    stop routinely (an anchorage with ~150 slowdowns always has one in the top 10%, #320); a cell whose layers are
+    unknown is not rare (unknown is never yes). followup_seen: some slowdown has L > 0, i.e. a small boat seen on a
+    calm pass (A5: U_small = 0 where C = 0). outside_fishing: inshore_frac < inshore_max, NA without an inshore
+    map."""
     sid = sites_["site_id"].astype(str)
     rare = (
         strongest["rare_slowdown"]
         if "rare_slowdown" in strongest.columns
         else pd.Series(dtype=bool)
     )
+    rare = rare.reindex(sid).fillna(False).to_numpy(bool) & ~_routine_stop(lay, sid)
     seen = set(slow.loc[slow["L"] > 0, "cell_id"].astype(str)) if "L" in slow.columns else set()
     has = lay is not None and "inshore_frac" in lay.columns
     f = (lay["inshore_frac"] if has else pd.Series(dtype=float)).reindex(sid).to_numpy(float)
@@ -368,7 +384,7 @@ def _evidence(
     )
     return pd.DataFrame(
         {
-            "check_rare_slowdown": rare.reindex(sid).fillna(False).to_numpy(bool),
+            "check_rare_slowdown": rare,
             "check_followup_seen": sid.isin(seen).to_numpy(bool),
             "check_outside_fishing": outside,
         },
@@ -384,7 +400,8 @@ def _check_reasons(site) -> list[str]:
         out.append(
             f"Rare slowdown: yes, the strongest one is among the top {k} in 100 most unusual slowdown cell-days."
             if site["check_rare_slowdown"]
-            else f"Rare slowdown: no, no linked slowdown here is among the top {k} in 100 most unusual."
+            else "Rare slowdown: no, ships stop here routinely (lane, anchorage or port zone) or no linked "
+            f"slowdown here is among the top {k} in 100 most unusual."
         )
     if "check_followup_seen" in site:
         near = f"on a calm pass within {PARAMS['link_radius_m'] / 1000:g} km and {PARAMS['link_days']} days"

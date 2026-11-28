@@ -226,16 +226,7 @@ def test_planted_site_with_a_seen_pickup_has_all_three_checks(runs, evidence, se
     assert _all_yes(row)
 
 
-_ANCHORAGE_XFAIL = pytest.mark.xfail(
-    strict=True,
-    reason="#320 measured 28 Nov: the busiest non-planted site is an anchorage cell with all three checks True "
-    "(seed 1: 2000_32_8, 149 slowdowns; seed 3: 2000_33_8, 152 slowdowns). Its strongest-L slowdown is in the "
-    "top 10% of slowdown mid-p ranks, small boats are seen within 4 km / 7 days, and inshore_frac < 0.1. "
-    "Definitions kept as the P6 owner set them; needs a human decision.",
-)
-
-
-@pytest.mark.parametrize("seed", [pytest.param(s, marks=_ANCHORAGE_XFAIL) for s in SEEN])
+@pytest.mark.parametrize("seed", SEEN)
 def test_busiest_anchorage_site_does_not_have_all_three_checks(runs, evidence, seed):
     s = evidence[seed]
     busiest = s[s.index != runs[seed]["site"]].sort_values("n_slowdowns", ascending=False).iloc[0]

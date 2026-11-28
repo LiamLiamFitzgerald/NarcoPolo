@@ -45,7 +45,15 @@ def test_evidence_checks_per_site():
         {"cell_id": ["a", "b", "b", "c"], "L": [0.3, 0.0, float("nan"), float("nan")]}
     )
     strongest = pd.DataFrame({"rare_slowdown": [True]}, index=["a"])
-    lay = pd.DataFrame({"inshore_frac": [0.05, 0.5, float("nan")]}, index=["a", "b", "c"])
+    lay = pd.DataFrame(
+        {
+            "inshore_frac": [0.05, 0.5, float("nan")],
+            "lane": False,
+            "anchorage": False,
+            "port_zone": False,
+        },
+        index=["a", "b", "c"],
+    )
     ev = _evidence(_sites("a", "b", "c"), slow, strongest, lay)
     assert ev["check_rare_slowdown"].tolist() == [True, False, False]
     assert ev["check_followup_seen"].tolist() == [True, False, False]
@@ -69,7 +77,10 @@ def test_top_piers_hours_follow_top_piers_and_checks_give_reasons():
          "slow_date": [DAY], "rare_slowdown": [True]},
         index=["a"],
     )  # fmt: skip
-    layers = pd.DataFrame({"cell_id": ["a", "b"], "inshore_frac": [0.0, float("nan")]})
+    layers = pd.DataFrame(
+        {"cell_id": ["a", "b"], "inshore_frac": [0.0, float("nan")], "lane": False, "anchorage": False,
+         "port_zone": False}
+    )  # fmt: skip
     out, *_ = _finish(s, slow, strongest, pd.DataFrame(), None, layers, travel, None)
     a, b = out.iloc[0], out.iloc[1]
     assert a["top_piers"] == ["p1", "p2", "p3"] and a["top_piers_hours"] == [0.5, 1.5, 3.0]
@@ -116,3 +127,19 @@ def test_outside_fishing_uses_the_dark_small_threshold(frac):
     lay = pd.DataFrame({"inshore_frac": [frac]}, index=["a"])
     v = _evidence(_sites("a"), pd.DataFrame(), pd.DataFrame(), lay)["check_outside_fishing"].iloc[0]
     assert (v is pd.NA) if math.isnan(frac) else (bool(v) == (frac < PARAMS["inshore_max"]))
+
+
+@pytest.mark.parametrize("flag", ["lane", "anchorage", "port_zone"])
+def test_rare_slowdown_is_never_true_where_ships_stop_routinely(flag):
+    """#320 follow-up: an anchorage with ~150 slowdowns always has one in the top 10%, so a lane, anchorage or
+    port-zone cell is never a rare slowdown; unknown layers are not "yes" either."""
+    strongest = pd.DataFrame({"rare_slowdown": [True, True]}, index=["a", "b"])
+    lay = pd.DataFrame(
+        {"inshore_frac": [0.0, 0.0], "lane": False, "anchorage": False, "port_zone": False},
+        index=["a", "b"],
+    )
+    lay.loc["b", flag] = True
+    ev = _evidence(_sites("a", "b"), pd.DataFrame(), strongest, lay)
+    assert ev["check_rare_slowdown"].tolist() == [True, False]
+    no_layers = _evidence(_sites("a"), pd.DataFrame(), strongest.loc[["a"]], lay[["inshore_frac"]])
+    assert not no_layers["check_rare_slowdown"].iloc[0]
