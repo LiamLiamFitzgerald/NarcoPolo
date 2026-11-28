@@ -76,6 +76,27 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
 
 # A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
 # Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
+# P6 detectors and fuse (#123): docs/specs/P6.md Parameters, A1 and A3; the same values as P6's code defaults
+p6:
+  fdr_q: 0.1
+  gi_band_m: 2900            # binary Gi* weights: the 8 surrounding 2 km cells
+  gi_perm: 999
+  cusum_rho: 2               # A1
+  cusum_h: 0.5               # TODO(P6): not in the spec (#124); D2 calibrates it on null-regime runs
+  top_frac: 0.1
+  inshore_max: 0.1           # context facts, docs/specs/P6.md step 4
+  coast_min_m: 2000
+  coast_max_m: 25000
+  slow_hours_min: 0.33       # shared.md issue 3
+  slow_hours_max: 3
+  link_radius_m: 4000
+  link_days: 7
+  tau_days: 3
+  half_life_days: 30
+  shift_days: 60
+  n_shuffles: 999
+  pier_tau_h: 1
+
 reads:
   reference/cells: [x0, y0, region_bbox, reference]
   reference/piers: [x0, y0, region_bbox, reference]
