@@ -9,6 +9,7 @@ from sim.simulate import simulate
 
 def _sim(tmp_path, monkeypatch):
     monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("NARCO_RAW", str(tmp_path / "raw"))  # never the repo's real raw/ (#331)
     cfg_path = tmp_path / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg_path)
     monkeypatch.setattr(io, "CONFIG_PATH", cfg_path)
