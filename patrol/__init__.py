@@ -5,6 +5,7 @@ nodes, the exact solver instead (D4, #176: never worse, ship +2.4% on the simula
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import date, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Any, Literal
@@ -342,15 +343,45 @@ def _write(asset: str, stops: list[dict]) -> dict:
     return plan
 
 
-def _bandit(cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int) -> dict[str, Any]:
-    """Learning L5: the saved posterior, with new top sites warm-started from their prior (sites that
-    leave the top keep their state), one seeded Thompson draw, and the state written back."""
-    try:
-        state = io.read_json_stage("patrol/bandit_state")
-    except ValueError:  # no state yet, or one made with an older config: start from the priors
-        state = {}
+def _week_index(year: int, week: int) -> int:
+    """ISO (year, week) as a running week number, so weeks can be counted across a new year."""
+    monday = date.fromisocalendar(year, week, 1)
+    return monday.toordinal() // 7
+
+
+def _outcomes(plan_week: tuple[int, int]) -> pd.DataFrame:
+    """patrol/outcomes (#329) from weeks before the plan week only (the training cut-off), the latest answer
+    per site and week, as bandit.update rows [site_id, asset, visited, found, week]. not_visited rows
+    are dropped: an unvisited site is never "found nothing". No file yet = no outcomes."""
+    cols = ["site_id", "asset", "visited", "found", "week"]
+    if not io.stage_path("patrol/outcomes").exists():
+        return pd.DataFrame(columns=cols)
+    o = io.read_stage("patrol/outcomes")
+    o = o.sort_values("entered_at").drop_duplicates(["site_id", "iso_week"], keep="last")
+    yw = o["iso_week"].str.extract(r"^(\d{4})-W(\d{2})$").astype(int)
+    o["week"] = [_week_index(y, w) for y, w in zip(yw[0], yw[1], strict=True)]
+    o = o[(o["week"] < _week_index(*plan_week)) & (o["outcome"] != "not_visited")]
+    return pd.DataFrame(
+        {"site_id": o["site_id"], "asset": "ship", "visited": True,
+         "found": o["outcome"] == "found_something", "week": o["week"]}
+    )[cols]  # fmt: skip
+
+
+def _bandit(
+    cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int, plan_week: tuple[int, int]
+) -> dict[str, Any]:
+    """Learning L5: the posterior rebuilt each run from the top sites' priors and the crews' outcomes
+    (#329), replayed week by week from the first recorded week up to the plan week (one discount per
+    week), so rerunning never counts an answer twice. Then one seeded Thompson draw; the state is saved."""
     learn = cfg["learn"]
-    state = {**bandit.prior(_greedy_inputs(sites), learn["prior_strength"]), **state}
+    state = bandit.prior(_greedy_inputs(sites), learn["prior_strength"])
+    out = _outcomes(plan_week)
+    if len(out):
+        for w in range(int(out["week"].min()), _week_index(*plan_week)):
+            iso_w = date.fromordinal(7 * w + 1).isocalendar()[
+                1
+            ]  # last_visit_week is an ISO week, as in L6
+            state = bandit.update(state, out[out["week"] == w], learn["discount"], week=iso_w)
     io.write_json_stage("patrol/bandit_state", state, _provenance("fuse/sites"))
     return {
         "theta": bandit.sample(state, seed),
@@ -364,12 +395,14 @@ def ship_plan() -> dict:
     cfg, _ = load(io.CONFIG_PATH)
     sea = _sea(io.read_stage("reference/cells"))
     (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
-    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    T = io.read_snapshot()["T"]
+    seed = int(cfg["seed"]) + iso_week(T)[1]
+    plan_week = iso_week(T + timedelta(days=1))  # plans start the day after T
     sites = io.read_stage("fuse/sites")
     stops = _plan_asset(
         sites, base, lambda n: sea_hours(n, sea, SHIP_KN),
         budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=start,
-        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
+        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed, plan_week),
     )  # fmt: skip
     return _write("ship", stops)
 
@@ -378,12 +411,14 @@ def aircraft_plan() -> dict:
     """The same planner and the same draw (same seed) with straight-line distances."""
     cfg, _ = load(io.CONFIG_PATH)
     (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
-    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    T = io.read_snapshot()["T"]
+    seed = int(cfg["seed"]) + iso_week(T)[1]
+    plan_week = iso_week(T + timedelta(days=1))  # plans start the day after T
     sites = io.read_stage("fuse/sites")
     stops = _plan_asset(
         sites, base, lambda n: air_hours(n, AIR_KN),
         budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=start,
-        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
+        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed, plan_week),
     )  # fmt: skip
     return _write("aircraft", stops)
 

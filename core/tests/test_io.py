@@ -56,6 +56,18 @@ def test_only_the_keys_a_stage_reads_make_it_stale(sandbox):
         io.read_stage("forecast/expected")
 
 
+def test_patrol_outcomes_never_go_stale(sandbox):  # #329: crew entries, not computed from config
+    io.write_stage("patrol/outcomes", frame("patrol/outcomes"), "real")
+    text = (
+        sandbox.read_text()
+        .replace("x0: 380000", "x0: 381000")
+        .replace("embargo_days: 7", "embargo_days: 14")
+    )
+    sandbox.write_text(text)
+    back = io.read_stage("patrol/outcomes")
+    assert back["outcome"].tolist() == ["found_nothing"] and str(back["entered_at"].dt.tz) == "UTC"
+
+
 def test_sim_change_stales_simulated_files_only(sandbox):
     io.write_stage("aggregate/observed", frame("aggregate/observed"), "simulated")
     io.write_stage("fuse/cells", frame("fuse/cells"), "real")

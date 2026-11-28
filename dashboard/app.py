@@ -10,6 +10,10 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pandas as pd
+
+from core import io
+
 HERE = Path(__file__).parent
 
 
@@ -21,62 +25,88 @@ def _snapshot_path() -> Path:
     return _data_root() / "export" / "snapshot.json"
 
 
-# "We checked" patrol outcomes (#317). PLACEHOLDER until the patrol/outcomes contract (#329) is approved:
-# rows go to a plain draft file under the data root, not a stage file, and patrol does not read them yet.
-# Places only: a site id, a week and one of three fixed answers; no free text, no vessel, no person.
+# "We checked" patrol outcomes (#317): the stage file patrol/outcomes (contract #329), written through
+# core.io, which patrol reads for next week's plan. Places only: a site id, a week and one of three fixed
+# answers; no free text, no vessel, no person. One answer per site and week: a later one replaces it.
 OUTCOMES = ("found_something", "found_nothing", "not_visited")
 
 
-def _outcomes_path() -> Path:
+def _draft_path() -> Path:
+    """Where answers went before #329 (a plain JSON list); moved into patrol/outcomes once, then removed."""
     return _data_root() / "dashboard" / "outcomes_draft.json"
 
 
-def _read_outcomes(path: Path) -> list[dict]:
-    return json.loads(path.read_text()) if path.exists() else []
+def _frame(rows: list[dict]) -> pd.DataFrame:
+    f = pd.DataFrame(rows, columns=["site_id", "iso_week", "outcome", "entered_at"])
+    f["entered_at"] = pd.to_datetime(f["entered_at"], utc=True)
+    return f.astype({"site_id": object, "iso_week": object, "outcome": object})
 
 
-def _record_outcome(path: Path, site_id: str, iso_week: str, outcome: str) -> list[dict]:
+def _read_outcomes() -> list[dict]:
+    draft = _draft_path()
+    if draft.exists():  # once: carry draft answers over, keeping any already in the stage file
+        old = json.loads(draft.read_text())
+        _write(_latest(pd.concat([_frame(old), _stored()], ignore_index=True)))
+        draft.unlink()
+    f = _stored()
+    return [
+        {**r, "entered_at": r["entered_at"].strftime("%Y-%m-%dT%H:%M:%SZ")}
+        for r in f.to_dict("records")
+    ]
+
+
+def _stored() -> pd.DataFrame:
+    return (
+        io.read_stage("patrol/outcomes")
+        if io.stage_path("patrol/outcomes").exists()
+        else _frame([])
+    )
+
+
+def _latest(f: pd.DataFrame) -> pd.DataFrame:
+    return f.sort_values("entered_at").drop_duplicates(["site_id", "iso_week"], keep="last")
+
+
+def _write(f: pd.DataFrame) -> None:
+    io.write_stage(
+        "patrol/outcomes", f.reset_index(drop=True), "real"
+    )  # entered by crews, never simulated
+
+
+def _record_outcome(site_id: str, iso_week: str, outcome: str) -> list[dict]:
     """Keep one answer per site and week (the latest); returns every row."""
     if outcome not in OUTCOMES:
         raise ValueError(f"outcome must be one of {OUTCOMES}")
     if not re.fullmatch(r"[\w-]{1,64}", site_id) or not re.fullmatch(r"\d{4}-W\d{2}", iso_week):
         raise ValueError("site_id or iso_week is malformed")
-    rows = [r for r in _read_outcomes(path) if (r["site_id"], r["iso_week"]) != (site_id, iso_week)]
-    rows.append(
-        {
-            "site_id": site_id,
-            "iso_week": iso_week,
-            "outcome": outcome,
-            "entered_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        }
-    )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, indent=1))
-    return rows
+    _read_outcomes()  # moves a draft over first, if there is one
+    new = _frame([{"site_id": site_id, "iso_week": iso_week, "outcome": outcome,
+                   "entered_at": datetime.now(UTC)}])  # fmt: skip
+    _write(_latest(pd.concat([_stored(), new], ignore_index=True)))
+    return _read_outcomes()
 
 
 class Api:
     """Exposed to index.html as window.pywebview.api: serves the frozen snapshot and keeps the crews'
-    "we checked" answers (#317, placeholder file)."""
+    "we checked" answers in patrol/outcomes (#317, #329)."""
 
-    def __init__(self, snapshot: Path | None = None, outcomes: Path | None = None):
+    def __init__(self, snapshot: Path | None = None):
         self._snapshot = snapshot or _snapshot_path()
-        self._outcomes = outcomes or _outcomes_path()
 
     def get_snapshot(self) -> dict:
         return json.loads(self._snapshot.read_text())
 
     def get_outcomes(self) -> list[dict]:
-        return _read_outcomes(self._outcomes)
+        return _read_outcomes()
 
     def record_outcome(self, site_id: str, iso_week: str, outcome: str) -> list[dict]:
-        return _record_outcome(self._outcomes, site_id, iso_week, outcome)
+        return _record_outcome(site_id, iso_week, outcome)
 
 
-def _handler(snapshot: Path, outcomes: Path | None = None):
+def _handler(snapshot: Path):
     """Serves the dashboard folder, the snapshot at /snapshot.json (it lives under the data root,
     which is not inside the dashboard folder) and the outcomes at /outcomes.json (POST adds one)."""
-    api = Api(snapshot, outcomes)
+    api = Api(snapshot)
 
     class Handler(http.server.SimpleHTTPRequestHandler):
         def _json(self, code: int, body: bytes):

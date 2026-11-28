@@ -15,6 +15,9 @@ def row(**kw):
 
 
 VALID = {
+    "patrol/outcomes": row(
+        site_id="2000_3_4", iso_week="2026-W48", outcome="found_nothing", entered_at=T
+    ),
     "reference/cells": row(
         cell_id="2000_0_0",
         level=2000,
@@ -172,6 +175,10 @@ def test_every_schema_has_a_valid_example():
         ("coverage/weather_daily", {"wind_max_ms": -1.0}),
         ("validate/pboat_training", {"n_px": 0}),
         ("validate/pboat_training", {"label": None}),
+        ("patrol/outcomes", {"outcome": "arrested"}),  # #329: only the three outcomes
+        ("patrol/outcomes", {"iso_week": "2026-48"}),
+        ("patrol/outcomes", {"iso_week": "2026-W54"}),
+        ("patrol/outcomes", {"entered_at": pd.Timestamp("2026-11-27T12:00:00")}),  # naive time
     ],
 )
 def test_broken_rule_is_rejected(name, bad):
