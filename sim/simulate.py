@@ -378,6 +378,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
                 float(np.clip(0.75 + rng.normal(0, 0.1), 0.05, 0.99)),
             )
         )
+    n_true = len(rows)  # rows so far are detected boats; false alarms and ghosts follow
     depth_km = (NY - 1 + SHORE_FRAC) * FINE / 1000
     for k, pr in enumerate(passes.itertuples()):
         for _ in range(
@@ -418,6 +419,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         rows,
         columns=["k", "x_m", "y_m", "vv", "pol_agree", "n_px", "size_class", "ghost", "p_boat"],
     )
+    det["label"] = np.arange(len(det)) < n_true
     det = det[~pw["rough"].to_numpy()[det["k"].to_numpy(int)]].reset_index(
         drop=True
     )  # false alarms and ghosts too
@@ -443,6 +445,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         i = np.clip(np.floor((np.asarray(x) - x0) / FINE), 0, NX - 1).astype(int)
         j = np.clip(np.floor((np.asarray(y) - y0) / FINE), 0, NY - 1).astype(int)
         return _ids(i, j)
+
+    det_cells = cid(
+        detections["x_m"].to_numpy(), detections["y_m"].to_numpy()
+    )  # for validate/pboat_training
 
     dk = detections[~detections["ghost"]]
     dark = pd.DataFrame(
@@ -709,6 +715,16 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         else pd.DataFrame({"site_id": pd.Series([], dtype=object), "L": [], "age_days": []})
     )
 
+    # validate/pboat_training (#209): the simulator's own detections, labelled by truth (a detected boat is a
+    # positive, a false alarm or ghost a negative), standing in for injection runs on simulated chips
+    pboat_training = detections[
+        ["pass_id", "peak_ratio_vv_db", "peak_ratio_vh_db", "pol_agree", "n_px", "ghost"]
+    ].assign(
+        cell_id=det_cells,
+        date=pd.to_datetime(detections["time_utc"]).dt.date,
+        label=det["label"].to_numpy(bool),
+    )
+
     # coverage/weather_daily (#208): the weather is uniform and constant through each day, so the daily max is the
     # day's value in every cell; float32 as sim/raw.py stores it in era5.nc
     weather_daily = pd.DataFrame(
@@ -731,6 +747,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         "reference/travel_hours": travel,
         "coverage/exposure": exp_df,
         "coverage/weather_daily": weather_daily,
+        "validate/pboat_training": pboat_training,
         "detect/detections": detections,
         "match/events": events.drop(columns="day"),
         "aggregate/observed": observed,

@@ -46,7 +46,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 13  # 12 stage files + truth
+    assert first == second and len(first) == 14  # 13 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -131,3 +131,14 @@ def test_weather_daily_covers_every_cell_day_with_the_day_weather(world):  # #20
     assert len(on_pass) == len(ex)  # every pass's cell-day has weather
     assert (on_pass["wind_max_ms"] - on_pass["wind_ms"]).abs().max() < 1e-5
     assert (on_pass["hs_max_m"] - on_pass["hs_m"]).abs().max() < 1e-5
+
+
+def test_pboat_training_is_labelled_by_truth(world):  # #209
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    t = io.read_stage("validate/pboat_training")
+    det = io.read_stage("detect/detections")
+    assert len(t) == len(det) and t["label"].any() and (~t["label"]).any()
+    assert not t.loc[t["label"], "ghost"].any()  # a ghost is never a boat
+    vv = t.groupby("label")["peak_ratio_vv_db"].mean()
+    assert vv[True] > vv[False]  # boats are brighter than false alarms
