@@ -77,6 +77,7 @@ ingest:
   s1_openeo_url: https://openeo.dataspace.copernicus.eu
   s1_catalogue_url: https://catalogue.dataspace.copernicus.eu/odata/v1/Products
   s1_product_type: IW_GRDH_1S
+  s1_workers: 2   # TODO(P2): the openEO account's concurrent batch-job limit (#292)
 
 # #212 (Liam, 28 Nov): a human fills every value from the GFW 4Wings docs; the real-data run waits for it
 gfw:                         # TODO(P2): https://globalfishingwatch.org/our-apis/documentation#4wings-api
@@ -94,7 +95,16 @@ validate:
   fixed_target_history: 8    # TODO(P1) #334: passes in the per-pixel median (earlier passes only)
   fixed_target_p_fa: 1.0e-6  # TODO(P1) #334: candidate CFAR p_fa on the median-ratio image (a lower threshold than p4.p_fa)
   persistence_radius_m: 50   # #334: a candidate this close to a fixed target is on it (GFW's persistence radius, the cited start)
+  power_rate_ratios: [2, 3]  # #351: rate ratios the power diagnostic asks about
+  power_alpha: 0.001         # TODO(P1) #351: per-cell test level; the issue's illustration, not a NarcoPolo value
+  power_min: 0.8             # TODO(P1) #351: a cell "can flag" when its power is at least this
   pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
+  quick:                     # #343: `make validate-quick`; the report says mode "quick" so it is never shown as the full result
+    null_runs: 20            # TODO(P1): demo-speed value, not a calibrated choice (full: the spec's 200)
+    n_folds_slowdown: 4      # TODO(P1): demo-speed value, not a calibrated choice (full: split.n_folds_slowdown)
+    n_folds_small: 2         # TODO(P1): demo-speed value, not a calibrated choice (full: split.n_folds_small)
+    policy_seeds: 1          # TODO(P1): demo-speed value, not a calibrated choice (full: learn.n_seeds_quick)
+    visible_worlds: 0        # TODO(P1): demo-speed value, not a calibrated choice (full: 1; 0 skips recovery_visible_pickups)
 
 detect_prob:                 # #349: small-boat detection-probability curve, fitted by validate.detect_prob on injected boats (coefficients go to reports/detect_prob.json, never here)
   form: [log_length_m, wind_ms, incidence_deg]  # #349: logit p = b0 + b1 log(length_m) + b2 wind_ms + b3 incidence_deg; a term missing from the data is dropped and named in the report
@@ -111,6 +121,7 @@ p4:
   cfar_outer: 41
   cfar_guard: 11
   p_fa: 1.0e-7               # then calibrated on the injection and null tests (CFAR step 4)
+  cfar_calibration_target: null  # TODO(P4) #268: no value until a human decides the target (max false alarms per km2 per pass, or min recall at a named brightness in dB); until then p_fa stays 1e-7 (Liam, 28 Nov)
   enl: 4.4                   # estimate_enl default
   cluster_px: [1, 200]
   size_small_max_px: 4       # size_class: 1-4 small, 5-20 medium, > 20 large
@@ -159,6 +170,8 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   slowdown_rate_cold: 0.01       # ... everywhere else
   pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
   seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fixed_targets: 11, fishing: 12, illegal_fishing: 13}
+  p_detect_scenarios: [0.1, 0.4]  # TODO(P1) #351: detection probabilities for the power comparison runs (the issue's illustration)
+  baseline_rate: 0.5             # TODO(P1) #351: placeholder small boats per cell-day for the comparison runs (issue's illustration)
   stand_in_sites: 15         # TODO(P1) #104: extra fuse/sites rows with no drops, so P7 has 16+ sites to rank and route
   site_gap_m: 4000           # A2: no site within 4 km of another
   fixed_targets:             # TODO(P1) #334: none of these are in the spec; a stack for the fixed-target suppression test

@@ -99,3 +99,23 @@ def test_presence_2km_holds_the_raw_presence_hours(raw):  # #208
     raw_h = pres.assign(date=pd.to_datetime(pres["date"])).groupby(keys)["hours"].sum()
     assert (p2.groupby(keys)["hours"].sum() - raw_h).abs().max() < 0.01  # raw rounds to 3 dp
     assert (p2["hours"] > 0).all() and set(p2["speed_bin"]) == set(pres["speed_bin"])
+
+
+def test_simulate_refuses_a_raw_folder_with_real_downloads(tmp_path, monkeypatch):  # #331
+    raw = tmp_path / "raw"
+    (raw / "gfw").mkdir(parents=True)
+    (raw / "gfw_presence.parquet").write_bytes(b"real")
+    entry = {
+        "request": {"dataset": "presence"},
+        "sha256": "x",
+        "download_time": "t",
+        "licence": "l",
+    }
+    (raw / "manifest.json").write_text(json.dumps({"files": {"gfw_presence.parquet": entry}}))
+    before = _hashes(raw)
+    monkeypatch.setenv("NARCO_RAW", str(raw))
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    with pytest.raises(RuntimeError, match="real files"):
+        sim.simulate.simulate(load(io.CONFIG_PATH)[0], 1)
+    assert _hashes(raw) == before
+    assert not (tmp_path / "data").exists()

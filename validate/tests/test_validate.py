@@ -164,6 +164,46 @@ def test_run_writes_a_report_with_every_key(sim_world, monkeypatch):
     assert rep["recovery"]["planted_site_rank"] == 1 and 0 <= rep["brier"] <= 1
 
 
+@pytest.mark.slow
+def test_quick_mode_has_the_full_keys_and_says_quick(sim_world, monkeypatch):
+    """#343: quick swaps in the validate.quick counts; slow parts are stubbed to record what they were given
+    (their own tests cover them)."""
+    import validate.checks
+
+    seen: dict[str, object] = {}
+
+    def null_test(runs=200):
+        seen["runs"] = runs
+        return {"runs": runs, "share_with_any_flag": 0.0}
+
+    def policy_block(n_seeds=None):
+        seen["seeds"] = n_seeds
+        return {}
+
+    def backtest(event_type, n_folds=None):
+        seen[event_type] = n_folds
+        return pd.DataFrame()
+
+    monkeypatch.setattr(validate.checks, "null_test", null_test)
+    monkeypatch.setattr(validate.checks, "policy_block", policy_block)
+    monkeypatch.setattr(validate.checks, "backtest", backtest)
+    monkeypatch.setattr(validate.checks, "visible_recovery", lambda: {"planted_site_rank": 1})
+    monkeypatch.setattr(validate.checks, "_injection", lambda: pd.DataFrame())
+    full = json.loads(run().read_text())
+    seen.clear()
+    quick = json.loads(run(quick=True).read_text())
+    q = load(io.CONFIG_PATH)[0]["validate"]["quick"]
+    assert full["mode"] == "full" and quick["mode"] == "quick"
+    assert set(quick) == set(full)
+    assert seen == {
+        "runs": q["null_runs"],
+        "seeds": q["policy_seeds"],
+        "slowdown": q["n_folds_slowdown"],
+        "dark_small": q["n_folds_small"],
+    }
+    assert quick["recovery_visible_pickups"] is None  # visible_worlds 0 skips that world
+
+
 def test_report_turns_nan_into_null(tmp_path, monkeypatch):
     monkeypatch.setenv("NARCO_REPORTS", str(tmp_path))
     rep = json.loads(
