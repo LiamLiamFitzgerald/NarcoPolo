@@ -57,9 +57,23 @@ def _shift(frames: dict[str, pd.DataFrame], rng: np.random.Generator) -> dict[st
 
 
 def _fuse(frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
-    from fuse import run  # validate may import fuse (tach.toml)
+    """fuse.run on (shifted) frames, with the cell scores recomputed from the same frames (#177): fuse may not import
+    detectors, so without them no slowdown gets a link score and the null test would test nothing."""
+    from fuse import run  # validate may import fuse and detectors (tach.toml)
 
-    return run(*(frames[k] for k in _NAMES))
+    try:
+        from detectors import score_cells
+    except ImportError:  # detectors without a pure scorer: fuse runs without cell scores
+        return run(*(frames[k] for k in _NAMES))
+    T = io.read_snapshot()["T"]
+    cells = score_cells(
+        frames["aggregate/observed"],
+        frames["forecast/expected"],
+        frames["reference/cells"],
+        frames["match/events"],
+        T,
+    )
+    return run(*(frames[k] for k in _NAMES), cells=cells, T=T)
 
 
 def _flagged(frames: dict[str, pd.DataFrame]) -> bool:
