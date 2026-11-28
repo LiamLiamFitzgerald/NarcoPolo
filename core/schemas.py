@@ -286,6 +286,8 @@ def _plan(obj: Mapping[str, Any]) -> None:
                 raise ValueError(f"plan: {asset} stop {i} theta must be in [0, 1]")
             if "reason" in s and s["reason"] not in ("exploit", "explore"):
                 raise ValueError(f"plan: {asset} stop {i} reason must be exploit or explore")
+            if "day" in s and s["day"] not in range(7):  # rev 2: day of the planning week
+                raise ValueError(f"plan: {asset} stop {i} day must be 0-6")
 
 
 _SNAPSHOT_KEYS = {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
