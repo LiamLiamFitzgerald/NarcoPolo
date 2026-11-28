@@ -132,15 +132,23 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | --- | --- | --- |
 | `reference/layers.gpkg` cells layer (P3) | `cell_id` str; `level` int (2000 or 10000); `geometry` polygon; `inshore_frac` `float 0–1, or NaN where no inshore map exists; lane`, `anchorage`, `port_zone`, `exclusion` bool; `dist_coast_m` float; `static_frac` float 0–1; sea\_frac float 0.2–1 | \~1,000 |
 | `reference/layers.gpkg` piers layer (P3) | `pier_id` str; `name` str; `geometry` point; `road_access` bool | tens |
+| `reference/layers.gpkg` land layer (P3, #133) | `id` int; `geometry` (multi)polygon, EPSG:32629: the land P3 closes from the coastline lines (land on the left, as in OSM); read by P7 for the basemap | 1 |
 | `reference/sea_250m.tif` (P3) | uint8: 1 sea, 0 land | about 750 × 380 px (the whole bounding box, land included) |
 | `reference/travel_hours.parquet` (P3) | `cell_id`, `pier_id`, `hours` float | cells × piers, \~50k |
-| `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1 | \~60 passes × \~940 cells, \~56k |
+| `reference/presence_2km.parquet` (P3, read by P4; #208) | `cell_id` str (in reference/cells); `date` date (UTC); `vessel_type` str (as in raw/gfw\_presence); `speed_bin` str (GFW's label, e.g. "0-2", "8+"); `hours` float ≥ 0 (area-weighted); one row per cell, date, type and bin | \~10⁵ |
+| `coverage/weather_daily.parquet` (P3, read by P4; #208) | `cell_id` str (in reference/cells); `date` date (UTC); `wind_max_ms` float ≥ 0; `hs_max_m` float ≥ 0: max over the UTC day's hourly ERA5, with coverage.weather\_at's point rules (nearest point for wind, nearest valid-wave point for waves, A8); one row per cell-day; no row where ERA5 is unknown (never 0) | cells × days, \~10⁵ |
+| `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1, `post_storm` bool (≥ 24 h of hs > 2.5 m in the 72 h before the pass, A9) | \~60 passes × \~940 cells, \~56k |
 | `detect/detections.parquet` (P4) | `det_id`, `pass_id`, `time_utc`, `x_m`, `y_m`, `peak_ratio_vv_db`, `peak_ratio_vh_db`, `pol_agree` bool, `n_px` int, `size_class` {small, medium, large}, `ghost` bool, `p_boat` float 0–1 | tens to hundreds per pass |
 | `match/events.parquet` (P4) | `event_id`, `event_type` {dark\_small, slowdown}, `time_utc`, `x_m`, `y_m`, `cell_id`, `p` float 0–1, `duration_min` (slowdowns), `ship_key` (salted hash, internal only), `matched` bool | thousands |
+| `validate/pboat_training.parquet` (P1 `validate.injection_test`, read by P4 `fit_pboat`; #209) | `pass_id`, `cell_id` str (in reference/cells), `date` date (the chip's UTC date), `peak_ratio_vv_db`, `peak_ratio_vh_db` float, `pol_agree` bool, `n_px` int ≥ 1, `ghost` bool (as `detect.run_pass` gives them), `label` bool: True = candidate at an injected boat, False = candidate in the same chips > 500 m from any injection or AIS ship (candidates in between are left out). P4 joins `wind_ms` from coverage/exposure on (cell\_id, pass\_id) and refits on every `detect.run()` with the shared `core.Split`; no fitted model is stored | hundreds to thousands |
 | `aggregate/observed.parquet` (P5) | `cell_id`, `level`, `date`, `event_type`, `count` float ≥ 0, `exposure` float ≥ 0 | \~690k slowdown + \~85k small, \~770k |
 | `forecast/expected.parquet` (P5) | `cell_id`, `date`, `event_type`, `mu` float, `phi` float, `lo90`, `hi90`, `model` str, `fold` int | same as observed |
-| `fuse/cells.parquet` (P6) | `cell_id`, `date`, `event_type`, `p_mid`, `bh_flag` bool, `gi_z`, `cusum_s`, `context` 0–1, `U` 0–1, `agreement` 0–4 | same as observed, observed rows only |
+| `fuse/cells.parquet` (P6) | `cell_id`, `date`, `event_type`, `p_mid`, `bh_flag` bool, `gi_z`, `cusum_s`, `context` 0–1, `U` 0–1, `y` float ≥ 0 = (C + 0.5) ÷ (μ + 0.5), `y_week` float ≥ 0 = (ΣC + 0.5) ÷ (Σμ + 0.5) over the cell's ISO week, `agreement` 0–4 | same as observed, observed rows only |
 | `fuse/sites.parquet` (P6) | `site_id`, `x_m`, `y_m`, `n_slowdowns`, `S` float, `p_perm`, `bh_flag` bool, `recurrence` int, `followup_unobserved` int, `agreement` 0–4, `reasons` list\[str\], `top_piers` list\[str\] | tens |
+| `fuse/piers.parquet` (P6) | `pier_id` str (in the piers layer), `P_j` float ≥ 0 = Σ over scored sites of S × exp(−T ÷ 1 h) | one row per pier |
+| `fuse/links.parquet` (P6) | `site_id` str (in fuse/sites), `L` 0–1, `age_days` float ≥ 0; per site, Σ L × 0.5^(age\_days ÷ 30) = S | one row per slowdown with a link score |
+| `fuse/sites.parquet` learning columns (P6, optional until the learning layer lands; docs/learning.md) | `p_comb` 0–1, `comb_flag` bool, `agreement_merged` int ≥ 0, `p_site` 0–1, `model_rung` 0–3 | same rows as fuse/sites |
+| `patrol/bandit_state.json` (P7) | `{site_id: {alpha > 0, beta > 0, last_visit_week int or null}}`; plan stops may carry `theta` 0–1 and `reason` exploit/explore | one entry per site ever ranked |
 | `patrol/plan.json` (P7) | per asset: ordered stops (site or pier id, arrival time, dwell) | small |
 | `export/snapshot.json` (P7) | see P7 | < 5 MB |
 
@@ -200,8 +208,6 @@ Every method in the system, in data order. If an agent wants a method not on thi
 | Connected components (8-neighbour) | P4 | Group flagged pixels into candidates | `scipy.ndimage.label` | One boat = one blob | Two close boats merge; a long ship splits |
 | Azimuth-ambiguity ghost rule | P4 | Remove radar ghosts of bright objects | own code | Offset formula and scene metadata are right | Wrong offset lets ghosts through as dark boats |
 | Logistic regression calibration | P4 | Turn detection features into `p_boat` | `statsmodels` `Logit` or `scikit-learn` | Injected boats look like real ones | Too-bright injections make probabilities overconfident |
-| Dawid–Skene EM (optional) | P4 | Combine 3+ detector views without labels | `crowd-kit` | Views make independent errors | Correlated views inflate confidence |
-| Linear interpolation of AIS | P4 | AIS position at scan time | `numpy.interp` in UTM | Straight motion between pings | Long gaps put ships in the wrong place |
 | Hungarian assignment with a gate | P4 | One-to-one detection–AIS matching | `scipy.optimize.linear_sum_assignment` | Gate wider than position error | Too tight: real AIS ships become "dark" |
 | Rolling median speed, threshold rule | P4 | Ship slowdown events | `pandas` | Exclusion zones capture legitimate stops | Pilot boarding or weather stops become "suspicious" |
 | Exposure-aware EWMA | P5 | First baseline rate | own code | Rate changes slowly | Treating unobserved days as zeros drags rates down |
@@ -212,15 +218,14 @@ Every method in the system, in data order. If an agent wants a method not on thi
 | Poisson deviance skill | P1, P5 | Compare forecasts | own code | Counts roughly Poisson | Very sparse folds give noisy skill: report ranges |
 | Mid-p negative binomial tail | P6 | Per-cell surprise | `scipy.stats.nbinom` | μ and φ are right | A bad baseline makes everything "surprising" |
 | Benjamini–Hochberg FDR | P6 | Control false flags over many tests | `statsmodels.stats.multitest` | Tests independent or positively dependent | Running it per subset instead of over the whole set |
-| Getis-Ord Gi\* with permutations | P6 | Neighbourhood hotspots | `esda.G_Local(star=True)`, `libpysal` | Non-negative variable; weights skip unobserved cells | Unobserved cells treated as zero neighbours |
+| Getis-Ord Gi\* (analytic z) | P6 | Neighbourhood hotspots | own code, tested against `esda.G_Local(star=True)` (D6) | Non-negative variable; weights skip unobserved cells | Unobserved cells treated as zero neighbours |
 | CUSUM | P6 | Slow build-ups | own code | Residuals roughly standardised | Updating on unobserved days |
 | Percentile-rank fusion | P6 | Combine detectors on one scale | `pandas.rank(pct=True)` | Ranks over the same set of cells | Ranking over different cell sets skews U |
-| DBSCAN | P6 | Group slowdowns into sites | `sklearn.cluster.DBSCAN` | Distances in metres | Degrees instead of metres |
 | Exponential time decay | P6 | Favour quick pick-ups and recent events | own code | Pick-ups follow within days | — |
 | Circular time-shift permutation test | P1, P6 | Site significance; null test | own code | Shifting breaks timing but keeps busyness | Too few shuffles give unstable p-values |
 | Minimum-cost path on a sea raster | P3, P7 | Sea-only distances | `skimage.graph.MCP_Geometric` | Land cost infinite | A gap in the coastline lets boats cross land |
 | Greedy orienteering + 2-opt | P7 | Route within a time budget | own code | Travel times correct | Straight-line distances cut across headlands |
-| Bootstrap and Thompson-style draw | P7 | Pick the exploration site | `numpy` | Resampled scores reflect uncertainty | Unseeded draws make the demo change every run |
+| Thompson sampling (bandit, docs/learning.md L5) | P7 | Pick which sites to visit and explore | `numpy` | Resampled scores reflect uncertainty | Unseeded draws make the demo change every run |
 | Wilson score interval | P1 | Recall uncertainty | `statsmodels` `proportion_confint` | Binomial counts | — |
 | Reliability diagram and Brier score | P1 | Check probability calibration | own code or `sklearn.calibration` | Enough held-out events | Too few events per bin: merge bins |
 | Injection test | P1 | Measure detection recall and false alarms | own code | Injected blobs resemble real boats | Adding in dB instead of linear power |
@@ -279,7 +284,7 @@ For each step, the method we use, the model the literature treats as standard, a
 | Neighbourhood | Getis-Ord Gi\* (esda) | For counts with expected values, the Kulldorff Poisson scan statistic | Keep Gi\* (library exists); scan statistic on the cut list | Gi\* with mostly zero cells: weekly sums and the stabilised ratio already handle it |
 | Build-up | CUSUM on Pearson residuals | Poisson CUSUM ([Lucas 1985](https://par.nsf.gov/servlets/purl/10348944)), generalised to time-varying expected counts for small regional counts ([CDC](https://www.cdc.gov/mmwr/preview/mmwrhtml/su5301a18.htm)) | Swap (A1): likelihood-ratio Poisson CUSUM with target ratio ρ = 2 | z-scores of counts near 0 are badly skewed; the old CUSUM fires on single boats |
 | Fusion | Mean of percentile ranks | Rank averaging; Fisher or Stouffer need independence | Keep | The four detectors share counts, so never call agreement a probability |
-| Lag link | Slowdown followed by nearby small boats within 7 days | A bivariate space–time interaction test of the Knox type, counting pairs close in both space and time ([Knox method](https://www.nku.edu/~longa/geomed/stats/Knox/more.html)) | Keep our weighted form; pointpats.knox as a one-line global sanity check | Retuning radius or window after seeing results |
+| Lag link | Slowdown followed by nearby small boats within 7 days | A bivariate space–time interaction test of the Knox type, counting pairs close in both space and time ([Knox method](https://www.nku.edu/~longa/geomed/stats/Knox/more.html)) | Keep our weighted form (Knox check not built, methods audit D5) | Retuning radius or window after seeing results |
 | Null for the link | Circular time shift of slowdowns | Random shift with toroidal wrap (Lotwick and Silverman 1982), which keeps each pattern's own structure while breaking the dependence between them ([arXiv](https://arxiv.org/pdf/1803.01639)) | Keep | Plain time shuffles break each series' own clustering and make links look too significant |
 | Sites | DBSCAN on slowdown points | — | Swap (A2): one site per 2 km cell, plus suppression of near-duplicates | Slowdowns now sit on cell centres 2 km apart; DBSCAN at 3 km chains whole areas into one site |
 | Site significance | 999 shuffles, BH across sites | Monte Carlo test | Keep, with enough shuffles (A3) | With 999 shuffles the smallest p is 0.001; BH over 300 sites needs 0.0003, so nothing could ever be flagged |

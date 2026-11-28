@@ -26,7 +26,7 @@ jobs:
         run: python3 scripts/check_paths.py "${{ github.head_ref }}" "origin/${{ github.base_ref }}"
       - name: Commits are credited to humans only
         run: |
-          bad=$(git log --format='%H %an <%ae>%n%b' "origin/${{ github.base_ref }}..HEAD" \
+          bad=$(git log --no-merges --format='%H %an <%ae>%n%b' "origin/${{ github.base_ref }}..HEAD" \
             | grep -iE 'noreply@anthropic\.com|^[0-9a-f]{40} Claude |Co-Authored-By: .*Claude|Generated with .*Claude' || true)
           if [ -n "$bad" ]; then echo "AI attribution found in commits:"; echo "$bad"; exit 1; fi
           echo "All commits credited to humans."
@@ -34,30 +34,45 @@ jobs:
         run: |
           n=$(echo "${{ github.head_ref }}" | sed -nE 's#^mod/[pP]([1-7])/.*#\1#p')
           [ -z "$n" ] && { echo "Not a module branch; skipped."; exit 0; }
-          untagged=$(git log --format='%h %s' "origin/${{ github.base_ref }}..HEAD" | grep -v " \[P$n\]" || true)
+          untagged=$(git log --no-merges --format='%h %s' "origin/${{ github.base_ref }}..HEAD" | grep -v " \[P$n\]" || true)
           if [ -n "$untagged" ]; then echo "Commits missing [P$n]:"; echo "$untagged"; exit 1; fi
           echo "All commits tagged [P$n]."
 
   checks:
     name: Lint, types, boundaries, tests
     runs-on: ubuntu-latest
-    if: hashFiles('pyproject.toml') != ''
     steps:
       - uses: actions/checkout@v4
+      - name: Has the project been set up yet?
+        id: has
+        run: echo "py=$([ -f pyproject.toml ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
       - name: Install uv
-        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+        if: steps.has.outputs.py == 'true'
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Install locked dependencies
+        if: steps.has.outputs.py == 'true'
         run: uv sync --frozen
       - name: Ruff
+        if: steps.has.outputs.py == 'true'
         run: |
           uv run ruff check .
           uv run ruff format --check .
       - name: Types
+        if: steps.has.outputs.py == 'true'
         run: uv run basedpyright
       - name: Module boundaries
+        if: steps.has.outputs.py == 'true'
         run: uv run tach check
       - name: Tests (simulator only, no network)
+        if: steps.has.outputs.py == 'true'
         run: uv run pytest -q --tb=short
+        env:
+          NARCO_NO_NETWORK: "1"
+      - name: Slow tests (whole simulated seasons; after merges into integration only, not on PRs)
+        if: steps.has.outputs.py == 'true' && github.event_name == 'push'
+        run: uv run pytest -q --tb=short -m slow
         env:
           NARCO_NO_NETWORK: "1"
 

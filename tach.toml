@@ -16,7 +16,7 @@ depends_on = ["core"]
 
 [[modules]]
 path = "validate"
-depends_on = ["core", "detect", "forecast", "fuse"]
+depends_on = ["core", "sim", "detect", "detectors", "forecast", "fuse"]  # sim: L2, L4 and L6 simulate their own regimes and seeds (#168)
 
 [[modules]]
 path = "ingest"
@@ -52,7 +52,7 @@ depends_on = ["core"]
 
 [[modules]]
 path = "fuse"
-depends_on = ["core"]
+depends_on = ["core", "detectors"]  # #269: fuse scores the radar history for the lag link
 
 [[modules]]
 path = "patrol"

@@ -11,6 +11,7 @@ import argparse
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 GROUP = re.compile(r"^([a-z_]+/[A-Za-z_0-9]*)")  # e.g. "detect/cfar", "aggregate/"
@@ -52,7 +53,7 @@ SOFT = {
 
 
 def parse(module: str) -> tuple[list[tuple[str, str]], str]:
-    text = Path(f"docs/specs/{module}.md").read_text()
+    text = Path(f"docs/specs/{module}.md").read_text(encoding="utf-8")
     block = re.search(r"```text\n(.*?)```", text, re.DOTALL)
     groups: list[tuple[str, list[str]]] = []
     for line in (block.group(1) if block else "").splitlines():
@@ -200,11 +201,13 @@ def apply(items: dict) -> None:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true")
     a = ap.parse_args()
     items = build()
-    Path("docs/issue-plan.md").write_text(plan_md(items) + "\n## Dependency graph\n\n" + mermaid(items) + "\n")
+    Path("docs/issue-plan.md").write_text(plan_md(items) + "\n## Dependency graph\n\n" + mermaid(items) + "\n",
+                                             encoding="utf-8")
     print(plan_md(items))
     if a.apply:
         apply(items)

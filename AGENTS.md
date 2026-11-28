@@ -4,7 +4,7 @@ You are one of several Claude Code agents building NarcoPolo, each working on on
 
 ## Before you start
 
-1. Your human starts you with `NARCO_MODULE=P<n>` set (P1 … P7). Without it, the guard hook blocks every edit.
+1. Your human starts you inside a worktree on branch `mod/p<n>/<issue>` (from `scripts/new_task.sh`); the branch sets your module (P1 … P7). Outside such a branch, the guard hook blocks every edit in the repo. `NARCO_MODULE` is optional; if set, it must match the branch.
 2. Read, in order: `docs/shared.md` (once per session), then **only** your own spec `docs/specs/P<n>.md`. Do not read `docs/blueprint.md`, other modules' specs or other modules' code unless an issue tells you to — this is the main way we save tokens.
 3. Take exactly one GitHub issue. One issue per session; clear context before the next.
 
@@ -30,7 +30,7 @@ You are one of several Claude Code agents building NarcoPolo, each working on on
 3. Run `make test` (ruff, type checker, tach, pytest). Keep output quiet: `uv run pytest -q --tb=short`.
 4. Commit in small steps. Push your branch only: `git push -u origin mod/p<n>/<issue>`. Never push to `main` or `integration`.
 5. Open a PR into `integration` with the template filled in: what changed, which tests, which warnings from your spec you checked and how.
-6. CI and the Claude reviewer run. Fix what they find. A human merges `integration` into `main` at checkpoints.
+6. CI runs. Fix what they find. A human merges `integration` into `main` at checkpoints.
 7. Update your module's line in `STATUS.md`.
 
 ## Stop and escalate

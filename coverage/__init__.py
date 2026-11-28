@@ -1,0 +1,266 @@
+"""Which cells each radar pass saw, how well, and whether the sea was calm (docs/specs/P3.md).
+
+ERA5 is passed around as a mapping (see _read_era5): time (datetime64, UTC), lat, lon (1-D, degrees), and u10, v10,
+swh as (time, lat, lon) arrays with NaN waves over land. era5=None means weather unknown, which is never calm.
+Thresholds come from config.yaml `coverage:`."""
+
+import json
+import warnings
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any
+
+import geopandas as gpd
+import numpy as np
+import pandas as pd
+import shapely
+from scipy.io import netcdf_file
+from shapely.geometry.base import BaseGeometry
+
+from core import io
+from core.config import load
+from core.crs import to_utm, to_wgs84
+
+
+def _cfg() -> Mapping[str, Any]:
+    return load(Path(__file__).resolve().parent.parent / "config.yaml")[0]
+
+
+def covered_frac(
+    footprint: BaseGeometry, cells: gpd.GeoDataFrame, sea: BaseGeometry | None = None
+) -> pd.Series:
+    """area(footprint & cell & sea) / full cell area, so a half-land cell reaches at most 0.5. Without a sea geometry
+    the cell's sea_frac stands in for it (exact when the sea spreads evenly across the part the footprint covers)."""
+    full = cells.area
+    if sea is not None:
+        part = cells.intersection(footprint.intersection(sea)).area
+    else:
+        part = cells.intersection(footprint).area
+        if "sea_frac" in cells:
+            part = part * cells["sea_frac"]
+    return pd.Series(
+        (part / full).clip(0, 1).to_numpy(float), index=cells.index, name="covered_frac"
+    )
+
+
+def _read_era5(path: Path) -> dict[str, np.ndarray]:
+    """ERA5 single levels as written by the CDS (netCDF3 here; scipy reads it, netCDF4 would need another library)."""
+    with netcdf_file(path, "r", mmap=False) as f:
+        v = f.variables
+        units = v["time"].units.decode() if isinstance(v["time"].units, bytes) else v["time"].units
+        step, _, origin = units.partition(" since ")
+        t0 = np.datetime64(pd.Timestamp(origin).tz_localize(None))
+        mult = {"hours": "h", "seconds": "s", "days": "D"}[step.strip()]
+        time = t0 + v["time"][:].astype("int64").astype(f"timedelta64[{mult}]")
+
+        def arr(name: str) -> np.ndarray:
+            a = np.array(v[name][:], dtype=float)
+            fill = getattr(v[name], "_FillValue", None)
+            return np.where(a == fill, np.nan, a) if fill is not None and np.isfinite(fill) else a
+
+        return {
+            "time": time.astype("datetime64[ns]"),
+            "lat": np.array(v["latitude"][:], float),
+            "lon": np.array(v["longitude"][:], float),
+            "u10": arr("u10"),
+            "v10": arr("v10"),
+            "swh": arr("swh"),
+        }
+
+
+def _points(
+    era5: Mapping[str, np.ndarray], cells: gpd.GeoDataFrame
+) -> tuple[np.ndarray, np.ndarray]:
+    """Nearest ERA5 grid row and column for each cell centre."""
+    c = cells.centroid
+    lon, lat = to_wgs84(c.x.to_numpy(), c.y.to_numpy())
+    return (
+        np.abs(np.asarray(lat)[:, None] - era5["lat"][None, :]).argmin(1),
+        np.abs(np.asarray(lon)[:, None] - era5["lon"][None, :]).argmin(1),
+    )
+
+
+def _wave_points(
+    era5: Mapping[str, np.ndarray], cells: gpd.GeoDataFrame
+) -> tuple[np.ndarray, np.ndarray]:
+    """Nearest ERA5 grid point with valid waves for each cell centre (A8: waves are NaN over land), in metres."""
+    valid = np.isfinite(era5["swh"]).any(axis=0)
+    gi, gj = np.nonzero(valid)
+    if not len(gi):
+        return _points(era5, cells)
+    gx, gy = to_utm(era5["lon"][gj], era5["lat"][gi])
+    c = cells.centroid
+    d = np.hypot(c.x.to_numpy()[:, None] - gx[None, :], c.y.to_numpy()[:, None] - gy[None, :])
+    k = d.argmin(1)
+    return gi[k], gj[k]
+
+
+def _hour(era5: Mapping[str, np.ndarray], time: pd.Timestamp) -> int:
+    t = np.datetime64(pd.Timestamp(time).tz_convert("UTC").tz_localize(None), "ns")
+    return int(np.abs(era5["time"] - t).argmin())
+
+
+def weather_at(
+    era5: Mapping[str, np.ndarray] | None, cells: gpd.GeoDataFrame, time: pd.Timestamp
+) -> tuple[pd.Series, pd.Series]:
+    """(wind_ms, hs_m) per cell: nearest hour; nearest grid point for wind, and for waves the nearest point with valid
+    waves (A8). wind = sqrt(u10^2 + v10^2). Unknown weather (era5=None) is NaN, which calm() treats as rough."""
+    if era5 is None:
+        nan = pd.Series(np.nan, index=cells.index)
+        return nan.rename("wind_ms"), nan.copy().rename("hs_m")
+    h = _hour(era5, time)
+    i, j = _points(era5, cells)
+    wi, wj = _wave_points(era5, cells)
+    wind = np.hypot(era5["u10"][h, i, j], era5["v10"][h, i, j])
+    hs = era5["swh"][h, wi, wj]
+    return pd.Series(wind, index=cells.index, name="wind_ms"), pd.Series(
+        hs, index=cells.index, name="hs_m"
+    )
+
+
+def _weather_daily(era5: Mapping[str, np.ndarray] | None, cells: gpd.GeoDataFrame) -> pd.DataFrame:
+    """coverage/weather_daily (#208): per 2 km cell and UTC day, the max over that day's ERA5 hours of the wind and the
+    wave height, at weather_at's points (nearest point for wind, nearest valid-wave point for waves, A8).
+    Unknown weather has no row, never 0: no ERA5 at all gives no rows, and a cell-day whose wind or waves are NaN in
+    every hour is left out. A day is the hours ERA5 has for it (a download cut mid-day gives that day's partial max)."""
+    cols = ["cell_id", "date", "wind_max_ms", "hs_max_m"]
+    fine = cells[cells["level"] == 2000] if "level" in cells else cells
+    if era5 is None or fine.empty or not len(era5["time"]):
+        empty = {"cell_id": pd.Series([], dtype=str), "date": pd.Series([], dtype="datetime64[ns]")}
+        return pd.DataFrame(
+            {
+                **empty,
+                "wind_max_ms": pd.Series([], dtype=float),
+                "hs_max_m": pd.Series([], dtype=float),
+            }
+        )
+    i, j = _points(era5, fine)
+    wi, wj = _wave_points(era5, fine)
+    wind = np.hypot(era5["u10"][:, i, j], era5["v10"][:, i, j])  # (hour, cell)
+    hs = era5["swh"][:, wi, wj]
+    day = pd.DatetimeIndex(era5["time"]).normalize()
+    out = []
+    for d in day.unique():
+        h = day == d
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter(
+                "ignore", RuntimeWarning
+            )  # all-NaN columns: unknown, dropped below
+            w, s = np.nanmax(wind[h], axis=0), np.nanmax(hs[h], axis=0)
+        out.append(
+            pd.DataFrame(
+                {"cell_id": fine["cell_id"].to_numpy(), "date": d, "wind_max_ms": w, "hs_max_m": s}
+            )
+        )
+    frame = pd.concat(out, ignore_index=True)
+    return frame.dropna(subset=["wind_max_ms", "hs_max_m"]).reset_index(drop=True)[cols]
+
+
+def calm(wind_ms: pd.Series, hs_m: pd.Series) -> pd.Series:
+    """Calm if wind and wave height are both under their thresholds; unknown weather is not calm.
+    The thresholds are provisional until P1's recall curve exists (spec warning)."""
+    c = _cfg().get("coverage", {})
+    wind_max, hs_max = c["calm_wind_ms"], c["calm_hs_m"]
+    return ((wind_ms < wind_max) & (hs_m < hs_max)).rename("calm")
+
+
+def post_storm(
+    era5: Mapping[str, np.ndarray] | None, cells: gpd.GeoDataFrame, time: pd.Timestamp
+) -> pd.Series:
+    """A9: at least storm_hours hourly wave heights over storm_hs_m in the storm_lookback_h hours before the pass.
+    Unknown weather (era5 None) is never a storm."""
+    c = _cfg()["coverage"]
+    storm_hs_m, hours, lookback_h = (
+        c["storm_hs_m"],
+        int(c["storm_hours"]),
+        int(c["storm_lookback_h"]),
+    )
+    if era5 is None:
+        return pd.Series(False, index=cells.index, name="post_storm")
+    h = _hour(era5, time)
+    wi, wj = _wave_points(era5, cells)
+    window = era5["swh"][max(h - lookback_h, 0) : h, wi, wj]  # (hours, cells)
+    return pd.Series((window > storm_hs_m).sum(0) >= hours, index=cells.index, name="post_storm")
+
+
+def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> pd.DataFrame:
+    """One row per 2 km cell and pass. `passes`: pass_id, time_utc, footprint (UTM), downloaded.
+    exposure_small = covered_frac x calm; a pass not downloaded gives 0 everywhere, even where calm. post_storm per A9."""
+    fine = cells[cells["level"] == 2000]
+    rows = []
+    for pass_id, time_utc, footprint, downloaded in zip(
+        passes["pass_id"],
+        passes["time_utc"],
+        passes["footprint"],
+        passes["downloaded"],
+        strict=True,
+    ):
+        time_utc = pd.Timestamp(time_utc)
+        cov = covered_frac(footprint, fine)
+        wind, hs = weather_at(era5, fine, time_utc)
+        ok = calm(wind, hs)
+        frame = pd.DataFrame(
+            {
+                "cell_id": fine["cell_id"].to_numpy(),
+                "pass_id": pass_id,
+                "time_utc": time_utc,
+                "covered_frac": cov.to_numpy(),
+                "wind_ms": wind.to_numpy(),
+                "hs_m": hs.to_numpy(),
+                "calm": ok.to_numpy(),
+                "exposure_small": (cov * ok * bool(downloaded)).to_numpy(),
+                "post_storm": post_storm(era5, fine, time_utc).to_numpy(),
+            }
+        )
+        rows.append(frame)
+    return pd.concat(rows, ignore_index=True)
+
+
+def _read_passes(s1: Path) -> pd.DataFrame:
+    """One row per raw/s1/<hash>.json: pass_id, time_utc, footprint in UTM, downloaded (a scene file exists)."""
+    rows = []
+    for meta_path in sorted(s1.glob("*.json")):
+        m = json.loads(meta_path.read_text())
+        fp = shapely.from_wkt(m["footprint"])
+        if m.get("footprint_crs", "EPSG:4326") != "EPSG:32629":
+            fp = shapely.transform(fp, lambda xy: np.column_stack(to_utm(xy[:, 0], xy[:, 1])))
+        rows.append(
+            {
+                "pass_id": m.get("pass_id", m["scene_id"]),
+                "time_utc": pd.Timestamp(m["start_time"]).tz_convert("UTC"),
+                "footprint": fp,
+                "downloaded": meta_path.with_suffix(".tif").exists(),
+            }
+        )
+    return pd.DataFrame(rows, columns=["pass_id", "time_utc", "footprint", "downloaded"])
+
+
+def _raw_is_real() -> bool:
+    """True when raw/manifest.json lists files and none is a simulator copy ("simulated") or an ingest stub ("stub").
+    Without a manifest there is nothing real to build from."""
+    path = io.raw_root() / "manifest.json"
+    if not path.exists():
+        return False
+    files = json.loads(path.read_text()).get("files", {})
+    fake = any(
+        f.get("request", {}).get("simulated") or f.get("request", {}).get("stub")
+        for f in files.values()
+    )
+    return bool(files) and not fake
+
+
+def run() -> None:
+    """make all. Simulator (or ingest stubs): `make sim` already wrote coverage/exposure and coverage/weather_daily;
+    check them and stop. Real raw/: one row per 2 km cell and pass from raw/s1 metadata and raw/era5.nc (unknown
+    weather if missing), and the daily weather per 2 km cell (#208)."""
+    if not _raw_is_real():
+        io.read_stage("coverage/exposure")
+        io.read_stage("coverage/weather_daily")
+        return
+    raw = io.raw_root()
+    era5 = _read_era5(raw / "era5.nc") if (raw / "era5.nc").exists() else None
+    cells = gpd.GeoDataFrame(io.read_stage("reference/cells")).to_crs(32629)
+    io.write_stage(
+        "coverage/exposure", build_exposure(_read_passes(raw / "s1"), cells, era5), "real"
+    )
+    io.write_stage("coverage/weather_daily", _weather_daily(era5, cells), "real")

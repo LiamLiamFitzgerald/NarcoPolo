@@ -1,0 +1,1635 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NarcoPolo</title>
+<script>
+// Resolve the theme before the first paint: the viewer's choice (light, dark, auto) or the system setting.
+(() => {
+  let pick = "auto";
+  try { pick = localStorage.getItem("np-theme") || "auto"; } catch (e) { /* no storage: follow the system */ }
+  const dark = pick === "dark" || (pick === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.mode = dark ? "dark" : "light";
+  document.documentElement.dataset.pick = pick;
+})();
+</script>
+<style>
+/* tokens:start
+   Every colour in this page is defined in this block and nowhere else (a test checks it).
+   UI roles: Material 3 colour scheme generated from seed #006a6a (teal), light and dark.
+   Data colours: the dataviz reference palette (blue sequential ramp, blue/red diverging pair with a grey
+   midpoint, categorical orange and violet for overlays). Diverging midsteps are OKLab mixes between
+   the documented poles and the midpoint, at 25, 50 and 75 %. Checked: UI text >= 4.5:1, chips >= 6:1,
+   overlay pair passes CVD and normal-vision separation in both modes. */
+:root {
+  color-scheme: light;
+  --md-primary: #006a6a; --md-on-primary: #ffffff;
+  --md-primary-container: #9cf1f0; --md-on-primary-container: #002020;
+  --md-secondary-container: #cce8e7; --md-on-secondary-container: #051f1f;
+  --md-tertiary-container: #d3e4ff; --md-on-tertiary-container: #041c35;
+  --md-error: #ba1a1a; --md-error-container: #ffdad6; --md-on-error-container: #410002;
+  --md-surface: #f4fbfa; --md-surface-container-lowest: #ffffff; --md-surface-container-low: #eff5f4;
+  --md-surface-container: #e9efee; --md-surface-container-high: #e3e9e8; --md-surface-container-highest: #dde4e3;
+  --md-on-surface: #161d1d; --md-on-surface-variant: #3f4948; --md-outline: #6f7979; --md-outline-variant: #bec9c8;
+  --md-shadow: rgba(0, 0, 0, 0.3); --md-shadow-soft: rgba(0, 0, 0, 0.15); --md-scrim: rgba(0, 0, 0, 0.32);
+
+  /* data: sequential (one hue, light to dark), diverging (blue - grey - red), unobserved hatching */
+  --seq-0: #cce3fd; --seq-1: #84b9f3; --seq-2: #338ced; --seq-3: #1b64be; --seq-4: #0e3d7e;
+  --div-n4: #257de0; --div-n3: #5f9be6; --div-n2: #90b8eb; --div-n1: #bfd4ee; --div-0: #efefef;
+  --div-p1: #f5c9c5; --div-p2: #f6a29b; --div-p3: #f37872; --div-p4: #ec4647;
+  --hatch-bg: #f6f6f6; --hatch-line: #8c8c8c; --lane-line: #16355c;
+  --site: #f47230; --explore: #6a4ce2; --ink: #161d1d; --ring: #ffffff;
+  --map-bg: #e9efee; --cell-gap: #e9efee; --land: #e2ddd1; --coast: #857f72;
+  /* charts: palette slots 1 and 2 in their fixed order (a documented passing pair), chart chrome, tooltip */
+  --chart-1: #257de0; --chart-2: #f47230; --chart-grid: #e7e7e7; --chart-axis: #c2c2c2;
+  --md-inverse-surface: #2b3231; --md-inverse-on-surface: #ecf2f1;
+
+  /* the data label never changes with the theme: a simulated demo must never look real */
+  --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
+}
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --md-primary: #80d5d4; --md-on-primary: #003737;
+  --md-primary-container: #004f4f; --md-on-primary-container: #9cf1f0;
+  --md-secondary-container: #324b4b; --md-on-secondary-container: #cce8e7;
+  --md-tertiary-container: #334863; --md-on-tertiary-container: #d3e4ff;
+  --md-error: #ffb4ab; --md-error-container: #93000a; --md-on-error-container: #ffdad6;
+  --md-surface: #0e1514; --md-surface-container-lowest: #090f0f; --md-surface-container-low: #161d1d;
+  --md-surface-container: #1a2121; --md-surface-container-high: #252b2b; --md-surface-container-highest: #303636;
+  --md-on-surface: #dde4e3; --md-on-surface-variant: #bec9c8; --md-outline: #899392; --md-outline-variant: #3f4948;
+  --md-shadow: rgba(0, 0, 0, 0.6); --md-shadow-soft: rgba(0, 0, 0, 0.3); --md-scrim: rgba(0, 0, 0, 0.5);
+
+  /* dark mode is selected, not flipped: low values recede into the dark surface */
+  --seq-0: #0e3d7e; --seq-1: #1b64be; --seq-2: #338ced; --seq-3: #84b9f3; --seq-4: #cce3fd;
+  --div-n4: #338ced; --div-n3: #3a77bd; --div-n2: #3d628e; --div-n1: #3c4d62; --div-0: #383838;
+  --div-p1: #634543; --div-p2: #8f504e; --div-p3: #bc5a59; --div-p4: #eb6263;
+  --hatch-bg: #1f1f1f; --hatch-line: #8a8a8a; --lane-line: #b3c8e8;
+  --site: #e76624; --explore: #9887ef; --ink: #dde4e3; --ring: #090f0f;
+  --map-bg: #1a2121; --cell-gap: #1a2121; --land: #2c2a25; --coast: #8f897b;
+  --chart-1: #338ced; --chart-2: #e76624; --chart-grid: #303030; --chart-axis: #474747;
+  --md-inverse-surface: #dde4e3; --md-inverse-on-surface: #2b3231;
+
+  --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
+}
+/* tokens:end */
+
+:root {
+  /* type scale (Material 3), system fonts only: nothing is loaded from the internet */
+  --font: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --t-display-small: 400 36px/44px var(--font);
+  --t-headline-small: 400 24px/32px var(--font);
+  --t-title-large: 400 22px/28px var(--font);
+  --t-title-medium: 500 16px/24px var(--font);
+  --t-title-small: 500 14px/20px var(--font);
+  --t-body-large: 400 16px/24px var(--font);
+  --t-body-medium: 400 14px/20px var(--font);
+  --t-body-small: 400 12px/16px var(--font);
+  --t-label-large: 500 14px/20px var(--font);
+  --t-label-medium: 500 12px/16px var(--font);
+  --t-label-small: 500 11px/16px var(--font);
+  /* shape and spacing (4 dp grid) */
+  --shape-xs: 4px; --shape-sm: 8px; --shape-md: 12px; --shape-lg: 16px; --shape-xl: 28px; --shape-full: 999px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+  /* elevation (#277): two layers each, a tight key shadow and a soft ambient one */
+  --elev-0: none;
+  --elev-1: 0 1px 2px var(--md-shadow), 0 1px 3px 1px var(--md-shadow-soft);
+  --elev-2: 0 1px 2px var(--md-shadow), 0 2px 6px 2px var(--md-shadow-soft);
+  --elev-3: 0 1px 3px var(--md-shadow), 0 4px 8px 3px var(--md-shadow-soft);
+  --elev-4: 0 2px 3px var(--md-shadow), 0 6px 10px 4px var(--md-shadow-soft);
+  --elev-5: 0 4px 4px var(--md-shadow), 0 8px 12px 6px var(--md-shadow-soft);
+  /* motion (#278): durations and Material easings */
+  --dur-short: 150ms; --dur-medium: 280ms; --dur-long: 450ms; --dur: var(--dur-short);
+  --ease: cubic-bezier(0.2, 0, 0, 1); --ease-decel: cubic-bezier(0.05, 0.7, 0.1, 1); --ease-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* component rules set display, which would otherwise beat the attribute */
+html { scroll-behavior: smooth; }
+body { margin: 0; font: var(--t-body-medium); background: var(--md-surface); color: var(--md-on-surface); -webkit-font-smoothing: antialiased; }
+h2 { font: var(--t-title-medium); margin: 0 0 var(--sp-3); }
+h3 { font: var(--t-title-small); margin: var(--sp-4) 0 var(--sp-2); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+.muted { color: var(--md-on-surface-variant); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.icon { width: 18px; height: 18px; fill: currentColor; flex: none; }
+.page { max-width: 1680px; margin: 0 auto; }
+.skip { position: absolute; left: -999px; top: var(--sp-2); z-index: 20; padding: var(--sp-2) var(--sp-4); border-radius: var(--shape-sm);
+  background: var(--md-primary); color: var(--md-on-primary); }
+.skip:focus { left: var(--sp-2); }
+
+/* state layer: hover and press tint every interactive element in its own content colour */
+.state { position: relative; overflow: hidden; cursor: pointer; border: 0; background: none; }
+.state::before { content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity var(--dur-short) var(--ease); pointer-events: none; }
+.state:hover::before { opacity: 0.08; }
+.state:active::before, .state:focus-visible::before { opacity: 0.12; }
+.state:active { box-shadow: var(--elev-1); }
+.state:disabled { cursor: default; opacity: 0.38; }
+.state:disabled::before { opacity: 0; }
+
+/* top app bar: flat at rest, rises once the page scrolls */
+.appbar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-4); background: var(--md-surface); box-shadow: var(--elev-0);
+  transition: box-shadow var(--dur-medium) var(--ease), background-color var(--dur-medium) var(--ease); }
+.appbar.scrolled { background: var(--md-surface-container); box-shadow: var(--elev-2); }
+.brand { margin: 0; font: var(--t-title-large); display: flex; align-items: center; gap: var(--sp-2); letter-spacing: 0.2px; }
+.brand svg { width: 28px; height: 28px; fill: var(--md-primary); }
+.spacer { flex: 1; }
+#banner { display: inline-flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); border-radius: var(--shape-sm);
+  font: var(--t-label-large); color: var(--label-on); background: var(--label-none); box-shadow: var(--elev-1); }
+#banner[data-label="simulated"] { background: var(--label-simulated); }
+#banner[data-label="real"] { background: var(--label-real); }
+#banner[data-label="mixed"] { background: var(--label-mixed); }
+#banner .sub { font: var(--t-label-medium); opacity: 0.9; }
+.icon-btn { width: 40px; height: 40px; border-radius: var(--shape-full); display: inline-grid; place-items: center; color: var(--md-on-surface-variant); }
+
+/* headline figures (#279) */
+.figures { display: grid; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) 0; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+.figure { background: var(--md-surface-container-lowest); border-radius: var(--shape-lg); padding: var(--sp-4) var(--sp-5); box-shadow: var(--elev-1);
+  transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease); }
+.figure:hover { box-shadow: var(--elev-3); transform: translateY(-1px); }
+.figure .label { font: var(--t-label-medium); color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: 0.6px; }
+.figure .value { font: var(--t-display-small); color: var(--md-on-surface); margin-top: var(--sp-1); font-variant-numeric: tabular-nums; }
+.figure .value small { font: var(--t-title-medium); color: var(--md-on-surface-variant); }
+.figure .sub { font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-1); }
+.figure.na .value { font: var(--t-title-medium); color: var(--md-on-surface-variant); }
+.figure .value.date { font: var(--t-headline-small); white-space: nowrap; margin-top: var(--sp-3); }
+
+/* segmented buttons (heat map, theme, chart or table) and chips (weeks, overlays) */
+.seg { display: inline-flex; border: 1px solid var(--md-outline); border-radius: var(--shape-full); overflow: hidden; max-width: 100%; flex-wrap: wrap; }
+.seg button { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-4); font: var(--t-label-large);
+  color: var(--md-on-surface); border-left: 1px solid var(--md-outline); transition: background-color var(--dur-medium) var(--ease); }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-checked="true"], .seg button[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+.seg.compact button { padding: 0 var(--sp-3); min-height: 32px; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 32px; padding: 0 var(--sp-3); border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline); font: var(--t-label-large); color: var(--md-on-surface-variant);
+  transition: background-color var(--dur-medium) var(--ease), color var(--dur-medium) var(--ease), box-shadow var(--dur-short) var(--ease); }
+.chip:hover { box-shadow: var(--elev-1); }
+.chip[aria-checked="true"], .chip[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+.chip svg { width: 18px; height: 18px; }
+.tag { display: inline-flex; align-items: center; padding: 0 var(--sp-2); min-height: 20px; border-radius: var(--shape-xs);
+  font: var(--t-label-medium); background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
+.tag.explore { background: var(--md-tertiary-container); color: var(--md-on-tertiary-container); }
+.tonal-btn { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-6) 0 var(--sp-4);
+  border-radius: var(--shape-full); font: var(--t-label-large); background: var(--md-secondary-container); color: var(--md-on-secondary-container);
+  transition: box-shadow var(--dur-short) var(--ease); }
+.tonal-btn:hover { box-shadow: var(--elev-1); }
+
+/* layout by window size class: compact < 600, medium 600 to 839, expanded >= 840 */
+.layout { display: grid; gap: var(--sp-4); padding: var(--sp-4); grid-template-columns: minmax(0, 1fr); align-items: start; }
+.col-main { display: grid; gap: var(--sp-4); min-width: 0; }
+.panels { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 600px) { .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } .panels .wide { grid-column: 1 / -1; } }
+@media (min-width: 840px) { .layout { grid-template-columns: minmax(0, 1fr) 400px; } .panels { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 599px) { .layout, .figures { padding: var(--sp-2); gap: var(--sp-2); } .appbar { padding: var(--sp-2); } .figure .value { font: var(--t-headline-small); } }
+
+/* cards (#277): page 0, cards 1, the map card 2; cards lift a level on hover or focus */
+.card { background: var(--md-surface-container-low); border-radius: var(--shape-lg); padding: var(--sp-5); box-shadow: var(--elev-1); min-width: 0;
+  transition: box-shadow var(--dur-medium) var(--ease); }
+.card:hover, .card:focus-within { box-shadow: var(--elev-2); }
+.card.map-card { box-shadow: var(--elev-2); }
+.card.map-card:hover, .card.map-card:focus-within { box-shadow: var(--elev-3); }
+.card-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
+.card-head h2 { margin: 0; }
+.outlined { background: var(--md-surface-container-lowest); border: 1px solid var(--md-outline-variant); border-radius: var(--shape-md); box-shadow: none; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); }
+
+/* the map sits in its card like a window: rounded frame, soft inner shadow, floating tools */
+.map-wrap { position: relative; border-radius: var(--shape-md); overflow: hidden; background: var(--map-bg); touch-action: none; cursor: grab; }
+.map-wrap:active { cursor: grabbing; }
+.map-wrap::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+  box-shadow: inset 0 1px 4px var(--md-shadow-soft), inset 0 0 0 1px var(--md-outline-variant); }
+svg#svg { width: 100%; height: auto; display: block; }
+.map-tools { position: absolute; right: var(--sp-2); top: var(--sp-2); z-index: 1; display: grid; gap: 2px; border-radius: var(--shape-md);
+  background: var(--md-surface-container-high); box-shadow: var(--elev-2); overflow: hidden; }
+.map-tools button { width: 36px; height: 36px; display: grid; place-items: center; color: var(--md-on-surface); }
+.scale { position: absolute; left: var(--sp-3); bottom: var(--sp-2); z-index: 1; display: flex; align-items: flex-end; gap: var(--sp-2);
+  font: var(--t-label-small); color: var(--md-on-surface); pointer-events: none; }
+.scale .bar { height: 6px; border: 2px solid var(--md-on-surface); border-top: 0; }
+.scale .north { width: 22px; height: 22px; fill: var(--md-on-surface); }
+.scale .pill { padding: 2px var(--sp-2); border-radius: var(--shape-sm); background: var(--md-surface-container-high); box-shadow: var(--elev-1); display: flex; align-items: flex-end; gap: var(--sp-2); }
+#legend { margin-top: var(--sp-3); padding: var(--sp-3); font: var(--t-body-small); color: var(--md-on-surface-variant); }
+#legend .title { font: var(--t-label-large); color: var(--md-on-surface); }
+#legend .row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin-top: var(--sp-2); }
+#legend .key { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.sw { width: 28px; height: 14px; border-radius: 2px; display: inline-block; }
+.sw.hatch, .hatch-bg { background: repeating-linear-gradient(45deg, var(--hatch-bg) 0 3px, var(--hatch-line) 3px 4.5px); }
+#toggles { margin-top: var(--sp-3); }
+
+/* hover cards (#280): one tooltip for map and charts */
+.tip { position: fixed; z-index: 30; max-width: 300px; padding: var(--sp-2) var(--sp-3); border-radius: var(--shape-sm); pointer-events: none;
+  font: var(--t-body-small); background: var(--md-inverse-surface); color: var(--md-inverse-on-surface); box-shadow: var(--elev-3);
+  animation: fade-in var(--dur-short) var(--ease-decel); }
+
+/* lists, timeline, tables */
+.list { list-style: none; margin: 0; padding: 0; }
+.list > li { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-3); margin: 0 calc(-1 * var(--sp-3));
+  border-radius: var(--shape-md); transition: background-color var(--dur-medium) var(--ease), box-shadow var(--dur-medium) var(--ease);
+  animation: fade-up var(--dur-medium) var(--ease-decel) both; }
+.list > li:hover { background: var(--md-surface-container); }
+.list > li.selected { background: var(--md-secondary-container); box-shadow: var(--elev-1); }
+.lead { width: 40px; height: 40px; border-radius: var(--shape-full); display: grid; place-items: center; font: var(--t-label-large);
+  background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.headline { font: var(--t-title-small); display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.supporting { color: var(--md-on-surface-variant); margin-top: var(--sp-1); }
+.badge { letter-spacing: 1px; color: var(--md-on-surface-variant); }
+.link-btn { padding: 0 var(--sp-2); min-height: 28px; border-radius: var(--shape-full); font: var(--t-label-medium); color: var(--md-primary);
+  display: inline-flex; align-items: center; gap: var(--sp-1); }
+.link-btn .icon { width: 16px; height: 16px; }
+details { margin-top: var(--sp-2); }
+summary { cursor: pointer; font: var(--t-label-large); color: var(--md-primary); border-radius: var(--shape-xs); width: fit-content; }
+details[open] > :not(summary) { animation: fade-up var(--dur-medium) var(--ease-decel); }
+details ul { margin: var(--sp-2) 0 0; padding-left: var(--sp-4); color: var(--md-on-surface-variant); }
+details p { margin: var(--sp-2) 0 0; color: var(--md-on-surface-variant); font: var(--t-body-small); }
+.timeline { list-style: none; margin: var(--sp-2) 0 0; padding: 0; }
+.timeline li { position: relative; padding: 0 0 var(--sp-3) var(--sp-6); }
+.timeline li::before { content: ""; position: absolute; left: 6px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--md-primary); }
+.timeline li::after { content: ""; position: absolute; left: 9px; top: 18px; bottom: 0; width: 2px; background: var(--md-outline-variant); }
+.timeline li:last-child::after { display: none; }
+.timeline .time { font: var(--t-label-medium); color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; margin: var(--sp-2) 0 0; }
+table { border-collapse: collapse; width: 100%; font: var(--t-body-small); }
+th { font: var(--t-label-medium); color: var(--md-on-surface-variant); text-align: left; padding: var(--sp-2); border-bottom: 1px solid var(--md-outline); }
+td { padding: var(--sp-2); border-bottom: 1px solid var(--md-outline-variant); }
+th.num { text-align: right; }
+caption { caption-side: bottom; text-align: left; padding-top: var(--sp-2); color: var(--md-on-surface-variant); font: var(--t-body-small); }
+
+/* charts (#282) */
+.chart-grid { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 1100px) { .chart-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.chart-card { background: var(--md-surface-container-lowest); border-radius: var(--shape-md); padding: var(--sp-4); border: 1px solid var(--md-outline-variant);
+  transition: box-shadow var(--dur-medium) var(--ease); min-width: 0; margin-bottom: var(--sp-3); }
+.chart-card:hover { box-shadow: var(--elev-1); }
+.chart-card .head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-2); }
+.chart-card h3 { margin: 0; }
+.chart-card .seg { flex-wrap: nowrap; flex: none; }
+.chart-card .subtitle { font: var(--t-body-small); color: var(--md-on-surface-variant); }
+.chart-card .caption { font: var(--t-body-small); color: var(--md-on-surface-variant); margin: var(--sp-2) 0 0; }
+.chart-card .legend { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
+.chart-card .legend span { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.chart-card .legend svg { width: 14px; height: 14px; }
+svg.chart { width: 100%; height: auto; display: block; margin-top: var(--sp-2); overflow: visible; }
+.chart .grid { stroke: var(--chart-grid); stroke-width: 1; }
+.chart .axis { stroke: var(--chart-axis); stroke-width: 1; }
+.chart text { font: var(--t-label-small); fill: var(--md-on-surface-variant); }
+.chart .s1 { fill: var(--chart-1); stroke: var(--chart-1); }
+.chart .s2 { fill: var(--chart-2); stroke: var(--chart-2); }
+.chart .line { fill: none; stroke: var(--chart-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .whisker { stroke-width: 2; stroke-linecap: round; fill: none; }
+.chart .ref { stroke: var(--md-outline); stroke-width: 1; stroke-dasharray: 4 3; fill: none; }
+.chart .band { fill: var(--md-secondary-container); opacity: 0.6; }
+.chart .ink { fill: var(--md-on-surface-variant); }
+.chart .bar { fill: var(--chart-1); }
+.chart .bar.rough { fill: url(#hatch); }
+.chart .travel { fill: var(--md-outline-variant); }
+.chart .dwell { fill: var(--chart-1); }
+.chart .dwell.explore { fill: var(--explore); }
+.chart .budget { stroke: var(--md-error); stroke-width: 2; stroke-dasharray: 3 2; }
+.chart [data-tip] { cursor: default; }
+.chart [data-tip]:focus { outline: none; stroke: var(--md-primary); stroke-width: 3; }
+.chart .mark { transition: opacity var(--dur-short) var(--ease); }
+.chart:hover .mark:not(:hover) { opacity: 0.55; }
+.stat { display: flex; align-items: baseline; gap: var(--sp-2); }
+.stat .value { font: var(--t-headline-small); font-variant-numeric: tabular-nums; }
+
+/* states: empty, error, loading */
+.empty { display: flex; gap: var(--sp-3); align-items: center; padding: var(--sp-3); border-radius: var(--shape-sm);
+  background: var(--md-surface-container); color: var(--md-on-surface-variant); }
+.alert { display: flex; gap: var(--sp-3); align-items: flex-start; margin: var(--sp-4) var(--sp-4) 0; padding: var(--sp-4); border-radius: var(--shape-md);
+  background: var(--md-error-container); color: var(--md-on-error-container); box-shadow: var(--elev-1); }
+.alert code { font-weight: 700; }
+.skeleton { border-radius: var(--shape-sm); background: var(--md-surface-container-high); min-height: 20px; margin: var(--sp-2) 0; animation: pulse 1.6s var(--ease) infinite; }
+dialog { border: 0; border-radius: var(--shape-xl); padding: var(--sp-6); max-width: min(520px, 92vw); background: var(--md-surface-container-high);
+  color: var(--md-on-surface); box-shadow: var(--elev-5); }
+dialog[open] { animation: pop var(--dur-medium) var(--ease-decel); }
+dialog::backdrop { background: var(--md-scrim); }
+dialog dl { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2) var(--sp-4); margin: var(--sp-4) 0; }
+dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overflow-wrap: anywhere; }
+
+/* footer (#279) */
+.footer { padding: var(--sp-6) var(--sp-4) var(--sp-8); color: var(--md-on-surface-variant); font: var(--t-body-small);
+  display: grid; gap: var(--sp-2); border-top: 1px solid var(--md-outline-variant); margin-top: var(--sp-4); }
+.footer strong { color: var(--md-on-surface); font: var(--t-label-large); }
+
+/* motion (#278): entry, fades, the route drawing itself; all off under reduced motion */
+.rise { animation: fade-up var(--dur-long) var(--ease-decel) both; animation-delay: calc(var(--i, 0) * 40ms); }
+#heat { transition: opacity var(--dur-short) var(--ease); }
+#heat.fading { opacity: 0; }
+#over g { transition: opacity var(--dur-medium) var(--ease); }
+.route.draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw 1200ms var(--ease) 300ms forwards; }
+.sel-ring { fill: none; stroke: var(--md-primary); stroke-width: 3; animation: ring 1200ms var(--ease-decel) 2; }
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes pop { from { opacity: 0; transform: scale(0.96); } }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes ring { 50% { stroke-opacity: 0.25; } }
+@keyframes pulse { 50% { opacity: 0.5; } }
+
+/* map marks read their colours from the tokens, so a theme change needs no redraw */
+.cell { stroke: var(--cell-gap); stroke-width: 0.5; }
+.cell.hatched { fill: url(#hatch); }
+#svg.see-through .cell:not(.hatched) { fill-opacity: 0.6; } /* unobserved stays opaque hatching */
+.backdrop-sym { fill: var(--md-on-surface-variant); opacity: 0.5; }
+.basemap { fill: none; stroke: var(--md-outline); stroke-width: 1; }
+.land { fill: var(--land); stroke: var(--coast); stroke-width: 1.2; stroke-linejoin: round; }
+.inshore { fill: none; stroke: var(--md-primary); stroke-width: 0.8; }
+.lane { fill: url(#lane); opacity: 0.5; }
+.exclusion { fill: url(#lane); stroke: var(--md-on-surface-variant); stroke-dasharray: 3 2; opacity: 0.8; }
+.route { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.route.aircraft { stroke-dasharray: 7 5; }
+.stop { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.stop.explore { stroke: var(--explore); stroke-width: 3; stroke-dasharray: 3 2; }
+.site { fill: none; stroke: var(--site); stroke-width: 2.5; paint-order: stroke; }
+.site.flagged { fill: var(--site); fill-opacity: 0.8; }
+.site-ring { fill: none; stroke: var(--ring); stroke-width: 5; }
+.site-edge { fill: none; stroke: var(--ink); stroke-width: 0.8; }
+.site-g { cursor: pointer; }
+.site-g:focus { outline: none; }
+.site-g:focus .site-edge, .site-g.selected .site-edge { stroke: var(--md-primary); stroke-width: 3; }
+.pier { fill: var(--ink); stroke: var(--ring); stroke-width: 1.5; }
+.pier.hl { fill: var(--md-primary); }
+.diamond { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.dot { fill: var(--ink); }
+.hatch-bg-svg { fill: var(--hatch-bg); } .hatch-line-svg { stroke: var(--hatch-line); } .lane-line-svg { stroke: var(--lane-line); }
+
+
+/* screens and navigation (#318) */
+.tabs { display: flex; gap: var(--sp-1); padding: 0 var(--sp-4); overflow-x: auto; border-bottom: 1px solid var(--md-outline-variant); scrollbar-width: none; }
+.tabs a { position: relative; flex: none; padding: var(--sp-3) var(--sp-4); font: var(--t-title-small); color: var(--md-on-surface-variant); text-decoration: none;
+  border-radius: var(--shape-sm) var(--shape-sm) 0 0; transition: color var(--dur-medium) var(--ease), background-color var(--dur-medium) var(--ease); }
+.tabs a:hover { background: var(--md-surface-container); color: var(--md-on-surface); }
+.tabs a[aria-current="page"] { color: var(--md-primary); }
+.tabs a[aria-current="page"]::after { content: ""; position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--md-primary); }
+.screen { animation: fade-in var(--dur-medium) var(--ease-decel); }
+.screen-title { font: var(--t-headline-small); margin: var(--sp-6) var(--sp-4) 0; }
+.screen .figures { padding: var(--sp-4) var(--sp-4) 0; }
+.layout.single { grid-template-columns: minmax(0, 1fr); }
+
+/* site cards on This week (#313) */
+.top3 { display: grid; gap: var(--sp-3); }
+.site-card { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--shape-lg);
+  background: var(--md-surface-container-lowest); box-shadow: var(--elev-1); transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease);
+  animation: fade-up var(--dur-medium) var(--ease-decel) both; }
+.site-card:hover { box-shadow: var(--elev-3); transform: translateY(-1px); }
+.site-card.selected { outline: 2px solid var(--md-primary); }
+.site-card .why { font: var(--t-body-medium); margin-top: var(--sp-1); }
+.site-card .facts { font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
+.meter { list-style: none; margin: var(--sp-2) 0 0; padding: 0; font: var(--t-body-small); }
+.meter li { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: var(--sp-2); min-height: 20px; }
+.meter .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--md-primary); flex: none; }
+.meter .yes .dot { background: var(--md-primary); }
+.meter .na .dot { border-style: dashed; border-color: var(--md-outline); }
+.card-more { font: var(--t-body-small); margin-top: var(--sp-2); }
+.card-more summary { cursor: pointer; color: var(--md-primary); width: fit-content; border-radius: var(--shape-sm); }
+.evidence-tl { list-style: none; margin: var(--sp-1) 0 0; padding: 0; display: grid; gap: var(--sp-1); }
+.evidence-tl li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+.evidence-tl .slow { font-weight: 500; margin-right: var(--sp-1); }
+.evidence-tl .pass { display: inline-grid; place-items: center; min-width: 26px; height: 22px; border-radius: var(--shape-full); font-size: 11px; }
+.evidence-tl .pass.calm { border: 2px solid var(--md-primary); }
+.evidence-tl .pass.rough { border: 2px dashed var(--md-outline); color: var(--md-on-surface-variant); }
+.outcomes { margin-top: var(--sp-2); }
+.outcome { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
+.outcome button { font: var(--t-label-medium); min-height: 32px; padding: 0 var(--sp-3); border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline); background: transparent; color: var(--md-on-surface-variant); cursor: pointer; }
+.outcome button[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+.outcome-note:empty { display: none; }
+.mix { margin-bottom: var(--sp-4); }
+.mix button:disabled { opacity: .45; cursor: not-allowed; }
+.site-card .actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
+.lens-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); min-height: 22px; border-radius: var(--shape-full);
+  font: var(--t-label-medium); background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.lens-chip.fisheries { background: var(--md-tertiary-container); color: var(--md-on-tertiary-container); }
+.kicker { font: var(--t-label-medium); color: var(--md-primary); text-transform: uppercase; letter-spacing: 0.6px; }
+.route-line { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--md-outline-variant); }
+.route-line:last-of-type { border-bottom: 0; }
+.limits { margin: 0; padding-left: var(--sp-5); display: grid; gap: var(--sp-2); }
+.limits li::marker { color: var(--md-primary); }
+.print-head, .print-only { display: none; }
+
+/* the Friday briefing on paper (#319): This week only, light, flat, one A4 page */
+@page { size: A4; margin: 12mm; }
+@media print {
+  body { background: none; font-size: 11px; }
+  .appbar, .tabs, .skip, .footer, .map-tools, #toggles, .tip, dialog, .screen:not([data-screen="this-week"]), .site-card .actions, .site-card .outcomes, .site-card .card-more, .site-card .meter, #play, #prev, #next, .toolbar, .chart-card .seg { display: none !important; }
+  .screen[data-screen="this-week"] { display: block !important; }
+  .print-head, .print-only { display: block; margin: 0 0 var(--sp-2); }
+  .card, .figure, .site-card, .chart-card { box-shadow: none !important; border: 1px solid var(--md-outline-variant); break-inside: avoid; }
+  .layout { display: block; padding: var(--sp-2) 0; }
+  .map-card { margin-bottom: var(--sp-2); padding: var(--sp-3); }
+  #legend { margin-top: var(--sp-2); padding: var(--sp-2); }
+  .panels { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: var(--sp-2); }
+  .panels .card { padding: var(--sp-3); } .panels h2 { margin-bottom: var(--sp-2); font: var(--t-title-small); }
+  .top3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
+  .site-card { grid-template-columns: minmax(0, 1fr); padding: var(--sp-2); gap: var(--sp-1); }
+  .site-card .lead { display: none; } .site-card .why, .site-card .facts { font: var(--t-body-small); }
+  #route .tonal-btn, #route p { display: none; } .route-line { display: block; padding: var(--sp-1) 0; } .route-line strong { margin-right: var(--sp-1); }
+  .figures { grid-template-columns: repeat(5, 1fr); padding: 0; } .figure .value { font: var(--t-title-large); }
+  .screen-title { margin: 0 0 var(--sp-2); font: var(--t-title-large); }
+  * { animation: none !important; transition: none !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
+  .route.draw { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+@media (forced-colors: active) {
+  .cell.hatched { fill: GrayText; } .site, .route, .stop { stroke: CanvasText; } .chart .s1, .chart .bar { fill: Highlight; }
+}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the briefing</a>
+<header class="appbar" id="appbar">
+  <h1 class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>NarcoPolo</h1>
+  <span id="banner" data-label="none" role="status">Loading snapshot…</span>
+  <span class="spacer"></span>
+  <div id="lens" class="seg compact" role="radiogroup" aria-label="Lens"></div>
+  <button id="print" class="icon-btn state" type="button" aria-label="Print or save the briefing as PDF" disabled></button>
+  <button id="about" class="icon-btn state" type="button" aria-label="About this snapshot" disabled></button>
+  <div id="theme" class="seg compact" role="radiogroup" aria-label="Theme"></div>
+</header>
+<nav id="nav" class="tabs page" aria-label="Screens">
+  <a href="#this-week" data-screen="this-week">This week</a>
+  <a href="#dropoff" data-screen="dropoff">Drop-off watch</a>
+  <a href="#fisheries" data-screen="fisheries">Fisheries watch</a>
+  <a href="#plan" data-screen="plan">Patrol plan</a>
+  <a href="#limits" data-screen="limits">What we couldn't see</a>
+</nav>
+<div id="alert" class="alert" role="alert" hidden></div>
+<div class="print-head" aria-hidden="true"><strong>NarcoPolo weekly briefing</strong> <span id="printMeta"></span></div>
+<main id="main" class="page">
+  <section class="screen" data-screen="this-week" aria-labelledby="h-week">
+    <h2 class="screen-title" id="h-week">Where should the ship and aircraft go this week?</h2>
+    <div id="figures" class="figures" aria-label="Headline figures"><div class="figure skeleton"></div><div class="figure skeleton"></div><div class="figure skeleton"></div></div>
+    <div class="layout">
+      <section class="card map-card rise" style="--i: 0" aria-label="Map">
+        <div class="toolbar"><div id="map" class="seg" role="radiogroup" aria-label="Heat map"></div></div>
+        <div class="toolbar">
+          <button id="prev" class="icon-btn state" type="button" aria-label="Previous week" disabled></button>
+          <div id="week" class="chips" role="radiogroup" aria-label="Week"></div>
+          <button id="next" class="icon-btn state" type="button" aria-label="Next week" disabled></button>
+          <button id="play" class="tonal-btn state" type="button" aria-pressed="false" disabled></button>
+        </div>
+        <div class="map-wrap" id="mapWrap" tabindex="0" aria-label="Map: drag or use the arrow keys to pan, + and - to zoom">
+          <svg id="svg" viewBox="0 0 900 260" role="group" aria-label="Map of the study area"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
+          <div class="map-tools">
+            <button id="zin" class="state" type="button" aria-label="Zoom in"></button>
+            <button id="zout" class="state" type="button" aria-label="Zoom out"></button>
+            <button id="zreset" class="state" type="button" aria-label="Show the whole map"></button>
+          </div>
+          <div class="scale" aria-hidden="true"><div class="pill"><svg class="north" viewBox="0 0 24 24"><path d="M12 2l5 12h-4v8h-2v-8H7z"/></svg><div><div id="scaleLabel"></div><div id="scaleBar" class="bar"></div></div></div></div>
+        </div>
+        <div id="legend" class="outlined"><div class="skeleton"></div></div>
+        <div id="toggles" class="chips" role="group" aria-label="Overlays"></div>
+      </section>
+      <div class="panels">
+        <section class="card rise" style="--i: 1" aria-labelledby="h-top"><h2 id="h-top">Top 3 this week</h2><div id="top3" class="top3"><div class="skeleton"></div></div></section>
+        <section class="card rise" style="--i: 2" aria-labelledby="h-route"><h2 id="h-route">This week's route</h2><div id="route"><div class="skeleton"></div></div></section>
+      </div>
+    </div>
+    <p class="print-only" id="printLimits"></p>
+  </section>
+  <section class="screen" data-screen="dropoff" aria-labelledby="h-drop" hidden>
+    <h2 class="screen-title" id="h-drop">Which sites and piers fit a drop-off?</h2>
+    <div class="layout">
+      <section class="card"><h2>Sites worth checking</h2><ol id="sites" class="list"><li class="skeleton"></li><li class="skeleton"></li></ol>
+        <button id="more" class="tonal-btn state" type="button" hidden></button></section>
+      <div class="panels"><section class="card"><h2>Piers worth watching</h2><div id="piers"><div class="skeleton"></div></div></section></div>
+    </div>
+  </section>
+  <section class="screen" data-screen="fisheries" aria-labelledby="h-fish" hidden>
+    <h2 class="screen-title" id="h-fish">Where is dark fishing above normal?</h2>
+    <div class="layout single"><section class="card" id="fisheries"></section></div>
+  </section>
+  <section class="screen" data-screen="plan" aria-labelledby="h-plan" hidden>
+    <h2 class="screen-title" id="h-plan">What route, in what order, and why?</h2>
+    <div class="layout single"><section class="card"><h2>Patrol plan</h2><div id="plan"><div class="skeleton"></div></div></section></div>
+  </section>
+  <section class="screen" data-screen="limits" aria-labelledby="h-limits" hidden>
+    <h2 class="screen-title" id="h-limits">How much should we trust this week?</h2>
+    <div class="layout">
+      <div class="col-main">
+        <section class="card" aria-labelledby="h-lim"><h2 id="h-lim">What this system cannot see</h2><ul id="limitsList" class="limits"></ul></section>
+        <section class="card" aria-labelledby="trendsTitle">
+          <div class="card-head"><h2 id="trendsTitle">This month at sea</h2><span class="muted" id="trendsNote"></span></div>
+          <div id="trends" class="chart-grid two"><div class="skeleton"></div></div>
+        </section>
+      </div>
+      <div class="panels"><section class="card"><h2>How far to trust this</h2><div id="validation"><div class="skeleton"></div></div></section></div>
+    </div>
+  </section>
+</main>
+<footer id="footer" class="footer page"></footer>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<dialog id="aboutDlg" aria-labelledby="aboutTitle">
+  <h2 id="aboutTitle">About this snapshot</h2>
+  <dl id="aboutList"></dl>
+  <button id="aboutClose" class="tonal-btn state" type="button">Close</button>
+</dialog>
+<script>
+// Plain JavaScript, inline SVG, no network. The browser only draws, sorts and formats: every number
+// and every colour-scale break comes from the snapshot, every colour from the tokens (docs/specs/P7.md).
+const NS = "http://www.w3.org/2000/svg", W = 900;
+const MAPS = {
+  normal: { title: "Normal activity", long: "Normal small-boat activity", unit: "expected boats per unit of coverage (weekly mean of μ ÷ E)", div: false },
+  obs_vs_exp: { title: "Observed vs expected", long: "Observed versus expected", unit: "log₂(observed ÷ expected), clipped at ±3 (8× more or less)", div: true },
+  unusual: { title: "Unusual score", long: "Unusual score", unit: "U from 0 to 1 (weekly maximum, either event type)", div: false },
+  exposure: { title: "Blind spots", long: "Blind spots", unit: "small-boat coverage summed over the week's passes", div: false },
+};
+const OVERLAYS = [
+  ["backdrop", "Radar image"], ["inshore", "Inshore grounds"], ["lane", "Lanes and exclusion zones"], ["sites", "Drop sites"],
+  ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
+];
+let snap, ext, H, timer = null, selected = null;
+const view = { map: "normal", week: null, more: false, outcomes: {} };
+const vb = { x: 0, y: 0, w: W, h: 260 }; // the map's current viewBox (#280)
+const TOP_LIST = 3; // Design principle 13: a weekly top 3, the rest one click away
+const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
+const REPLAY_MS = 1500; // one week per step when replaying
+const KM_PER_DEG_LAT = 111.2; // mean length of a degree of latitude, for the scale bar only
+const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// phrases:start
+// Every sentence a reader sees on the briefing screens, in one place, so it can be checked and translated (#315).
+// Fixed vocabulary: "worth checking", "unusual", "consistent with a drop-off". A test bans the words that claim
+// more than the system knows.
+const PHRASES = {
+  lens_dropoff: "Drop-off watch", lens_fisheries: "Fisheries watch", lens_both: "Both",
+  top1: "Top of this week's shortlist", topN: "Worth checking this week",
+  ratio_more: "About {x}× more small boats than normal this week", ratio_fewer: "About {x}× fewer small boats than normal this week",
+  ratio_same: "About as many small boats as normal this week", not_observed: "No satellite look this week",
+  signals: "{n} independent signal(s) agree", no_signals: "No independent signal agrees yet",
+  seen: "seen {n} time(s) in the history", followup_unobserved: "follow-up not observed on {n} day(s)", piers: "piers to watch: {list}",
+  show_on_map: "Show on map", in_detail: "Why, in detail",
+  no_sites: "No sites this week.", fisheries_lens_empty: "No sites in Fisheries watch yet. Switch to Drop-off watch or Both.",
+  fisheries_na_title: "Fisheries watch is not available yet",
+  fisheries_na_body: "It needs two things the pipeline does not produce yet: dark fishing activity compared with the normal level for the week (issue 321), and the closed and protected areas (issue 322). Until then this lens shows no sites, rather than drop-off sites under another name.",
+  fisheries_will_show: "When it is ready, this screen will show areas with dark fishing above normal, closed or protected areas, and the harbours where catches would likely land.",
+  route_ship: "Ship", route_aircraft: "Aircraft", route_stops: "{n} stops · {h} h of {b} h · leaves {time} UTC",
+  route_none: "No trip worth making within the time budget", route_from_lens: "Every stop this week comes from Drop-off watch.",
+  route_more: "Full route and timings",
+  limits: [
+    "Pick-ups that happen between two radar passes are missed: passes come every one to three days, a pick-up can take hours.",
+    "Small boats in rough seas are missed, so rough passes count as no satellite look for small boats.",
+    "Sentinel-1 radar misses most vessels under 15 m (Paolo et al. 2024): a quiet area is not proof that nothing was there.",
+    "The system runs about five days behind real time, because the ship and weather feeds arrive late.",
+    "Site significance flags are switched off until the new test lands (issue 269): a site is top of the shortlist, never a certainty.",
+    "Places, not people: no vessel or person is named anywhere, and a person makes every tasking decision.",
+  ],
+  limits_stand_in: "On simulated data the base port and start time are stand-ins until they are set in config.yaml.",
+  print_meta: "{label} data · as of {T} · week {week} · lens: {lens}",
+  // site card evidence (#314); "not available yet" marks the placeholders waiting on issue 320
+  evidence: "Evidence", na: "not available yet",
+  check_rare_slowdown: "A ship slowed where ships rarely slow", check_boats_after: "Small boats seen nearby afterwards",
+  check_outside_fishing: "Outside normal fishing activity",
+  check_yes: "yes", check_no: "no",
+  timeline: "Last four weeks", timeline_none: "No ship slowdown here in the last four weeks.",
+  slowdown: "Ship slowed {date}", pass_calm: "{date}: calm pass, small boats visible (whether one was seen: not available yet)",
+  pass_rough: "{date}: rough pass, small boats unobserved", no_pass: "no radar pass afterwards: follow-up unobserved",
+  pier_time: "{pier}, about {min} min by small boat", pier_time_na: "{pier} (travel time not available yet)",
+  numbers: "Numbers", numbers_line: "score {S} · p = {p} · seen {n} time(s)",
+  // "we checked" (#317); saved to a draft file until the outcomes file is agreed (issue 329)
+  outcome_q: "We checked this site this week:", outcome_found_something: "Found something",
+  outcome_found_nothing: "Found nothing", outcome_not_visited: "Not visited",
+  outcome_saved: "Saved. Next week's plan will use it once patrol reads outcomes (issue 329).",
+  outcome_failed: "Not saved: open the dashboard window or the local server to record answers.",
+  // plan (#316)
+  mix_title: "Mission mix", mix_value: "{p} % fisheries",
+  mix_na: "Only the 0 % fisheries plan exists until fisheries data arrives (issue 321).",
+  reason_exploit: "best bet", reason_explore: "exploration visit",
+};
+// phrases:end
+const t = (key, vars = {}) => String(PHRASES[key]).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
+
+// Lens (#313): which workflow the briefing shows. Each agency opens on its own (a link with lens=..., remembered).
+const LENSES = ["dropoff", "fisheries", "both"];
+function initialLens() {
+  const m = location.hash.match(/lens=(\w+)/);
+  if (m && LENSES.includes(m[1])) return m[1];
+  try { const v = localStorage.getItem("np-lens"); if (v && LENSES.includes(v)) return v; } catch (e) { /* no storage */ }
+  return "dropoff";
+}
+view.lens = initialLens();
+const inLens = s => view.lens === "both" || (s.lens ?? "dropoff") === view.lens;
+
+// Screens (#318): one question each, one link each.
+const SCREENS = ["this-week", "dropoff", "fisheries", "plan", "limits"];
+function route() {
+  const want = location.hash.slice(1).split("&")[0], name = SCREENS.includes(want) ? want : "this-week";
+  for (const sec of document.querySelectorAll(".screen")) sec.hidden = sec.dataset.screen !== name;
+  for (const a of document.querySelectorAll("#nav a")) a.setAttribute("aria-current", a.dataset.screen === name ? "page" : "false");
+  if (name === "this-week" && ext) drawScale();
+}
+function go(name) { if (location.hash.slice(1).split("&")[0] === name) route(); else location.hash = name; }
+addEventListener("hashchange", route);
+
+// Icons: simple geometric paths drawn for this page, 24 x 24 grid, currentColor.
+const ICONS = {
+  light: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4zM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1zM16.3 6.3l2.1-2.1 1.4 1.4-2.1 2.1z",
+  dark: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
+  auto: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2v16a8 8 0 0 1 0-16z",
+  info: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z",
+  warning: "M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z",
+  prev: "M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z",
+  next: "M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z",
+  play: "M8 5v14l11-7z",
+  pause: "M6 19h4V5H6zm8-14v14h4V5z",
+  empty: "M3 5h18v2H3zm0 6h12v2H3zm0 6h8v2H3z",
+  plus: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z",
+  minus: "M19 13H5v-2h14z",
+  reset: "M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z",
+  print: "M19 8H5a3 3 0 0 0-3 3v6h4v4h12v-4h4v-6a3 3 0 0 0-3-3zm-3 11H8v-5h8zm3-7a1 1 0 1 1 0-2 1 1 0 0 1 0 2zM18 3H6v4h12z",
+  locate: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 3h-2.1A7 7 0 0 0 13 5.1V3h-2v2.1A7 7 0 0 0 5.1 11H3v2h2.1a7 7 0 0 0 5.9 5.9V21h2v-2.1a7 7 0 0 0 5.9-5.9H21zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10z",
+};
+const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
+
+async function loadSnapshot() {
+  if (!window.pywebview?.api)
+    await new Promise(r => { addEventListener("pywebviewready", r, { once: true }); setTimeout(r, 300); });
+  if (window.pywebview?.api) return window.pywebview.api.get_snapshot();
+  for (const url of ["/snapshot.json", "../data/export/snapshot.json"]) {
+    try { const r = await fetch(url); if (r.ok) return r.json(); } catch (e) { /* try the next place */ }
+  }
+  throw new Error("no snapshot found");
+}
+
+// Equirectangular, east-west scaled by cos(latitude): accurate enough for 150 km.
+const lonScale = () => Math.cos(((ext.lat0 + ext.lat1) / 2) * Math.PI / 180);
+const unitsPerDeg = () => W / ((ext.lon1 - ext.lon0) * lonScale());
+function project(lon, lat) {
+  const k = lonScale(), s = unitsPerDeg();
+  return [(lon - ext.lon0) * k * s, (ext.lat1 - lat) * s];
+}
+
+// Basemap features: the study-area outline, and the land (#133) when the reference layer exists.
+const rings = f => (f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates]).flat();
+const landRings = () => snap.basemap.features.filter(f => f.properties?.kind === "land").flatMap(rings);
+
+function setExtent() {
+  const g = Object.values(snap.cells.geometry), coast = landRings().flat();
+  const lon = [...g.flatMap(b => [b[0], b[2]]), ...coast.map(p => p[0])], lat = [...g.flatMap(b => [b[1], b[3]]), ...coast.map(p => p[1])];
+  const padLon = (Math.max(...lon) - Math.min(...lon)) * 0.03, padLat = (Math.max(...lat) - Math.min(...lat)) * 0.08;
+  ext = { lon0: Math.min(...lon) - padLon, lon1: Math.max(...lon) + padLon, lat0: Math.min(...lat) - padLat, lat1: Math.max(...lat) + padLat };
+  H = project(ext.lon0, ext.lat0)[1];
+  Object.assign(vb, { x: 0, y: 0, w: W, h: H });
+  applyView();
+}
+
+// SVG element; `tip` becomes the hover card's text (and the accessible name of focusable marks).
+function el(tag, attrs, parent, tip) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (tip) e.dataset.tip = tip;
+  parent.appendChild(e);
+  return e;
+}
+const h = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
+const group = id => { const g = document.getElementById(id); g.replaceChildren(); return g; };
+const cellRect = cid => {
+  const b = snap.cells.geometry[cid], [x0, y1] = project(b[0], b[1]), [x1, y0] = project(b[2], b[3]);
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+};
+const empty = (text, name = "empty") => { const d = h("div", { className: "empty" }); d.innerHTML = icon(name); d.append(text); return d; };
+const pct = v => `${(100 * v).toFixed(0)}%`;
+const fmt = (v, d = 2) => (v === null || v === undefined ? "–" : Number(v).toFixed(d));
+
+// ---- hover cards: one tooltip for every [data-tip] on the map and in the charts (#280, #282) ----
+function showTip(text, x, y) {
+  const t = document.getElementById("tip");
+  t.textContent = text;
+  t.hidden = false;
+  const r = t.getBoundingClientRect();
+  t.style.left = `${Math.max(8, Math.min(x + 14, innerWidth - r.width - 8))}px`;
+  t.style.top = `${y + 16 + r.height > innerHeight ? y - r.height - 10 : y + 16}px`;
+}
+const hideTip = () => { document.getElementById("tip").hidden = true; };
+document.addEventListener("pointerover", e => { const t = e.target.closest?.("[data-tip]"); if (t) showTip(t.dataset.tip, e.clientX, e.clientY); });
+document.addEventListener("pointermove", e => { const t = e.target.closest?.("[data-tip]"); if (t) showTip(t.dataset.tip, e.clientX, e.clientY); });
+document.addEventListener("pointerout", e => { if (e.target.closest?.("[data-tip]")) hideTip(); });
+document.addEventListener("focusin", e => { const t = e.target.closest?.("[data-tip]"); if (t) { const r = t.getBoundingClientRect(); showTip(t.dataset.tip, r.left + r.width / 2, r.bottom); } });
+document.addEventListener("focusout", hideTip);
+
+// ---- map view: zoom, pan, scale bar (#280). Only the viewBox changes; nothing is redrawn. ----
+function applyView() {
+  document.getElementById("svg").setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+  if (ext) drawScale();
+}
+function clampView() {
+  vb.w = Math.min(W, Math.max(W / 10, vb.w));
+  vb.h = (vb.w * H) / W;
+  vb.x = Math.min(W - vb.w, Math.max(0, vb.x));
+  vb.y = Math.min(H - vb.h, Math.max(0, vb.y));
+}
+function zoomAt(f, cx, cy) {
+  const w = vb.w / f;
+  vb.x = cx - ((cx - vb.x) * w) / vb.w;
+  vb.y = cy - ((cy - vb.y) * w) / vb.w;
+  vb.w = w;
+  clampView(); applyView();
+}
+function toMap(clientX, clientY) {
+  const r = document.getElementById("svg").getBoundingClientRect();
+  return [vb.x + ((clientX - r.left) / r.width) * vb.w, vb.y + ((clientY - r.top) / r.height) * vb.h];
+}
+// Glide to a target view (instant under reduced motion).
+function flyTo(target) {
+  if (reduced()) { Object.assign(vb, target); clampView(); applyView(); return; }
+  const from = { ...vb }, t0 = performance.now(), dur = 450;
+  const step = now => {
+    const t = dur ? Math.min(1, (now - t0) / dur) : 1, e = 1 - (1 - t) * (1 - t) * (1 - t);
+    for (const k of ["x", "y", "w"]) vb[k] = from[k] + (target[k] - from[k]) * e;
+    clampView(); applyView();
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+function panTo(lon, lat, zoom = 3) {
+  const [x, y] = project(lon, lat), w = W / zoom;
+  flyTo({ x: x - w / 2, y: y - (w * H) / W / 2, w });
+}
+function drawScale() {
+  const svg = document.getElementById("svg"), px = svg.getBoundingClientRect().width || 1;
+  const pxPerKm = (unitsPerDeg() / KM_PER_DEG_LAT) * (px / vb.w);
+  let km = 1;
+  for (const k of [0.5, 1, 2, 5, 10, 20, 50, 100]) if (k * pxPerKm <= 110) km = k;
+  const bar = document.getElementById("scaleBar"), len = km * pxPerKm;
+  bar.style.width = `${len}px`;
+  bar.dataset.km = km; bar.dataset.px = len.toFixed(2);
+  document.getElementById("scaleLabel").textContent = `${km} km`;
+}
+function setupMapView() {
+  const wrap = document.getElementById("mapWrap"), pts = new Map();
+  let moved = 0, pinch = null;
+  wrap.addEventListener("wheel", e => { if (!snap) return; e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.25 : 0.8, ...toMap(e.clientX, e.clientY)); }, { passive: false });
+  wrap.addEventListener("pointerdown", e => {
+    if (!snap || e.target.closest(".map-tools")) return;
+    pts.set(e.pointerId, [e.clientX, e.clientY]); moved = 0;
+    if (pts.size === 2) { const [a, b] = [...pts.values()]; pinch = Math.hypot(a[0] - b[0], a[1] - b[1]); }
+  });
+  wrap.addEventListener("pointermove", e => {
+    if (!pts.has(e.pointerId)) return;
+    const [px, py] = pts.get(e.pointerId), r = document.getElementById("svg").getBoundingClientRect();
+    if (pts.size === 1) {
+      moved += Math.abs(e.clientX - px) + Math.abs(e.clientY - py);
+      if (moved > 4) { wrap.setPointerCapture?.(e.pointerId); vb.x -= ((e.clientX - px) / r.width) * vb.w; vb.y -= ((e.clientY - py) / r.height) * vb.h; clampView(); applyView(); }
+    }
+    pts.set(e.pointerId, [e.clientX, e.clientY]);
+    if (pts.size === 2 && pinch) {
+      const [a, b] = [...pts.values()], d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+      zoomAt(d / pinch, ...toMap((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)); pinch = d; moved = 99;
+    }
+  });
+  const end = e => { pts.delete(e.pointerId); if (pts.size < 2) pinch = null; };
+  wrap.addEventListener("pointerup", end); wrap.addEventListener("pointercancel", end);
+  // a drag is not a click on the site under the pointer
+  wrap.addEventListener("click", e => { if (moved > 4) { e.stopPropagation(); e.preventDefault(); } }, true);
+  wrap.addEventListener("keydown", e => {
+    if (!snap || e.target !== wrap) return;
+    const step = vb.w * 0.1, keys = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+    if (keys[e.key]) { e.preventDefault(); vb.x += keys[e.key][0]; vb.y += keys[e.key][1]; clampView(); applyView(); }
+    if (e.key === "+" || e.key === "=") zoomAt(1.25, vb.x + vb.w / 2, vb.y + vb.h / 2);
+    if (e.key === "-") zoomAt(0.8, vb.x + vb.w / 2, vb.y + vb.h / 2);
+    if (e.key === "0") flyTo({ x: 0, y: 0, w: W });
+  });
+  document.getElementById("zin").onclick = () => zoomAt(1.5, vb.x + vb.w / 2, vb.y + vb.h / 2);
+  document.getElementById("zout").onclick = () => zoomAt(1 / 1.5, vb.x + vb.w / 2, vb.y + vb.h / 2);
+  document.getElementById("zreset").onclick = () => flyTo({ x: 0, y: 0, w: W });
+  for (const [id, name] of [["zin", "plus"], ["zout", "minus"], ["zreset", "reset"]]) document.getElementById(id).innerHTML = icon(name);
+  addEventListener("resize", () => { if (ext) drawScale(); });
+}
+
+// The Sentinel-1 radar backdrop (contract #263): only an embedded PNG, so a snapshot can never make the page
+// load anything from the internet.
+const backdrop = () => { const b = snap?.basemap?.backdrop; return typeof b?.image === "string" && b.image.startsWith("data:image/png;base64,") ? b : null; };
+
+function seeThrough() {
+  document.getElementById("svg").classList.toggle("see-through", !!backdrop() && isOn("backdrop"));
+  if (snap) drawLegend(view.map, view.week);
+}
+
+function drawBasemap() {
+  const g = group("base"), bd = backdrop();
+  if (bd) {
+    const [x0, y0] = project(bd.bounds[0], bd.bounds[3]), [x1, y1] = project(bd.bounds[2], bd.bounds[1]);
+    const layer = el("g", { id: "ov-backdrop" }, g);
+    layer.style.display = isOn("backdrop") ? "" : "none";
+    el("image", { href: bd.image, x: x0, y: y0, width: x1 - x0, height: y1 - y0, preserveAspectRatio: "none" }, layer, bd.attribution);
+  }
+  const path = ring => "M" + ring.map(p => project(...p).join(",")).join("L") + "Z";
+  for (const ring of landRings()) el("path", { d: path(ring), class: "land" }, g, "land");
+  for (const f of snap.basemap.features.filter(f => f.properties?.kind !== "land"))
+    for (const ring of rings(f)) el("path", { d: path(ring), class: "basemap" }, g);
+}
+
+// Unobserved is never the lowest colour of a scale (Design principle 4): it is grey hatching.
+function hatchUnobserved() {
+  const defs = document.querySelector("#svg defs");
+  if (defs.querySelector("#hatch")) return;
+  const pat = (id, bgClass, lineClass, w, rot) => {
+    const p = el("pattern", { id, width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: `rotate(${rot})` }, defs);
+    if (bgClass) el("rect", { width: 6, height: 6, class: bgClass }, p);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, class: lineClass, "stroke-width": w }, p);
+  };
+  pat("hatch", "hatch-bg-svg", "hatch-line-svg", 2, 45); // not observed: grey, diagonal
+  pat("lane", "", "lane-line-svg", 0.8, 90); // lanes and exclusion zones: thin, horizontal
+}
+
+// A value's colour token: one of 5 sequential steps by the snapshot's breaks, or one of 9 diverging steps.
+function colour(name, v) {
+  const lg = snap.cells.legends[name];
+  if (MAPS[name].div) {
+    const k = Math.round(Math.max(-1, Math.min(1, v / lg.clip)) * 4);
+    return k === 0 ? "var(--div-0)" : `var(--div-${k < 0 ? "n" : "p"}${Math.abs(k)})`;
+  }
+  const n = lg.breaks.length - 1;
+  let i = 0;
+  while (i < n - 1 && v >= lg.breaks[i + 1]) i++;
+  return `var(--seq-${n > 1 ? Math.round((i * 4) / (n - 1)) : 4})`;
+}
+
+const hatchedValue = (name, c) => c[name] === null || (name === "exposure" && !c.observed) || !snap.cells.legends[name].breaks.length;
+
+function drawLegend(name, week) {
+  const lg = snap.cells.legends[name], box = document.getElementById("legend");
+  const head = h("div", { className: "title" }, `${MAPS[name].long}, week ${week}`);
+  const unit = h("div", {}, MAPS[name].unit);
+  if (!lg.breaks.length) {
+    box.replaceChildren(head, unit, empty("Not available yet: every cell is hatched until the detectors provide this value.", "info"));
+    return;
+  }
+  const row = h("div", { className: "row" });
+  const key = (bg, label, cls = "") => { const s = h("span", { className: "sw " + cls }); if (bg) s.style.background = bg; row.append(h("span", { className: "key" }, s, label)); };
+  if (MAPS[name].div) for (const t of [-1, -0.5, 0, 0.5, 1]) key(colour(name, t * lg.clip), (t * lg.clip).toFixed(1));
+  else lg.breaks.slice(0, -1).forEach((b, i) => key(colour(name, b), `${b} to ${lg.breaks[i + 1]}`));
+  key("", name === "exposure" ? "not observed (zero coverage)" : "not observed", "hatch");
+  box.replaceChildren(head, unit, row);
+  const bd = backdrop();
+  if (bd && isOn("backdrop")) box.append(h("div", { className: "muted" },
+    `Radar image: ${bd.attribution}${bd.from ? `, median of the passes from ${bd.from} to ${bd.to}` : ""}. ` +
+    "Colours are see-through while it is on; turn it off for exact colours."));
+}
+
+// Words before numbers (#315): observed versus expected reads as "about 2.3x more small boats than normal".
+function cellTip(name, c) {
+  if (name !== "obs_vs_exp" || c.ratio == null) return `${MAPS[name].long}: ${Number(c[name]).toFixed(3)}`;
+  if (c.ratio.toFixed(1) === "1.0") return t("ratio_same");
+  return c.ratio > 1 ? t("ratio_more", { x: c.ratio.toFixed(1) }) : t("ratio_fewer", { x: (1 / c.ratio).toFixed(1) });
+}
+
+function drawHeatmap(name, week) {
+  hatchUnobserved();
+  const g = group("heat");
+  for (const c of snap.cells.weeks[week]) {
+    const hatched = hatchedValue(name, c);
+    const r = el("rect", { ...cellRect(c.cell_id), class: hatched ? "cell hatched" : "cell" }, g,
+      hatched ? t("not_observed") : cellTip(name, c));
+    if (!hatched) r.style.fill = colour(name, c[name]);
+  }
+  drawLegend(name, week);
+}
+
+// Cross-fade the heat layer when the map or the week changes (#278); instant under reduced motion.
+function fadeHeat(draw) {
+  const g = document.getElementById("heat");
+  if (reduced()) { draw(); return; }
+  g.classList.add("fading");
+  setTimeout(() => { draw(); requestAnimationFrame(() => g.classList.remove("fading")); }, 150);
+}
+
+const isOn = id => document.getElementById("t-" + id)?.getAttribute("aria-pressed") !== "false";
+
+function drawOverlays(first = false) {
+  const root = group("over");
+  const layer = id => { const g = el("g", { id: "ov-" + id }, root); g.style.display = isOn(id) ? "" : "none"; return g; };
+  const L = snap.cells.layers;
+  const inshore = layer("inshore");
+  for (const cid of L.inshore) el("rect", { ...cellRect(cid), class: "inshore" }, inshore);
+  const lanes = layer("lane");
+  for (const cid of L.lane) el("rect", { ...cellRect(cid), class: "lane" }, lanes, "Shipping lane");
+  for (const cid of L.exclusion) el("rect", { ...cellRect(cid), class: "exclusion" }, lanes, "Exclusion zone");
+
+  const routes = layer("routes");
+  for (const [asset, stops] of Object.entries(snap.plan)) {
+    if (stops.length < 2) continue;
+    // the ship's route draws itself on first load (#278)
+    el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), class: `route ${asset}${first && asset === "ship" ? " draw" : ""}`, pathLength: 1 }, routes,
+      asset === "ship" ? "Ship route (by sea)" : "Aircraft sweep (straight lines)");
+    if (asset !== "ship") continue;
+    stops.forEach((s, i) => {
+      if (i === 0 || i === stops.length - 1) return;
+      const [x, y] = project(s.lon, s.lat), explore = isExplore(s);
+      el("circle", { cx: x, cy: y, r: 9, class: explore ? "stop explore" : "stop" }, routes,
+        `${explore ? "Exploration visit" : "Ship stop"}: ${s.id}, ${s.arrival_utc.slice(11, 16)} UTC, ${s.dwell_h} h on station`);
+    });
+  }
+
+  const piers = layer("piers"), maxP = Math.max(0, ...snap.piers.map(p => p.P_j ?? 0));
+  for (const p of snap.piers) {
+    const [x, y] = project(p.lon, p.lat), r = p.P_j === null || !maxP ? 4 : 3 + 6 * p.P_j / maxP;
+    const sq = el("rect", { x: x - r, y: y - r, width: 2 * r, height: 2 * r, class: "pier" }, piers, `${p.name ?? p.id}${p.P_j === null ? "" : `: pier score ${p.P_j.toFixed(2)}`}`);
+    sq.dataset.id = p.id;
+  }
+
+  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...candidates().map(s => s.S), 1e-9);
+  for (const s of candidates()) { // not all sites: a map of everything is not a plan
+    const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS);
+    const tip = `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`;
+    const g = el("g", { class: "site-g", tabindex: 0, role: "button", "aria-label": `${tip}. Show in the list` }, sites, tip);
+    g.dataset.id = s.id;
+    // ring, mark, thin edge: the orange stays visible over every heat-map colour (contrast relief)
+    el("circle", { cx: x, cy: y, r, class: "site-ring" }, g);
+    el("circle", { cx: x, cy: y, r, class: s.bh_flag ? "site flagged" : "site" }, g);
+    el("circle", { cx: x, cy: y, r: r + 1.6, class: "site-edge" }, g);
+    if (s.id === selected) { g.classList.add("selected"); el("circle", { cx: x, cy: y, r: r + 6, class: "sel-ring" }, g); }
+    g.onclick = () => selectSite(s.id, { fromMap: true });
+    g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectSite(s.id, { fromMap: true }); } };
+    if (s.followup_unobserved > 0) {
+      const dx = x + r + 7, dy = y - r - 7;
+      el("polygon", { points: `${dx},${dy - 6} ${dx + 6},${dy} ${dx},${dy + 6} ${dx - 6},${dy}`, class: "diamond" }, follow, `${s.followup_unobserved} follow-up days unobserved`);
+    }
+    // D1 (#176): merged signal groups that flag the site, not the raw 0-4 count (its detectors share counts)
+    const nm = s.agreement_merged ?? 0;
+    for (let i = 0; i < nm; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, class: "dot" }, agree, `${nm} independent signal group(s) agree (angles, not proof)`);
+  }
+  for (const c of snap.cells.weeks[view.week]) { // beside cells rated U >= 0.9 this week: one dot per agreeing detector
+    if (c.unusual === null || c.unusual < AGREE_U || !c.agreement) continue;
+    const { x, y, width, height } = cellRect(c.cell_id);
+    for (let i = 0; i < c.agreement; i++) el("circle", { cx: x + width + 2 + i * 4, cy: y + height / 2, r: 1.6, class: "dot" }, agree, `${c.agreement} of 4 detectors agree`);
+  }
+}
+
+// The sites the patrol planner chose from (meta.top_sites, in D1 order); the map and the list draw these, not every site.
+const candidates = () => [...snap.sites].filter(inLens).sort(siteOrder).slice(0, snap.meta.top_sites);
+const pierLabel = id => { const p = snap.piers.find(q => q.id === id); return p ? p.name ?? p.id : id; };
+
+// D1 (#176): p_site ranks sites (highest first), S breaks ties; sites without p_site come after, by S
+function siteOrder(a, b) {
+  const pa = a.p_site ?? null, pb = b.p_site ?? null;
+  if (pa !== pb) return pa === null ? 1 : pb === null ? -1 : pb - pa;
+  return b.S - a.S;
+}
+const isExplore = s => s.reason === "explore" || s.exploration === true;
+
+// Selecting a site links the list and the map both ways (#280).
+function selectSite(id, { fromMap = false } = {}) {
+  selected = id;
+  const s = snap.sites.find(q => q.id === id);
+  if (!s) return;
+  if (candidates().findIndex(q => q.id === id) >= TOP_LIST && !view.more) view.more = true;
+  drawOverlays(); drawSiteList(); drawTop3();
+  const li = document.querySelector(`#sites li[data-id="${CSS.escape(id)}"]`);
+  if (li) {
+    if (fromMap) { li.querySelector("details").open = true; li.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); }
+  }
+  if (!fromMap) { go("this-week"); panTo(s.lon, s.lat); }
+}
+
+// A site card for This week and Fisheries watch (#313): plain reason first, numbers behind "Why, in detail".
+function siteCard(s, i) {
+  const lens = s.lens ?? "dropoff", nm = s.agreement_merged;
+  const facts = [nm == null ? null : nm ? t("signals", { n: nm }) : t("no_signals"), t("seen", { n: s.recurrence }),
+    s.followup_unobserved ? t("followup_unobserved", { n: s.followup_unobserved }) : null].filter(Boolean).join(" · ");
+  const map = h("button", { type: "button", className: "link-btn state" });
+  map.innerHTML = icon("locate"); map.append(t("show_on_map"));
+  map.onclick = () => selectSite(s.id);
+  const more = h("button", { type: "button", className: "link-btn state" }, t("in_detail"));
+  more.onclick = () => { selectSite(s.id, { fromMap: true }); go("dropoff"); };
+  const card = h("article", { className: `site-card${s.id === selected ? " selected" : ""}` },
+    h("div", { className: "lead" }, String(i + 1)),
+    h("div", {}, h("div", { className: "kicker" }, i ? t("topN") : t("top1")),
+      h("div", { className: "headline" }, h("span", { className: `lens-chip ${lens}` }, t(`lens_${lens}`)), h("span", { className: "muted" }, s.id)),
+      h("div", { className: "why" }, s.reasons[0] ?? ""), evidenceMeter(s), pierTimes(s), h("div", { className: "facts" }, facts),
+      evidenceTimeline(s), numbersDetails(s), outcomeButtons(s), h("div", { className: "actions" }, map, more)));
+  card.dataset.id = s.id;
+  card.style.animationDelay = `${i * 60}ms`;
+  return card;
+}
+
+// The three plain checks (#314): filled dot yes, empty dot no, dashed dot not available yet (placeholder, #320).
+function evidenceMeter(s) {
+  const c = s.checks ?? {};
+  return h("ul", { className: "meter", "aria-label": t("evidence") }, ...["rare_slowdown", "boats_after", "outside_fishing"].map(k => {
+    const v = c[k] ?? null, state = v === null ? "na" : v ? "yes" : "no";
+    return h("li", { className: state }, h("span", { className: "dot", "aria-hidden": "true" }),
+      h("span", {}, t(`check_${k}`), h("span", { className: "muted" }, ` · ${v === null ? t("na") : t(v ? "check_yes" : "check_no")}`)));
+  }));
+}
+
+function pierTimes(s) {
+  if (!s.top_piers.length) return "";
+  const mins = s.top_pier_minutes ?? [];
+  return h("div", { className: "facts pier-times" }, t("piers", { list: s.top_piers.map((p, i) => mins[i] == null
+    ? t("pier_time_na", { pier: pierLabel(p) }) : t("pier_time", { pier: pierLabel(p), min: Math.round(mins[i]) })).join("; ") }));
+}
+
+// Slowdown, then each radar pass in the link window after it (#314). Unobserved follow-up is said, never "nothing came".
+function evidenceTimeline(s) {
+  const tl = (s.timeline ?? []).slice(-3);
+  const body = tl.length ? h("ol", { className: "evidence-tl" }, ...tl.map(e => h("li", {},
+    h("span", { className: "slow" }, t("slowdown", { date: e.date.slice(5) })),
+    ...(e.passes.length ? e.passes.map(p => h("span", { className: `pass ${p.state}`, "data-tip": t(`pass_${p.state}`, { date: p.date.slice(5) }),
+      "aria-label": t(`pass_${p.state}`, { date: p.date.slice(5) }) }, p.date.slice(8))) : [h("span", { className: "muted" }, t("no_pass"))]))))
+    : h("p", { className: "muted" }, t("timeline_none"));
+  return h("details", { className: "card-more" }, h("summary", { className: "state" }, t("timeline")), body, siteTimeline(s));
+}
+
+function numbersDetails(s) {
+  return h("details", { className: "card-more" }, h("summary", { className: "state" }, t("numbers")),
+    h("p", { className: "muted" }, t("numbers_line", { S: fmt(s.S, 2), p: fmt(s.p_perm, 3), n: s.recurrence })));
+}
+
+// "We checked" buttons (#317). PLACEHOLDER: the answers go to a draft file until contract issue 329.
+async function saveOutcome(id, outcome) {
+  const row = { site_id: id, iso_week: snap.meta.week, outcome };
+  if (window.pywebview?.api?.record_outcome) return window.pywebview.api.record_outcome(row.site_id, row.iso_week, outcome);
+  if (location.protocol === "file:") throw new Error("not saved");
+  const r = await fetch("/outcomes.json", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) });
+  if (!r.ok) throw new Error("not saved");
+  return r.json();
+}
+
+async function loadOutcomes() {
+  if (!window.pywebview?.api?.get_outcomes && location.protocol === "file:") return; // opened as a file: no place to keep answers
+  try {
+    const rows = window.pywebview?.api?.get_outcomes ? await window.pywebview.api.get_outcomes() : await (await fetch("/outcomes.json")).json();
+    view.outcomes = Object.fromEntries(rows.filter(r => r.iso_week === snap.meta.week).map(r => [r.site_id, r.outcome]));
+  } catch (e) { view.outcomes = {}; }
+}
+
+function outcomeButtons(s) {
+  const note = h("p", { className: "muted outcome-note", "aria-live": "polite" });
+  const group = h("div", { className: "outcome", role: "group", "aria-label": t("outcome_q") });
+  const paint = () => group.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(view.outcomes?.[s.id] === b.dataset.v)));
+  for (const v of ["found_something", "found_nothing", "not_visited"]) {
+    const b = h("button", { type: "button", className: "state" }, t(`outcome_${v}`));
+    b.dataset.v = v;
+    b.onclick = async () => {
+      try { await saveOutcome(s.id, v); (view.outcomes ??= {})[s.id] = v; note.textContent = t("outcome_saved"); }
+      catch (e) { note.textContent = t("outcome_failed"); }
+      paint();
+    };
+    group.append(b);
+  }
+  paint();
+  return h("div", { className: "outcomes" }, h("div", { className: "facts" }, t("outcome_q")), group, note);
+}
+
+function drawTop3() {
+  const box = document.getElementById("top3"), list = candidates().slice(0, TOP_LIST);
+  box.replaceChildren(...(list.length ? list.map(siteCard) : [empty(view.lens === "fisheries" ? t("fisheries_lens_empty") : t("no_sites"))]));
+}
+
+function drawRoute() {
+  const box = document.getElementById("route"), f = snap.meta.figures ?? {};
+  const lines = Object.entries(snap.plan).map(([a, st]) => h("div", { className: "route-line" }, h("strong", {}, t(`route_${a}`)),
+    h("span", { className: "muted" }, st.length > 2
+      ? t("route_stops", { n: st.length - 2, h: fmt(f[`${a}_h`], 1), b: f[`${a}_budget_h`] ?? "–", time: st[0].arrival_utc.slice(11, 16) })
+      : t("route_none"))));
+  const btn = h("button", { type: "button", className: "tonal-btn state" }, t("route_more"));
+  btn.onclick = () => go("plan");
+  box.replaceChildren(...lines, h("p", { className: "muted" }, t("route_from_lens")), btn);
+}
+
+function drawFisheries() {
+  const box = document.getElementById("fisheries"), sites = snap.sites.filter(s => s.lens === "fisheries").sort(siteOrder);
+  if (sites.length) { box.replaceChildren(h("h2", {}, t("lens_fisheries")), h("div", { className: "top3" }, ...sites.slice(0, snap.meta.top_sites).map(siteCard))); return; }
+  const e = empty(t("fisheries_na_body"), "info");
+  box.replaceChildren(h("h2", {}, t("fisheries_na_title")), e, h("p", { className: "muted" }, t("fisheries_will_show")));
+}
+
+function drawLimits() {
+  const items = [...PHRASES.limits, ...(Object.values(snap.plan).some(st => st[0]?.stand_in) ? [t("limits_stand_in")] : [])];
+  document.getElementById("limitsList").replaceChildren(...items.map(x => h("li", {}, x)));
+  document.getElementById("printLimits").textContent = PHRASES.limits.slice(0, 4).join(" ");
+}
+
+function setLens(l) {
+  view.lens = l;
+  try { localStorage.setItem("np-lens", l); } catch (e) { /* this visit only */ }
+  if (!snap) return;
+  drawOverlays(); drawSiteList(); drawTop3();
+}
+
+function drawSiteList() {
+  const ol = document.getElementById("sites");
+  const pier = id => { const p = snap.piers.find(q => q.id === id); return p ? `${p.name ?? p.id}${p.P_j == null ? "" : ` (pier score ${p.P_j.toFixed(2)})`}` : id; };
+  const items = candidates().slice(0, view.more ? undefined : TOP_LIST).map((s, i) => {
+    const nm = s.agreement_merged;
+    const lead = h("div", { className: "lead", title: nm == null ? "agreement not available yet" : `${nm} independent signal group(s) agree (angles, not proof)` }, String(i + 1));
+    const badge = h("span", { className: "badge", title: lead.title }, nm == null ? "" : nm ? "●".repeat(nm) : "○");
+    const locate = h("button", { type: "button", className: "link-btn state", title: "Show on the map" });
+    locate.innerHTML = icon("locate"); locate.append("Map");
+    locate.onclick = () => selectSite(s.id);
+    const head = h("div", { className: "headline" }, h("span", {}, s.id), badge, h("span", { className: "muted" }, `score ${s.S.toFixed(2)} · p = ${s.p_perm.toFixed(3)}`));
+    if (!s.bh_flag) head.append(h("span", { className: "tag" }, "not significant"));
+    head.append(locate);
+    const timeline = h("div");
+    const more = h("details", {}, h("summary", { className: "state" }, "Why, and what to check"), timeline,
+      h("ul", {}, ...s.reasons.slice(1).map(r => h("li", {}, r))),
+      h("p", {}, `Seen ${s.recurrence} time${s.recurrence === 1 ? "" : "s"}` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
+        (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pier).join(", ")}.` : ".")));
+    more.addEventListener("toggle", () => { if (more.open && !timeline.childElementCount) timeline.append(siteTimeline(s)); }); // built on first open
+    const li = h("li", {}, lead, h("div", {}, head, h("div", { className: "supporting" }, s.reasons[0] ?? ""), more));
+    li.dataset.id = s.id;
+    li.style.animationDelay = `${Math.min(i, 10) * 30}ms`;
+    if (s.id === selected) li.classList.add("selected");
+    return li;
+  });
+  ol.replaceChildren(...items);
+  if (!snap.sites.length) ol.replaceChildren(h("li", {}, h("span"), empty("No sites this week.")));
+  const btn = document.getElementById("more"), n = candidates().length;
+  btn.hidden = n <= TOP_LIST;
+  btn.textContent = view.more ? `Show only the top ${TOP_LIST}` : `Show the ${n} patrol candidates (${snap.sites.length} sites in all)`;
+}
+
+// ---- chart foundation (#282): scales, ticks, axes, legend, card with a table view ----
+const lin = (d0, d1, r0, r1) => v => r0 + ((v - d0) * (r1 - r0)) / ((d1 - d0) || 1);
+function ticks(lo, hi, n = 4, minStep = 0) {
+  let step = 1000;
+  for (const s of [0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000]) if (s >= minStep && (hi - lo || 1) / s <= n) { step = s; break; }
+  const out = [];
+  for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(Number(v.toFixed(6)));
+  return out;
+}
+function chartSvg(w, hgt) {
+  const s = document.createElementNS(NS, "svg");
+  s.setAttribute("viewBox", `0 0 ${w} ${hgt}`); s.setAttribute("class", "chart"); s.setAttribute("role", "group"); // marks inside are focusable
+  return s;
+}
+// y axis with recessive grid lines; x labels are drawn by each chart
+function yAxis(svg, y, vals, x0, x1, label = v => v) {
+  for (const v of vals) {
+    el("line", { x1: x0, x2: x1, y1: y(v), y2: y(v), class: "grid" }, svg);
+    el("text", { x: x0 - 6, y: y(v) + 3, "text-anchor": "end" }, svg).textContent = label(v);
+  }
+  el("line", { x1: x0, x2: x1, y1: y(vals[0]), y2: y(vals[0]), class: "axis" }, svg);
+}
+const mark = (svg, tag, attrs, tip) => el(tag, { ...attrs, class: `mark ${attrs.class ?? ""}`, tabindex: 0, role: "img", "aria-label": tip }, svg, tip);
+function legendRow(items) {
+  return h("div", { className: "legend" }, ...items.map(([shape, cls, label]) => {
+    const s = document.createElementNS(NS, "svg"); s.setAttribute("viewBox", "0 0 14 14"); s.setAttribute("aria-hidden", "true");
+    s.innerHTML = shape === "square" ? `<rect x="2" y="2" width="10" height="10" class="${cls}"/>` : shape === "hatch" ? `<rect x="1" y="1" width="12" height="12" fill="url(#hatch)"/>`
+      : shape === "line" ? `<path d="M1 7h12" class="${cls}" stroke-width="2"/>` : `<circle cx="7" cy="7" r="5" class="${cls}"/>`;
+    s.classList.add("chart", "swatch");
+    return h("span", {}, s, label);
+  }));
+}
+// A chart card: title, subtitle, the chart or its table (toggle), a plain-words caption.
+function chartCard(title, subtitle, caption, svg, rows, extra = []) {
+  if (svg.tagName === "svg") svg.setAttribute("aria-label", `${title}: ${subtitle}`);
+  const body = h("div", {}, svg, ...extra);
+  const card = h("div", { className: "chart-card" });
+  const tableBtn = h("button", { type: "button", className: "state" }, "Table"), chartBtn = h("button", { type: "button", className: "state" }, "Chart");
+  const toggle = h("div", { className: "seg compact", role: "group", ariaLabel: `${title}: chart or table` }, chartBtn, tableBtn);
+  const show = asTable => {
+    chartBtn.setAttribute("aria-pressed", !asTable); tableBtn.setAttribute("aria-pressed", asTable);
+    body.replaceChildren(...(asTable ? [rows.length ? table(rows, caption) : empty("No values.")] : [svg, ...extra]));
+  };
+  chartBtn.onclick = () => show(false); tableBtn.onclick = () => show(true);
+  show(false);
+  card.append(h("div", { className: "head" }, h("div", {}, h("h3", {}, title), h("div", { className: "subtitle" }, subtitle)), rows ? toggle : ""), body,
+    h("p", { className: "caption" }, caption));
+  return card;
+}
+
+// ---- charts (#283 to #288) ----
+function recallChart(rows) {
+  const w = 360, hgt = 190, m = { l: 40, r: 10, t: 10, b: 34 }, bins = [...new Set(rows.map(r => r.length_bin))], seas = [...new Set(rows.map(r => r.sea_state))];
+  const svg = chartSvg(w, hgt), y = lin(0, 1, hgt - m.b, m.t), band = (w - m.l - m.r) / bins.length;
+  yAxis(svg, y, [0, 0.25, 0.5, 0.75, 1], m.l, w - m.r, v => pct(v));
+  bins.forEach((b, i) => { el("text", { x: m.l + band * (i + 0.5), y: hgt - m.b + 16, "text-anchor": "middle" }, svg).textContent = `${b} m`; });
+  el("text", { x: m.l + (w - m.l - m.r) / 2, y: hgt - 4, "text-anchor": "middle" }, svg).textContent = "boat length";
+  for (const r of rows) {
+    const i = bins.indexOf(r.length_bin), k = seas.indexOf(r.sea_state), cx = m.l + band * (i + 0.5) + (k - (seas.length - 1) / 2) * 12, cls = k ? "s2" : "s1";
+    if (!r.n || r.recall === null) { el("text", { x: cx, y: y(0) - 4, "text-anchor": "middle" }, svg, `${r.length_bin} m, ${r.sea_state}: no boats`).textContent = "–"; continue; }
+    const tip = `${r.length_bin} m, ${r.sea_state} sea: ${r.detected} of ${r.n} seen (${pct(r.recall)}), 95% range ${pct(r.lo)} to ${pct(r.hi)}`;
+    el("line", { x1: cx, x2: cx, y1: y(r.lo), y2: y(r.hi), class: `whisker ${cls}` }, svg);
+    if (k) mark(svg, "rect", { x: cx - 4, y: y(r.recall) - 4, width: 8, height: 8, class: cls }, tip);
+    else mark(svg, "circle", { cx, cy: y(r.recall), r: 4.5, class: cls }, tip);
+  }
+  return chartCard("Chance of seeing a boat that is there", "Recall by boat length and sea state, with the 95% range",
+    "Small boats and rough seas are often missed: that is why rough passes count as unobserved for small boats.", svg, rows,
+    [legendRow(seas.map((s, k) => [k ? "square" : "circle", k ? "s2" : "s1", `${s} sea`]))]);
+}
+
+function calibrationChart(rows, brier) {
+  const w = 360, hgt = 200, m = { l: 40, r: 10, t: 10, b: 34 }, svg = chartSvg(w, hgt);
+  const x = lin(0, 1, m.l, w - m.r), y = lin(0, 1, hgt - m.b, m.t), maxN = Math.max(...rows.map(r => r.n), 1);
+  yAxis(svg, y, [0, 0.5, 1], m.l, w - m.r, v => pct(v));
+  for (const v of [0, 0.5, 1]) el("text", { x: x(v), y: hgt - m.b + 16, "text-anchor": "middle" }, svg).textContent = pct(v);
+  el("text", { x: (m.l + w - m.r) / 2, y: hgt - 4, "text-anchor": "middle" }, svg).textContent = "predicted probability";
+  el("line", { x1: x(0), y1: y(0), x2: x(1), y2: y(1), class: "ref" }, svg, "Perfectly honest: predicted equals observed");
+  for (const r of rows)
+    mark(svg, "circle", { cx: x(r.mean_pred), cy: y(r.observed), r: 3 + (6 * r.n) / maxN, class: "s1" },
+      `Predicted ${pct(r.mean_pred)}, observed ${pct(r.observed)}, ${r.n} candidates`);
+  return chartCard("Are the probabilities honest?", `Predicted against observed share, per bin · Brier ${fmt(brier, 3)} (lower is better)`,
+    "Dots on the dashed line mean the probabilities can be taken at face value; dot size shows how many candidates are in the bin.", svg, rows);
+}
+
+// Forecast skill per event type and model: the mean over backtest folds with its min-to-max range (validate's
+// shape); a plain `skill` column per fold also works.
+function skillChart(rows) {
+  const ranged = "mean" in rows[0], val = r => (ranged ? r.mean : r.skill ?? null);
+  const label = r => (ranged ? `${r.event_type ?? ""} · ${r.model ?? ""}` : String(r.fold ?? ""));
+  if (!rows.some(r => typeof val(r) === "number")) return chartCard("Forecast skill", "From the backtest", "Above 0 beats assuming every cell is average.", empty("No skill values in the report."), rows);
+  const w = 360, row = 30, m = { l: 118, r: 14, t: 6, b: 26 }, hgt = m.t + m.b + row * rows.length, svg = chartSvg(w, hgt);
+  const vals = rows.flatMap(r => (ranged ? [r.min, r.max] : [val(r)])).filter(v => typeof v === "number");
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), xt = ticks(lo, hi, 4), x = lin(Math.min(lo, xt[0]), Math.max(hi, xt[xt.length - 1]), m.l, w - m.r);
+  for (const t of xt) {
+    el("line", { x1: x(t), x2: x(t), y1: m.t, y2: hgt - m.b, class: "grid" }, svg);
+    el("text", { x: x(t), y: hgt - m.b + 14, "text-anchor": "middle" }, svg).textContent = t.toFixed(2);
+  }
+  el("line", { x1: x(0), x2: x(0), y1: m.t, y2: hgt - m.b, class: "ref" }, svg, "0: no better than assuming every cell is average");
+  rows.forEach((r, i) => {
+    const cy = m.t + row * (i + 0.5);
+    el("text", { x: m.l - 8, y: cy + 4, "text-anchor": "end" }, svg).textContent = label(r);
+    if (typeof val(r) !== "number") return;
+    if (ranged) el("line", { x1: x(r.min), x2: x(r.max), y1: cy, y2: cy, class: "whisker s1" }, svg);
+    mark(svg, "circle", { cx: x(val(r)), cy, r: 4.5, class: "s1" },
+      `${label(r)}: skill ${fmt(val(r), 3)}${ranged ? ` (folds from ${fmt(r.min, 3)} to ${fmt(r.max, 3)})` : ""}`);
+  });
+  return chartCard("Forecast skill", ranged ? "Mean over backtest folds, with the range from worst to best fold" : "Per backtest fold",
+    "Right of the dashed line the forecast beats assuming every cell is average; left of it, it does worse.", svg, rows);
+}
+
+// Gap-aware line: a null breaks the line (a day not observed is never drawn as 0).
+function gapLine(svg, pts, cls) {
+  let d = "";
+  let open = false;
+  for (const p of pts) { if (p === null) { open = false; continue; } d += `${open ? "L" : "M"}${p[0]},${p[1]}`; open = true; }
+  if (d) el("path", { d, class: cls }, svg);
+}
+function weekBand(svg, daily, x, top, bottom) {
+  const first = daily.findIndex(d => isoWeek(d.date) === view.week);
+  if (first < 0) return;
+  const last = daily.length - 1 - [...daily].reverse().findIndex(d => isoWeek(d.date) === view.week);
+  el("rect", { x: x(first) - 4, y: top, width: x(last) - x(first) + 8, height: bottom - top, class: "band" }, svg, `Week ${view.week}, shown on the map`);
+}
+// The ISO week label of a date, from the snapshot's own list of weeks (formatting only).
+function isoWeek(dateStr) {
+  const i = Math.floor((Date.parse(dateStr) - Date.parse(snap.cells.daily[0].date)) / 86400000 / 7);
+  return snap.meta.weeks[Math.max(0, Math.min(snap.meta.weeks.length - 1, i))];
+}
+function dateAxis(svg, daily, x, yb) {
+  daily.forEach((d, i) => { if (i % 7 === 0) el("text", { x: x(i), y: yb + 16, "text-anchor": "start" }, svg).textContent = `${isoWeek(d.date).slice(5)} · ${d.date.slice(5)}`; });
+}
+
+function trendChart(daily) {
+  const w = 520, hgt = 200, m = { l: 36, r: 10, t: 10, b: 28 }, svg = chartSvg(w, hgt);
+  const vals = daily.flatMap(d => [d.unusual_cells, d.flagged_cells]).filter(v => v !== null), hi = Math.max(1, ...vals);
+  const x = lin(0, daily.length - 1, m.l + 4, w - m.r - 4), yt = ticks(0, hi, 4, 1), y = lin(0, yt[yt.length - 1], hgt - m.b, m.t); // whole cells
+  weekBand(svg, daily, x, m.t, hgt - m.b);
+  yAxis(svg, y, yt, m.l, w - m.r);
+  dateAxis(svg, daily, x, hgt - m.b);
+  gapLine(svg, daily.map((d, i) => (d.unusual_cells === null ? null : [x(i), y(d.unusual_cells)])), "line");
+  daily.forEach((d, i) => {
+    if (d.unusual_cells === null) { el("text", { x: x(i), y: y(0) - 4, "text-anchor": "middle" }, svg, `${d.date}: no scored cells (not observed)`).textContent = "·"; return; }
+    mark(svg, "circle", { cx: x(i), cy: y(d.unusual_cells), r: 3, class: "s1" }, `${d.date}: ${d.unusual_cells} cells rated unusual (U ≥ ${AGREE_U})`);
+    if (d.flagged_cells) mark(svg, "rect", { x: x(i) - 3.5, y: y(d.flagged_cells) - 3.5, width: 7, height: 7, class: "s2" }, `${d.date}: ${d.flagged_cells} cells flagged after correcting for many tests`);
+  });
+  return chartCard("Unusual cells per day", `Cells the detectors rate U ≥ ${AGREE_U}, and cells flagged · ${daily[0].date} to ${daily[daily.length - 1].date}`,
+    "A gap means no cell was scored that day, not that nothing happened. The shaded week is the one on the map.",
+    svg, daily.map(d => ({ date: d.date, unusual_cells: d.unusual_cells, flagged_cells: d.flagged_cells })),
+    [legendRow([["circle", "s1", "unusual (U ≥ 0.9)"], ["square", "s2", "flagged"]])]);
+}
+
+function coverageChart(daily) {
+  const w = 520, hgt = 200, m = { l: 40, r: 10, t: 10, b: 28 }, svg = chartSvg(w, hgt);
+  const x = lin(0, daily.length - 1, m.l + 6, w - m.r - 6), y = lin(0, 1, hgt - m.b, m.t), bw = Math.max(3, ((w - m.l - m.r) / daily.length) * 0.7);
+  weekBand(svg, daily, x, m.t, hgt - m.b);
+  yAxis(svg, y, [0, 0.25, 0.5, 0.75, 1], m.l, w - m.r, v => pct(v));
+  dateAxis(svg, daily, x, hgt - m.b);
+  daily.forEach((d, i) => {
+    if (!d.passes) { el("text", { x: x(i), y: y(0) - 3, "text-anchor": "middle" }, svg, `${d.date}: no radar pass`).textContent = "×"; return; }
+    // the whole covered share hatched, the calm (usable) part drawn over it: the hatched rest is rough-only coverage
+    mark(svg, "rect", { x: x(i) - bw / 2, y: y(d.covered_share), width: bw, height: y(0) - y(d.covered_share), rx: 1.5, class: "bar rough" },
+      `${d.date}: ${d.passes} pass(es), ${pct(d.covered_share)} of the sea covered, ${pct(d.calm_share)} on calm passes`);
+    if (d.calm_share) el("rect", { x: x(i) - bw / 2, y: y(d.calm_share), width: bw, height: y(0) - y(d.calm_share), rx: 1.5, class: "bar" }, svg);
+  });
+  return chartCard("When we could see small boats", "Share of the 2 km sea cells covered by radar each day",
+    "Solid: covered on a calm pass, so small boats could be seen. Hatched: covered only on rough passes, which count as unobserved for small boats. × : no pass that day.",
+    svg, daily.map(d => ({ date: d.date, passes: d.passes, covered_share: d.covered_share, calm_share: d.calm_share })),
+    [legendRow([["square", "s1", "calm pass (usable)"], ["hatch", "", "rough pass only (not usable)"]])]);
+}
+
+function siteTimeline(s) {
+  if (!s.links?.length) return h("p", {}, "No individual links recorded for this site.");
+  const w = 320, hgt = 120, m = { l: 30, r: 10, t: 8, b: 26 }, svg = chartSvg(w, hgt);
+  const maxAge = Math.max(30, ...s.links.map(k => k.age_days)), maxW = Math.max(...s.links.map(k => k.weight), 1e-9);
+  const x = lin(maxAge, 0, m.l, w - m.r), y = lin(0, 1, hgt - m.b, m.t);
+  yAxis(svg, y, [0, 0.5, 1], m.l, w - m.r, v => v.toFixed(1));
+  for (const t of ticks(0, maxAge, 4)) el("text", { x: x(t), y: hgt - m.b + 14, "text-anchor": "middle" }, svg).textContent = t ? `${t} d` : "T";
+  for (const k of s.links) {
+    el("line", { x1: x(k.age_days), x2: x(k.age_days), y1: y(0), y2: y(k.L), class: "whisker s1", "stroke-opacity": 0.35 + 0.65 * (k.weight / maxW) }, svg);
+    mark(svg, "circle", { cx: x(k.age_days), cy: y(k.L), r: 2.5 + 3.5 * (k.weight / maxW), class: "s1", "fill-opacity": 0.35 + 0.65 * (k.weight / maxW) },
+      `${k.age_days} days before T: link score L ${fmt(k.L)}, counts ${fmt(k.weight, 3)} toward S`);
+  }
+  return chartCard("What builds this site's score", "Each dot is a slowdown followed by unusual small-boat activity nearby",
+    "Days before the snapshot date T. Recent links count more: a link's weight halves every 30 days, and the weights add up to the score.",
+    svg, s.links.map(k => ({ days_before_T: k.age_days, L: k.L, weight: k.weight })));
+}
+
+function scheduleChart(asset, stops, budget) {
+  const w = 360, hgt = 80, m = { l: 12, r: 12, t: 14, b: 26 }, svg = chartSvg(w, hgt);
+  const span = Math.max(budget ?? 0, ...stops.map(s => s.at_h + (s.dwell_h || 0))), x = lin(0, span, m.l, w - m.r), mid = (m.t + hgt - m.b) / 2;
+  for (const t of ticks(0, span, 6)) {
+    el("line", { x1: x(t), x2: x(t), y1: m.t, y2: hgt - m.b, class: "grid" }, svg);
+    el("text", { x: x(t), y: hgt - m.b + 14, "text-anchor": "middle" }, svg).textContent = `${t} h`;
+  }
+  stops.forEach((s, i) => {
+    if (i) { const p = stops[i - 1], from = p.at_h + (p.dwell_h || 0); el("rect", { x: x(from), y: mid - 2, width: Math.max(0, x(s.at_h) - x(from)), height: 4, rx: 2, class: "travel" }, svg, `Travel to ${s.id === "base" ? "base" : s.id}`); }
+    if (s.dwell_h) mark(svg, "rect", { x: x(s.at_h), y: mid - 9, width: Math.max(2, x(s.at_h + s.dwell_h) - x(s.at_h)), height: 18, rx: 3, class: `dwell${isExplore(s) ? " explore" : ""}` },
+      `${s.id}${isExplore(s) ? " (exploration visit)" : ""}: arrive ${s.arrival_utc.slice(11, 16)} UTC, ${s.dwell_h} h on station`);
+  });
+  if (budget) el("line", { x1: x(budget), x2: x(budget), y1: m.t - 6, y2: hgt - m.b, class: "budget" }, svg, `${budget} h budget`);
+  const used = stops.length > 1 ? stops[stops.length - 1].at_h : 0;
+  return chartCard(asset === "ship" ? "Ship (sea route)" : "Aircraft (straight-line sweep)", `${fmt(used, 1)} h of the ${budget ?? "–"} h budget · ${stops.length - 2} stops`,
+    "Thin bars: travelling. Blocks: time on station (purple: an exploration visit). Dashed line: the time budget.",
+    svg, stops.map(s => ({ stop: s.id, arrival_utc: s.arrival_utc.slice(0, 16).replace("T", " "), at_h: s.at_h, dwell_h: s.dwell_h })));
+}
+
+function drawPlan() {
+  const box = document.getElementById("plan"), fig = snap.meta.figures ?? {};
+  const parts = Object.entries(snap.plan).flatMap(([asset, stops]) => {
+    if (stops.length <= 2) return [h("h3", {}, asset === "ship" ? "Ship (sea route)" : "Aircraft"), empty("Nothing worth the trip within the time budget.")];
+    const card = stops.every(s => s.at_h !== undefined) ? scheduleChart(asset, stops, fig[`${asset}_budget_h`]) : h("h3", {}, asset);
+    const list = h("ol", { className: "timeline" }, ...stops.map(s => {
+      const tags = [];
+      if (s.id === "base") tags.push(h("span", { className: "tag" }, s.stand_in ? "base · simulated stand-in" : "base"));
+      if (isExplore(s)) tags.push(h("span", { className: "tag explore" }, "exploration visit"));
+      if (s.not_significant) tags.push(h("span", { className: "tag" }, "not significant"));
+      if (s.lens) tags.push(h("span", { className: `lens-chip ${s.lens}` }, t(`lens_${s.lens}`)));
+      if (s.reason === "exploit") tags.push(h("span", { className: "tag" }, t("reason_exploit")));
+      return h("li", {}, h("div", { className: "time" }, `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC`),
+        h("div", { className: "headline" }, h("span", {}, s.id === "base" ? "Base" : s.id), ...tags),
+        s.id === "base" ? "" : h("div", { className: "supporting" }, `${s.dwell_h} h on station`));
+    }));
+    return [card, h("details", {}, h("summary", { className: "state" }, `All ${stops.length} stops`), list)];
+  });
+  box.replaceChildren(missionMix(), ...parts);
+  if (Object.values(snap.plan).some(st => st[0]?.stand_in))
+    box.append(h("p", { className: "muted" }, "The base port and start time are stand-ins on simulated data until they are set in config.yaml."));
+}
+
+// Mission mix (#316): the slider only switches between plans export made; a mix with no plan is shown, disabled.
+// PLACEHOLDER: only 0 % fisheries is ready until fisheries data (issue 321) and the patrol.mission_mixes setting exist.
+function missionMix() {
+  const mm = snap.meta.mission_mix ?? { wanted: [0], ready: [0] };
+  const seg = h("div", { className: "seg", role: "radiogroup", "aria-label": t("mix_title") }, ...mm.wanted.map(p => {
+    const b = h("button", { type: "button", role: "radio", className: "state", "aria-checked": String(p === 0) }, t("mix_value", { p }));
+    b.disabled = !mm.ready.includes(p);
+    return b;
+  }));
+  return h("div", { className: "mix" }, h("h3", {}, t("mix_title")), seg,
+    mm.ready.length < 2 ? h("p", { className: "muted" }, t("mix_na")) : "");
+}
+
+function drawPiers() {
+  const box = document.getElementById("piers"), scored = snap.piers.filter(p => p.P_j !== null).sort((a, b) => b.P_j - a.P_j);
+  const none = snap.piers.filter(p => p.P_j === null);
+  if (!scored.length) { box.replaceChildren(empty("No pier scores yet.", "info")); return; }
+  const w = 360, row = 26, m = { l: 110, r: 46, t: 4 }, hgt = m.t + row * scored.length, svg = chartSvg(w, hgt), x = lin(0, scored[0].P_j, m.l, w - m.r);
+  scored.forEach((p, i) => {
+    const y0 = m.t + i * row, name = p.name ?? p.id;
+    el("text", { x: m.l - 8, y: y0 + row / 2 + 4, "text-anchor": "end" }, svg).textContent = name.length > 16 ? `${name.slice(0, 15)}…` : name;
+    const bar = mark(svg, "rect", { x: m.l, y: y0 + 5, width: Math.max(2, x(p.P_j) - m.l), height: row - 10, rx: 4, class: "bar" }, `${name}: pier score ${p.P_j.toFixed(2)}. Click to show on the map`);
+    el("text", { x: x(p.P_j) + 6, y: y0 + row / 2 + 4 }, svg).textContent = p.P_j.toFixed(2);
+    const hl = on => document.querySelector(`#ov-piers rect[data-id="${CSS.escape(p.id)}"]`)?.classList.toggle("hl", on);
+    bar.addEventListener("pointerenter", () => hl(true)); bar.addEventListener("pointerleave", () => hl(false));
+    bar.addEventListener("focus", () => hl(true)); bar.addEventListener("blur", () => hl(false));
+    bar.addEventListener("click", () => panTo(p.lon, p.lat, 4));
+    bar.addEventListener("keydown", e => { if (e.key === "Enter") panTo(p.lon, p.lat, 4); });
+  });
+  box.replaceChildren(chartCard("Pier scores", "Road-access piers, ranked by how strongly nearby sites point to them",
+    "A pier scores higher when high-scoring sites are a short trip away by sea. Places, not people.", svg,
+    scored.map(p => ({ pier: p.name ?? p.id, pier_score: p.P_j }))));
+  if (none.length) box.append(h("p", { className: "muted" }, `No score: ${none.map(p => p.name ?? p.id).join(", ")}.`));
+}
+
+const LABELS = { length_bin: "Length (m)", sea_state: "Sea", n: "Boats", detected: "Seen", recall: "Recall", lo: "Low 95%", hi: "High 95%",
+  bin_lo: "From", bin_hi: "To", mean_pred: "Predicted", observed: "Observed" };
+function table(rows, caption) {
+  const keys = Object.keys(rows[0]), numeric = k => rows.every(r => r[k] === null || typeof r[k] === "number");
+  const cell = v => v === null || v === undefined ? "–" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3) : String(v);
+  const t = h("table", {}, h("caption", {}, caption),
+    h("thead", {}, h("tr", {}, ...keys.map(k => h("th", { className: numeric(k) ? "num" : "", scope: "col" }, LABELS[k] ?? k)))),
+    h("tbody", {}, ...rows.map(r => h("tr", {}, ...keys.map(k => h("td", { className: numeric(k) ? "num" : "" }, cell(r[k])))))));
+  return h("div", { className: "table-wrap" }, t);
+}
+
+function drawValidation() {
+  const v = snap.validation, box = document.getElementById("validation");
+  if (!v) { box.replaceChildren(empty("Validation has not been run (make validate).", "info")); return; }
+  const parts = [];
+  parts.push(v.recall?.length ? recallChart(v.recall) : chartCard("Chance of seeing a boat that is there", "Recall", "", empty("Not available yet."), null));
+  parts.push(v.calibration?.length ? calibrationChart(v.calibration, v.brier) : chartCard("Are the probabilities honest?", `Brier ${fmt(v.brier, 3)}`, "", empty("Not available yet."), null));
+  if (v.skill?.length) parts.push(skillChart(v.skill));
+  const stat = (title, value, sub) => h("div", { className: "chart-card" }, h("h3", {}, title), h("div", { className: "stat" }, h("span", { className: "value" }, value), h("span", { className: "muted" }, sub)));
+  parts.push(v.null?.share_with_any_flag == null ? h("div", { className: "chart-card" }, h("h3", {}, "Alarms on pure noise"), empty("Null test not run yet.", "info"))
+    : stat("Alarms on pure noise", pct(v.null.share_with_any_flag), `of ${v.null.runs} shuffled runs raised any flag` +
+      (v.null.lo != null ? ` (95% range ${pct(v.null.lo)} to ${pct(v.null.hi)})` : "")));
+  if (v.interval_coverage != null) parts.push(stat("Forecast ranges that held the actual count", pct(v.interval_coverage), "aim: 90%"));
+  box.replaceChildren(...parts);
+}
+
+function drawTrends() {
+  const box = document.getElementById("trends"), daily = snap.cells.daily;
+  if (!daily?.length) { box.replaceChildren(empty("No daily series in this snapshot.", "info")); return; }
+  box.replaceChildren(trendChart(daily), coverageChart(daily));
+  document.getElementById("trendsNote").textContent = `${daily[0].date} to ${daily[daily.length - 1].date}`;
+}
+
+// Headline figures (#279): numbers export wrote into meta.figures; the browser only formats them.
+function drawFigures() {
+  const f = snap.meta.figures, box = document.getElementById("figures");
+  if (!f) { box.hidden = true; return; }
+  const tile = (label, value, sub, tip, cls = "") => {
+    const na = value === null || value === undefined;
+    const d = h("div", { className: `figure${na ? " na" : ""}` }, h("div", { className: "label" }, label));
+    const v = h("div", { className: `value ${cls}` });
+    if (na) v.textContent = "not available yet"; else v.innerHTML = value;
+    d.append(v, h("div", { className: "sub" }, sub));
+    d.dataset.tip = tip;
+    d.tabIndex = 0;
+    return d;
+  };
+  const hrs = (used, budget) => (used == null ? null : `${used.toFixed(1)}<small> h</small>`);
+  box.replaceChildren(
+    tile("Sites worth checking", String(f.candidates), `of ${f.sites} sites scored · ${f.flagged} flagged`, "The patrol candidates: the top sites by the site model, or by score where it has none."),
+    tile("Ship plan", hrs(f.ship_h, f.ship_budget_h), `of the ${f.ship_budget_h} h budget`, "Hours from leaving the base to returning, by sea."),
+    tile("Aircraft sweep", hrs(f.aircraft_h, f.aircraft_budget_h), `of the ${f.aircraft_budget_h} h budget`, "Hours of the straight-line sweep over the candidates."),
+    tile("Sea observed", f.observed_share == null ? null : `${(100 * f.observed_share).toFixed(0)}<small>%</small>`, `of 2 km cells, week ${snap.meta.week}`, "Cells with at least one calm radar pass this week; the rest are blind spots."),
+    tile("Data as of", snap.meta.T, snap.meta.data_label, "The last full day with radar data; the system runs about five days behind real time.", "date"),
+  );
+}
+
+function drawFooter() {
+  const m = snap.meta, real = m.data_label !== "simulated";
+  const sources = real
+    ? "Contains modified Copernicus Sentinel data and Copernicus Climate Change Service information (ERA5). Vessel presence and radar detections: Global Fishing Watch. Coastline and piers: © OpenStreetMap contributors."
+    : "Simulated data: no real source is shown. Real runs credit Copernicus Sentinel and ERA5, Global Fishing Watch and OpenStreetMap contributors.";
+  document.getElementById("footer").replaceChildren(
+    h("div", {}, h("strong", {}, "NarcoPolo"), " · places worth checking, not people. Wording: unusual, worth checking, consistent with a drop-off."),
+    h("div", {}, sources),
+    h("div", {}, `Snapshot generated ${m.generated_utc} · config ${String(m.config_hash).slice(0, 12)}…`));
+}
+
+function drawBanner() {
+  const b = document.getElementById("banner");
+  b.dataset.label = snap.meta.data_label;
+  b.replaceChildren(`Data: ${snap.meta.data_label}`, h("span", { className: "sub" }, `as of ${snap.meta.T} · week ${view.week}`));
+}
+
+// A radio group with roving focus: arrow keys move, Enter or a click selects (WAI-ARIA radio pattern).
+function radioGroup(box, items, current, onSelect, cls = "") {
+  box.replaceChildren(...items.map(([value, label, iconName]) => {
+    const b = h("button", { type: "button", className: `state ${cls}`.trim() });
+    b.setAttribute("role", "radio");
+    b.dataset.value = value;
+    b.innerHTML = iconName ? icon(iconName) : "";
+    b.append(label);
+    b.onclick = () => select(value, true);
+    return b;
+  }));
+  const buttons = [...box.children];
+  function select(value, fire) {
+    for (const b of buttons) { const on = b.dataset.value === value; b.setAttribute("aria-checked", on); b.tabIndex = on ? 0 : -1; }
+    if (fire) onSelect(value);
+  }
+  box.onkeydown = e => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = buttons.indexOf(document.activeElement), next = buttons[(i + step + buttons.length) % buttons.length];
+    next.focus(); select(next.dataset.value, true);
+  };
+  select(current, false);
+  return select;
+}
+
+let selectWeek = () => {};
+function onWeekChange(week) {
+  view.week = week;
+  selectWeek(week, false);
+  drawBanner();
+  fadeHeat(() => { drawHeatmap(view.map, week); drawOverlays(); }); // the cell agreement dots depend on the week
+  drawTrends(); // the shaded week follows the selection
+}
+
+function stepWeek(d) {
+  const w = snap.meta.weeks, i = w.indexOf(view.week);
+  onWeekChange(w[(i + d + w.length) % w.length]);
+}
+
+function setReplay(on) {
+  const b = document.getElementById("play");
+  clearInterval(timer);
+  timer = on ? setInterval(() => stepWeek(1), REPLAY_MS) : null;
+  b.setAttribute("aria-pressed", on);
+  b.innerHTML = icon(on ? "pause" : "play");
+  b.append(on ? "Pause" : "Replay weeks");
+}
+
+function setTheme(pick) {
+  try { localStorage.setItem("np-theme", pick); } catch (e) { /* the choice lasts for this visit only */ }
+  document.documentElement.dataset.pick = pick;
+  const dark = pick === "dark" || (pick === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.mode = dark ? "dark" : "light";
+}
+
+function setupControls() {
+  radioGroup(document.getElementById("theme"), [["light", "", "light"], ["dark", "", "dark"], ["auto", "", "auto"]],
+    document.documentElement.dataset.pick, setTheme);
+  for (const b of document.querySelectorAll("#theme button")) b.setAttribute("aria-label", `${b.dataset.value} theme`);
+  radioGroup(document.getElementById("lens"), LENSES.map(l => [l, t(`lens_${l}`)]), view.lens, setLens);
+  document.getElementById("print").innerHTML = icon("print");
+  document.getElementById("print").onclick = () => print();
+  // The briefing prints light, flat and on one page, whatever the screen theme (#319).
+  let modeBefore = null;
+  addEventListener("beforeprint", () => { modeBefore = document.documentElement.dataset.mode; document.documentElement.dataset.mode = "light"; });
+  addEventListener("afterprint", () => { if (modeBefore) document.documentElement.dataset.mode = modeBefore; });
+  route();
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (document.documentElement.dataset.pick === "auto") setTheme("auto"); });
+  radioGroup(document.getElementById("map"), Object.entries(MAPS).map(([k, m]) => [k, m.title]), view.map,
+    k => { view.map = k; if (snap) { fadeHeat(() => drawHeatmap(view.map, view.week)); } });
+  for (const b of document.querySelectorAll("#map button")) { b.title = MAPS[b.dataset.value].unit; b.disabled = true; }
+  const symbols = {
+    backdrop: '<rect x="3" y="5" width="18" height="14" rx="2" class="backdrop-sym"/>',
+    inshore: '<rect x="3" y="5" width="18" height="14" fill="none" class="inshore" stroke-width="2"/>',
+    lane: '<rect x="3" y="5" width="18" height="14" fill="url(#lane)" class="lane-line-svg" stroke-width="0"/><path d="M3 8h18M3 12h18M3 16h18" class="lane-line-svg" stroke-width="1.2"/>',
+    sites: '<circle cx="12" cy="12" r="7" class="site flagged"/>',
+    followup: '<path d="M12 4l8 8-8 8-8-8z" class="diamond" stroke-width="2"/>',
+    agreement: '<circle cx="6" cy="12" r="2.5" class="dot"/><circle cx="12" cy="12" r="2.5" class="dot"/><circle cx="18" cy="12" r="2.5" class="dot"/>',
+    piers: '<rect x="7" y="7" width="10" height="10" class="pier"/>',
+    routes: '<path d="M2 8h20" class="route"/><path d="M2 16h20" class="route aircraft"/>',
+  };
+  const tg = document.getElementById("toggles");
+  tg.replaceChildren(...OVERLAYS.map(([id, label]) => {
+    const b = h("button", { type: "button", id: "t-" + id, className: "chip state", disabled: true });
+    b.setAttribute("aria-pressed", "true");
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${symbols[id]}</svg>`;
+    b.append(label);
+    b.onclick = () => {
+      const on = b.getAttribute("aria-pressed") !== "true";
+      b.setAttribute("aria-pressed", on);
+      const g = document.getElementById("ov-" + id);
+      if (g) g.style.display = on ? "" : "none";
+      if (id === "backdrop") seeThrough();
+    };
+    return b;
+  }));
+  document.getElementById("about").innerHTML = icon("info");
+  document.getElementById("prev").innerHTML = icon("prev");
+  document.getElementById("next").innerHTML = icon("next");
+  setReplay(false);
+  setupMapView();
+  addEventListener("scroll", () => document.getElementById("appbar").classList.toggle("scrolled", scrollY > 4), { passive: true });
+}
+
+function enableControls() {
+  selectWeek = radioGroup(document.getElementById("week"), snap.meta.weeks.map(w => [w, w]), view.week, onWeekChange, "chip");
+  for (const b of document.querySelectorAll("#map button, #toggles button, #prev, #next, #play, #about, #print")) b.disabled = false;
+  document.getElementById("printMeta").textContent = t("print_meta", { label: snap.meta.data_label, T: snap.meta.T, week: snap.meta.week, lens: t(`lens_${view.lens}`) });
+  document.getElementById("t-backdrop").hidden = !backdrop();
+  seeThrough();
+  document.getElementById("prev").onclick = () => { setReplay(false); stepWeek(-1); };
+  document.getElementById("next").onclick = () => { setReplay(false); stepWeek(1); };
+  document.getElementById("play").onclick = () => setReplay(!timer);
+  document.getElementById("more").onclick = () => { view.more = !view.more; drawSiteList(); };
+  const dlg = document.getElementById("aboutDlg"), m = snap.meta;
+  document.getElementById("about").onclick = () => {
+    const rows = [["Data", m.data_label], ["As of (T)", m.T], ["Weeks shown", m.weeks.join(", ")], ["Generated", m.generated_utc],
+      ["Region", `${m.region.lon_min}° to ${m.region.lon_max}°, ${m.region.lat_min}° to ${m.region.lat_max}°`], ["Config hash", m.config_hash]];
+    document.getElementById("aboutList").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]));
+    dlg.showModal();
+  };
+  document.getElementById("aboutClose").onclick = () => dlg.close();
+}
+
+function showError() {
+  const b = document.getElementById("banner");
+  b.textContent = "No snapshot";
+  const a = document.getElementById("alert");
+  a.innerHTML = icon("warning");
+  a.append(h("div", {}, h("strong", {}, "No snapshot found. "), "Run ", h("code", {}, "make sim"), " and ", h("code", {}, "make all"), ", then reload this page."));
+  a.hidden = false;
+  document.getElementById("figures").hidden = true;
+  for (const id of ["legend", "sites", "plan", "piers", "validation", "trends", "top3", "route", "fisheries"]) document.getElementById(id).replaceChildren(empty("Waiting for a snapshot.", "info"));
+}
+
+(async () => {
+  setupControls();
+  try { snap = await loadSnapshot(); }
+  catch (e) { showError(); return; }
+  view.week = snap.meta.week;
+  await loadOutcomes();
+  setExtent(); enableControls(); drawBasemap(); drawBanner(); drawFigures(); drawHeatmap(view.map, view.week);
+  drawOverlays(true); drawSiteList(); drawTop3(); drawRoute(); drawPlan(); drawPiers(); drawFisheries(); drawValidation(); drawTrends(); drawLimits(); drawFooter();
+  route();
+})();
+</script>
+</body>
+</html>
