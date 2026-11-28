@@ -21,7 +21,7 @@ from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
 from sim._scores import cusum, gi_star
-from sim.raw import write_raw
+from sim.raw import _refuse_real_raw, write_raw
 from sim.regimes import REGIMES, plant
 from sim.scenes import write_scenes
 from sim.static import write_static
@@ -372,6 +372,7 @@ def _ship_key(seed: int, i: int) -> str:
 def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     if regime not in REGIMES:
         raise ValueError(f"unknown regime {regime!r}; expected one of {REGIMES}")
+    _refuse_real_raw()
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])

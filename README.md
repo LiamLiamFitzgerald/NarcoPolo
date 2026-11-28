@@ -35,6 +35,18 @@ The output is a weekly briefing: the **top 3 drop sites**, the **piers to watch*
 
 Each source keeps its own licence; see the data manifest once the pipeline runs. Global Fishing Watch data is used under its non-commercial terms. Powered by Global Fishing Watch.
 
+## Running it
+
+| make (Linux, macOS) | Windows (no make) | What it does |
+| --- | --- | --- |
+| `make sim` | `uv run python -m sim` | Synthetic region with known truth |
+| `make all` | `uv run python -m scripts.run_all` | Every pipeline step, ending with export |
+| `make validate` | `uv run python -m validate` | Full `reports/validation.json` (~35 min on the simulator), `"mode": "full"` |
+| `make validate-quick` | `uv run python -m validate --quick` | Same report with the reduced counts in `config.yaml` `validate.quick`, `"mode": "quick"`: a demo check, not the full result |
+| `make demo` | `uv run python -m scripts.demo` | `make all` on top of an existing validation report; never runs validate. Without a report the proof panel shows "validation not run" |
+
+Before the pitch: `make sim` (or real data), `make validate` (or `make validate-quick`) once, then `make demo`.
+
 ## Status
 
 🚧 Setting up. All code is written during the hackathon weekend.

@@ -185,15 +185,15 @@ def _summary(frame: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _block(deps: _Deps | None = None) -> dict[str, Any] | None:
+def _block(deps: _Deps | None = None, n_seeds: int | None = None) -> dict[str, Any] | None:
     """The `policy` block of reports/validation.json, train and held-out regimes kept apart.
-    None while a dependency (#150, #151, #152) is missing."""
+    None while a dependency (#150, #151, #152) is missing. n_seeds overrides learn.n_seeds_quick (#343)."""
     deps = deps or _real_deps()
     if deps is None:
         return None
     learn = load(io.CONFIG_PATH)[0]["learn"]
     seeds = range(
-        int(learn["n_seeds_quick"])
+        int(learn["n_seeds_quick"]) if n_seeds is None else n_seeds
     )  # R5: make validate; the final report uses learn.n_seeds
     return {
         split: _summary(

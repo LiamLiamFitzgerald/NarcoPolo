@@ -18,7 +18,7 @@ cat <<EOF
 Worktree ready: $dir  (branch $branch)
 
 Start your agent with:
-  cd "$dir" && NARCO_MODULE=$(echo "$module" | tr '[:lower:]' '[:upper:]') claude
+  cd "$dir" && claude      (the branch sets the module; NARCO_MODULE is optional)
 
 When finished and merged:
   git worktree remove "$dir"
