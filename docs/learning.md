@@ -1,4 +1,4 @@
-<!-- Learning layer blueprint, rev 1, 28 Nov 2026. Evidence: reports/Neural bandit patrol scheduling.md (research notes cite every source). -->
+<!-- Learning layer blueprint, rev 2, 28 Nov 2026 (rev 2: regret-weighted votes, time-expanded scheduling, regret attention, review decisions R1-R5). Evidence: reports/Neural bandit patrol scheduling.md (research notes cite every source). -->
 
 # Learning layer: per-signal agents → stack → bandit → routes
 
@@ -107,9 +107,10 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 ### Steps
 
 1. For each merged agent, a one-sided p-value per site-week (from its own null distribution on `null` runs; `midp` already is one).
-2. **Cauchy combination test (CCT):** T = Σ wᵢ · tan((0.5 − pᵢ)π) with equal weights wᵢ = 1/m over merged agents; p_comb = 0.5 − arctan(T)/π. Valid in the tail under arbitrary correlation (Liu & Xie 2020), but **anti-conservative by 10–25% at α = 0.05 under positive correlation**, so:
+2. **Cauchy combination test (CCT):** T = Σ wᵢ · tan((0.5 − pᵢ)π) with **regret-based weights** (below; equal weights 1/m only until they exist); p_comb = 0.5 − arctan(T)/π. Valid in the tail under arbitrary correlation (Liu & Xie 2020), but **anti-conservative by 10–25% at α = 0.05 under positive correlation**, so:
 3. **Calibrate** on `null` runs: shift the threshold until the false-alert rate per week matches `learn.target_false_alerts`.
 4. Benjamini–Hochberg across sites at `q` (existing config) → `comb_flag`.
+4a. **Regret-based group weights (rev 2).** Signals are not assumed equally useful. L6 writes `reports/attention.json` with, per merged group g, Δregret_g = (season regret with g removed) − (regret with all groups), averaged over **train** regimes and seeds. Weights: w_g = max(exp(Δregret_g / τ), floor) normalised to sum to 1, τ = `learn.attention_tau`, floor = `learn.attention_floor`; within a group, split equally over its agents present for the site. A group whose removal *lowers* regret gets only the floor. CCT stays valid because the weights are fixed from simulator backtests before they are applied, never fitted on the data they score. Until `attention.json` exists: equal weights, logged.
 5. **Diversity-weighted agreement:** count of merged agents flagging the site (replaces the raw 0–4 count for display; the old `agreement` column stays for compatibility).
 
 ### Outputs (contract change via P1)
@@ -169,7 +170,7 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 
 ---
 
-## L5 Bandit and sample-then-route (P7)
+## L5 Bandit and scheduling (P7)
 
 **Purpose:** choose which sites to visit each week so patrols both use what the model believes and keep learning where it is unsure.
 
@@ -179,12 +180,20 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 2. **Posterior per site:** Beta(α, β), warm-started from the model: α₀ = n₀ · p_site, β₀ = n₀ · (1 − p_site), with n₀ = `learn.prior_strength` ("virtual visits"). New sites start from their prior; sites that drop out of the top 15 keep their state in `patrol/bandit_state.json`.
 3. **Weekly update:** only visited sites update: found → α += 1; visited and not found → β += 1. Unvisited: no change (principle 3). θ therefore estimates "chance a visit finds something", which already includes the asset's miss rate; `learn.p_find_*` lives only in the simulator.
 4. **Discounting:** before each week's update, α ← γα, β ← γβ with γ = `learn.discount` (drop sites move; old evidence fades).
-5. **Sample-then-route (combinatorial Thompson sampling):** draw θ_s ~ Beta(α_s, β_s) for every arm; pass θ as node weights to the existing ship planner (orienteering, 24 h) and aircraft planner (4 h) in place of S. With ~15 nodes, solve the ship route **exactly** (the method's guarantee needs an exact oracle; greedy + 2-opt is the fallback above `learn.exact_max_nodes`).
+5. **Sample-then-route (combinatorial Thompson sampling), within one week:** draw θ_s ~ Beta(α_s, β_s) for every arm; pass θ as node weights to the existing ship planner (orienteering, 24 h) and aircraft planner (4 h) in place of S. With ~15 nodes, solve the ship route **exactly** (the method's guarantee needs an exact oracle; greedy + 2-opt is the fallback above `learn.exact_max_nodes`).
 6. **Explanation per stop:** `reason` = "exploit" if the site is in the top routes under posterior means, else "explore", plus the site's evidence line (existing `reasons`).
+
+### Steps: scheduling over time (rev 2)
+
+Routing one week at a time ignores *when* to go and *how* the season's hours are spread. Two layers, replanned every week (rolling horizon):
+
+7. **Week layer: time-expanded orienteering.** Nodes are (site, day) for the next 7 days, one visit per site per week. Value of visiting site s on day d: v_sd = θ_s × g_sd, where g_sd is the share of the week's drop chance that falls on day d *and* is not covered by a satellite pass (from `coverage/exposure` pass times and the regime-free drop cadence; uniform if unknown). The `pass_aware` adversary drops in pass gaps, so days without passes are worth more. Solve exactly by DP over (day, subset of visited sites) when sites ≤ `learn.exact_max_nodes` and days ≤ `learn.day_slots`, else greedy by v_sd ÷ extra hours, then 2-opt per day. Each stop gets `day`.
+8. **Season layer: hours as a knapsack.** Split the remaining season hours across the next `learn.horizon_weeks` weeks in proportion to each week's expected value under the posterior *plus* an uncertainty bonus (posterior standard deviation summed over the top sites), never below `learn.min_week_share` of the weekly budget and never above the weekly budget. Weeks where the bandit is unsure get more hours; that is bandits-with-knapsacks done by a simple rule, not a solver.
+9. **Exploration by expected regret (rev 2).** The explore stop is the site with the highest expected regret of skipping it, E[max(θ_s − θ*_route, 0)] estimated from `learn.n_regret_samples` posterior draws (θ*_route = the lowest-value stop on the exploit route): visit what you would most regret missing, not a random draw. A light form of information-directed sampling.
 
 ### Outputs (contract change via P1)
 
-- `patrol/plan.json` stops gain `theta` (float) and `reason` ("exploit" | "explore")
+- `patrol/plan.json` stops gain `theta` (float), `reason` ("exploit" | "explore") and, from rev 2, `day` (0–6, day of the planning week)
 - `patrol/bandit_state.json`: `{site_id: {alpha, beta, last_visit_week}}`, stamped like other JSON stage files
 
 ### Tests
@@ -196,7 +205,7 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 
 ---
 
-## L6 Policy evaluation and dashboard (P1 eval, P7 panel)
+## L6 Policy evaluation, regret attention and dashboard (P1 eval, P7 panel)
 
 **Purpose:** show, on the simulator, that the learning patrol finds drops sooner than a fixed ranking, and be honest where it does not.
 
@@ -217,6 +226,12 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 3. Report mean and spread across `learn.n_seeds`, train vs **held-out** regimes separately.
 4. Output block `policy` in `reports/validation.json`.
 5. Dashboard panel (P7): regret curves per policy, weeks-to-first-find bars, and the explore/exploit badge per plan stop.
+
+### Steps: regret attention (rev 2)
+
+6. **Signal attention:** rerun each train-regime season with one merged group removed; Δregret_g as in L3 step 4a. Write `reports/attention.json` = {group: {delta_regret_mean, delta_regret_sd, weight}} plus τ, floor, seeds, regimes, config hash. This is what fuse uses as CCT weights, and the pitch table of "which signals earn their place".
+7. **Where regret comes from:** split each policy's regret by week and by cause: *wrong site* (the oracle's site was not visited that week), *wrong day* (visited, but outside the drop's find window), *no hours* (the week's budget ran out before the oracle's site). Report the shares per policy and regime.
+8. Fast mode: `make validate` uses `learn.n_seeds_quick` seeds; the full `learn.n_seeds` only for the final report.
 
 ### Tests
 
@@ -245,7 +260,23 @@ learn:
   prior_strength: 5           # n0 virtual visits, TODO(P1)
   discount: 0.9               # per week, TODO(P1)
   exact_max_nodes: 16         # TODO(P1)
+  # rev 2
+  attention_tau: 1.0          # TODO(P1): softness of regret-based CCT weights
+  attention_floor: 0.05       # TODO(P1): minimum weight per merged group
+  horizon_weeks: 4            # TODO(P1): season-layer look-ahead
+  day_slots: 7                # days in the week layer
+  min_week_share: 0.5         # TODO(P1): least share of the weekly budget any week gets
+  n_regret_samples: 200       # TODO(P1): posterior draws for expected-regret exploration
+  n_seeds_quick: 3            # make validate; n_seeds only for the final report
 ```
+
+## Review decisions (rev 2, 28 Nov 01:30)
+
+- **R1 `site_id` = `cell_id` everywhere** (rule A2), in the simulator's stand-in `fuse/sites`, truth and outcomes.
+- **R2 `week` in `sim.patrol_outcome(truth, plan, week)` is the week's start timestamp (UTC);** stops outside [week, week + 7 days) are ignored. The bandit keeps an integer week number for `last_visit_week`.
+- **R3 Model features are raw agent scores** per site (= its cell): `oe` = log y, `midp` = −log10 mid-p, `gi` = weekly Gi* z, `cusum` = Poisson CUSUM statistic, named as in `learn.agents`. Trainer and fuse compute them the same way; fuse reads them from `fuse/cells`. `link` is not a model feature (site-level only); it enters through p_comb.
+- **R4 `weights` in `site_model.json` is a list in `features` order** (rung 1). Higher rungs store their own parameters under `params`.
+- **R5 `make validate` uses `learn.n_seeds_quick` seeds;** `learn.n_seeds` only for the final report.
 
 ## Resolved ambiguities
 
