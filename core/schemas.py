@@ -58,6 +58,12 @@ def _str_list() -> pa.Column:
     return pa.Column(checks=pa.Check(ok, error="not a list of str"), nullable=False)
 
 
+def _later(col: pa.Column) -> pa.Column:
+    """A column the learning layer adds (docs/learning.md): checked when present, not yet required."""
+    col.required = False
+    return col
+
+
 def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSchema:
     return pa.DataFrameSchema(columns, checks=list(checks), strict=True, ordered=False)
 
@@ -200,6 +206,13 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "agreement": _num(int, ge=0, le=4),
             "reasons": _str_list(),
             "top_piers": _str_list(),
+            "p_comb": _later(_prob()),  # L3: Cauchy-combined p over merged agents
+            "comb_flag": _later(_flag()),  # L3: BH on calibrated p_comb
+            "agreement_merged": _later(_num(int, ge=0)),  # L3: merged agents that flag the site
+            "p_site": _later(_prob()),  # L4: site value from the model rung in use
+            "model_rung": _later(
+                _num(int, ge=0, le=3)
+            ),  # L4: 0 statistics only ... 3 mixture of experts
         }
     ),
     "fuse/piers": _schema(  # #88: one row per pier
@@ -268,6 +281,11 @@ def _plan(obj: Mapping[str, Any]) -> None:
                 raise ValueError(
                     f"plan: {asset} stop {i} needs id (str), arrival_utc (ISO UTC string) and dwell_h >= 0"
                 )
+            # L5 (docs/learning.md): optional bandit fields
+            if "theta" in s and not 0 <= s["theta"] <= 1:
+                raise ValueError(f"plan: {asset} stop {i} theta must be in [0, 1]")
+            if "reason" in s and s["reason"] not in ("exploit", "explore"):
+                raise ValueError(f"plan: {asset} stop {i} reason must be exploit or explore")
 
 
 _SNAPSHOT_KEYS = {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
@@ -283,7 +301,23 @@ def _snapshot(obj: Mapping[str, Any]) -> None:
     _plan(obj["plan"])
 
 
-JSON_CHECKS = {"patrol/plan": _plan, "export/snapshot": _snapshot}
+def _bandit_state(obj: Mapping[str, Any]) -> None:
+    """L5: {site_id: {alpha, beta, last_visit_week}}; alpha, beta > 0."""
+    for site, st in obj.items():
+        week = st.get("last_visit_week")
+        if not (st.get("alpha", 0) > 0 and st.get("beta", 0) > 0) or not (
+            week is None or isinstance(week, int)
+        ):
+            raise ValueError(
+                f"bandit_state: {site!r} needs alpha > 0, beta > 0, last_visit_week int or null"
+            )
+
+
+JSON_CHECKS = {
+    "patrol/plan": _plan,
+    "export/snapshot": _snapshot,
+    "patrol/bandit_state": _bandit_state,
+}
 
 
 def check_json(name: str, obj: Mapping[str, Any]) -> Mapping[str, Any]:
