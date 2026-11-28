@@ -158,3 +158,15 @@ def test_weather_daily_covers_every_cell_day_with_the_day_weather(world):  # #20
     assert len(on_pass) == len(ex)  # every pass's cell-day has weather
     assert (on_pass["wind_max_ms"] - on_pass["wind_ms"]).abs().max() < 1e-5
     assert (on_pass["hs_max_m"] - on_pass["hs_m"]).abs().max() < 1e-5
+
+
+def test_dist_coast_is_measured_to_the_shoreline():
+    """#245: the shoreline sits SHORE_FRAC into the shore row; the shore row's centre is 200 m from it, not 1000."""
+    from sim.simulate import FINE, NY, SHORE_FRAC, _make_map
+
+    fine = _make_map(load("config.yaml")[0])["fine"]
+    shore = fine.loc[fine["iy"] == NY - 1, "dist_coast_m"]
+    assert shore.eq(SHORE_FRAC * FINE - FINE / 2).all()
+    assert (
+        fine.loc[fine["iy"] == NY - 1, "inshore_frac"].eq(1).all()
+    )  # the inshore band did not move
