@@ -38,12 +38,12 @@ def _world(regime: str, seed: int) -> _Season:
     return _Season(truth=truth, weeks=WEEKS, sites_at=lambda c: SITES, route=route)
 
 
-def _outcome(truth, plan, week: int):
-    """Stand-in for sim.patrol_outcome(truth, plan, week): rows for visited stops only;
-    found = a drop at that site in the week after cutoff WEEKS[week]."""
+def _outcome(truth, plan, week_start: pd.Timestamp):
+    """Stand-in for sim.patrol_outcome(truth, plan, week_start) (R2: the week's start timestamp, UTC):
+    rows for visited stops only; found = a drop at that site in the 7 days after week_start."""
     ids = [s["id"] for stops in plan.values() for s in stops if s["id"] != "base"]
     t = truth["time_utc"]
-    c = WEEKS[week].tz_localize("UTC")
+    c = week_start
     hit = set(truth.loc[(t > c) & (t <= c + pd.Timedelta(days=7)), "site_id"])
     return pd.DataFrame(
         {"site_id": ids, "asset": "ship", "visited": True, "found": [i in hit for i in ids]}
@@ -159,3 +159,19 @@ def test_end_to_end_on_the_simulator():
     f = policy.evaluate("oracle", "fixed", [0])
     assert list(f.columns) == policy.COLUMNS
     assert (f["regret"] == 0).all()
+
+
+def test_outcome_gets_the_week_start_timestamp():  # R2
+    seen = []
+
+    def outcome(truth, plan, week_start):
+        seen.append(week_start)
+        return _outcome(truth, plan, week_start)
+
+    deps = _Deps(
+        world=_world,
+        outcome=outcome,
+        bandit=SimpleNamespace(prior=_prior, update=_update, sample=_sample),
+    )
+    _evaluate(["fixed_S"], "fixed", [0], deps)
+    assert all(isinstance(t, pd.Timestamp) and str(t.tz) == "UTC" for t in seen)

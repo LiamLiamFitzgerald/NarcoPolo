@@ -54,7 +54,7 @@ class _Deps:
     world: Callable[[str, int], _Season]
     outcome: Callable[
         [pd.DataFrame, dict, int], pd.DataFrame
-    ]  # sim.patrol_outcome(truth, plan, week)
+    ]  # sim.patrol_outcome(truth, plan, week_start): R2, the week's start timestamp (UTC)
     bandit: Any  # patrol.bandit: prior(sites, n0), update(state, outcomes, discount, week=), sample(state, seed)
 
 
@@ -108,10 +108,11 @@ def _season(
             else:
                 weights = cands[policy.removeprefix("fixed_")].to_numpy(float)
             plan, h = s.route(cands, weights, cutoff)
-            out = deps.outcome(s.truth, plan, w)
+            start = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff  # R2: week start
+            out = deps.outcome(s.truth, plan, start)
             if policy == "bandit":  # the only caller of bandit.update; week= fills last_visit_week
                 state = deps.bandit.update(state, out, learn["discount"], week=w)
-            best = deps.outcome(s.truth, s.route(cands, oracle_w, cutoff)[0], w)
+            best = deps.outcome(s.truth, s.route(cands, oracle_w, cutoff)[0], start)
             regret += float(
                 true.reindex(_visited(best)).fillna(0).sum()
                 - true.reindex(_visited(out)).fillna(0).sum()
@@ -170,7 +171,9 @@ def _block(deps: _Deps | None = None) -> dict[str, Any] | None:
     if deps is None:
         return None
     learn = load(io.CONFIG_PATH)[0]["learn"]
-    seeds = range(int(learn["n_seeds"]))
+    seeds = range(
+        int(learn["n_seeds_quick"])
+    )  # R5: make validate; the final report uses learn.n_seeds
     return {
         split: _summary(
             pd.concat([_evaluate(POLICIES, r, seeds, deps) for r in learn["regimes"][split]])
