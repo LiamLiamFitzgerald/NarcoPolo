@@ -11,7 +11,7 @@ CELLS = pd.DataFrame({"cell_id": ["2000_0_0", "2000_1_0", "2000_2_0"], "exclusio
 
 def _era5(hs_by_cell, date="2026-11-03"):
     return pd.DataFrame(
-        [{"cell_id": c, "date": date, "hs_m": h} for c, hs in hs_by_cell.items() for h in hs]
+        [{"cell_id": c, "date": date, "hs_max_m": h} for c, hs in hs_by_cell.items() for h in hs]
     )
 
 
@@ -26,8 +26,8 @@ def grid(monkeypatch):
 def test_presence_slowdowns_rules():
     pres = pd.DataFrame({
         "cell_id": ["2000_0_0", "2000_0_0", "2000_1_0", "2000_2_0", "2000_0_0", "2000_2_0"], "date": ["2026-11-03"] * 6,
-        "vessel_type": ["cargo", "tanker", "cargo", "cargo", "fishing", "cargo"],
-        "speed_max_kn": [2, 2, 2, 2, 2, 6], "hours": [0.5, 0.25, 3.0, 1.0, 9.0, 4.0],
+        "vessel_type": ["cargo", "carrier", "cargo", "cargo", "fishing", "cargo"],
+        "speed_bin": ["<2", "<2", "<2", "<2", "<2", "4-6"], "hours": [0.5, 0.25, 3.0, 1.0, 9.0, 4.0],
     })  # fmt: skip
     era5 = _era5(
         {"2000_0_0": [1.0, 2.0], "2000_1_0": [1.0], "2000_2_0": [3.0, 4.5]}
@@ -45,11 +45,18 @@ def test_presence_slowdowns_rules():
     assert (e["x_m"], e["y_m"]) == (1000.0, 1000.0)
 
 
+def test_tanker_type_and_other_slow_labels_are_not_slowdowns():
+    """#239: GFW presence has no tanker type; only the "<2" bin is slow (0-2 is not a label P2 writes)."""
+    pres = pd.DataFrame({"cell_id": ["2000_0_0"] * 3, "date": "2026-11-03", "vessel_type": ["tanker", "cargo", "cargo"],
+                         "speed_bin": ["<2", "2-4", "0-2"], "hours": 1.0})  # fmt: skip
+    assert slowdowns_from_presence(pres, CELLS, _era5({"2000_0_0": [1.0]})).empty
+
+
 def test_no_slowdown_events_inside_exclusion():
     rng = np.random.default_rng(0)
     n = 500
     pres = pd.DataFrame({"cell_id": rng.choice(CELLS["cell_id"], n), "date": "2026-11-03", "vessel_type": "cargo",
-                         "speed_max_kn": 2, "hours": rng.uniform(0.1, 3, n)})  # fmt: skip
+                         "speed_bin": "<2", "hours": rng.uniform(0.1, 3, n)})  # fmt: skip
     ev = slowdowns_from_presence(pres, CELLS, _era5({c: [1.0] for c in CELLS["cell_id"]}))
     assert len(ev) == 2 and "2000_1_0" not in set(ev["cell_id"])
 
