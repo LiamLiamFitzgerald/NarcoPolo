@@ -4,7 +4,7 @@ You are one of several Claude Code agents building NarcoPolo, each working on on
 
 ## Before you start
 
-1. Your human starts you with `NARCO_MODULE=P<n>` set (P1 … P7). Without it, the guard hook blocks every edit.
+1. Your human starts you inside a worktree on branch `mod/p<n>/<issue>` (from `scripts/new_task.sh`); the branch sets your module (P1 … P7). Outside such a branch, the guard hook blocks every edit in the repo. `NARCO_MODULE` is optional; if set, it must match the branch.
 2. Read, in order: `docs/shared.md` (once per session), then **only** your own spec `docs/specs/P<n>.md`. Do not read `docs/blueprint.md`, other modules' specs or other modules' code unless an issue tells you to — this is the main way we save tokens.
 3. Take exactly one GitHub issue. One issue per session; clear context before the next.
 

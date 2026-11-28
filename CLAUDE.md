@@ -2,7 +2,7 @@
 
 @AGENTS.md
 
-Your module is given by the `NARCO_MODULE` environment variable (P1 … P7). Your spec is `docs/specs/$NARCO_MODULE.md`; shared context is `docs/shared.md`. Folder ownership is in `.github/owners.json`.
+Your module is given by your branch name `mod/p<n>/<issue>` (P1 … P7; `NARCO_MODULE`, if set, must match). Your spec is `docs/specs/P<n>.md`; shared context is `docs/shared.md`. Folder ownership is in `.github/owners.json`.
 
 Use the `ponytail` skill (level full) for every coding task, and `ponytail-review` to review your own diff before opening a PR. Where ponytail conflicts with AGENTS.md or your spec, AGENTS.md and the spec win: every function still gets a simulator test, and every threshold still lives in `config.yaml`.
 
