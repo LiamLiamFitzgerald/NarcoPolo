@@ -23,11 +23,14 @@ from core.time import iso_week
 from patrol import bandit
 
 KN_MS = 0.514444  # 1 kn in m/s (docs/shared.md, Units)
-# TODO(P7): these belong in config.yaml (P1 owns it; asked for in issue 89).
-TOP_SITES = 15
-SHIP_KN, AIR_KN = 12, 180  # aircraft_kn: TODO(confirm with the team)
-SHIP_BUDGET_H, SHIP_DWELL_H = 24, 1
-AIR_BUDGET_H, AIR_DWELL_H = 4, 0.2
+# docs/specs/P7.md Parameters, overlaid by config.yaml's `patrol:` block (#89); aircraft_kn: TODO(P7) confirm
+_SPEC = {"top_sites": 15, "ship_kn": 12, "ship_budget_h": 24, "ship_dwell_h": 1,
+         "aircraft_kn": 180, "aircraft_budget_h": 4, "aircraft_dwell_h": 0.2}  # fmt: skip
+_P = {**_SPEC, **dict(load(io.CONFIG_PATH)[0].get("patrol", {}))}
+TOP_SITES = int(_P["top_sites"])
+SHIP_KN, AIR_KN = float(_P["ship_kn"]), float(_P["aircraft_kn"])
+SHIP_BUDGET_H, SHIP_DWELL_H = float(_P["ship_budget_h"]), float(_P["ship_dwell_h"])
+AIR_BUDGET_H, AIR_DWELL_H = float(_P["aircraft_budget_h"]), float(_P["aircraft_dwell_h"])
 SEA_RES_M = 250  # the spec's sea_250m.tif resolution
 
 
