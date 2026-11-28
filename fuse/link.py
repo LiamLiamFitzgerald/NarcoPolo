@@ -428,7 +428,10 @@ def _scored_sites(
     strongest = _strongest(slow, u_small, agree, nbrs)
     a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
     out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
-    ranked = suppress(out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable"))
+    # ties on S (often S = 0 where no pick-up was seen) go to the cell with more slowdowns, so suppression never
+    # hides a busy cell, and its "looked, saw nothing" record, behind a quieter neighbour with the same S (#60)
+    order = ["S", "n_slowdowns", "site_id"]
+    ranked = suppress(out.sort_values(order, ascending=[False, False, True], kind="stable"))
     ranked = ranked.reset_index(drop=True)
     # R3: raw agent scores, as the trainer fits them; no forecast (some pure-path tests) means no features
     feats = None if expected is None else site_features(ranked, observed, expected, T)
