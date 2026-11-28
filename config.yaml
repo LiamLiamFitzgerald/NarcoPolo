@@ -137,3 +137,12 @@ learn:
   min_week_share: 0.5         # TODO(P1): least share of the weekly budget any week gets
   n_regret_samples: 200       # TODO(P1): posterior draws for expected-regret exploration
   n_seeds_quick: 3            # make validate; n_seeds only for the final report
+  train:                      # L4 fit (validate/train.py, #158); tune on train regimes only
+    l2: 1.0                   # TODO(P1): rung 1 ridge penalty on standardised weights (scikit-learn C = 1)
+    n_eff_min: 500            # L4 step 3 (Phillips et al.)
+    pos_mult: 5               # L4 step 3: n_eff = min(n, pos_mult x positives)
+    promote_se: 2             # L4 step 4: promote on a gain > promote_se x SE
+    nam_hidden: 32            # TODO(P1): ReLU units per feature net (rung 2)
+    nam_epochs: 300           # TODO(P1): full-batch Adam steps
+    nam_lr: 0.01              # TODO(P1): Adam step size
+    nam_l2: 0.001             # TODO(P1): weight decay
