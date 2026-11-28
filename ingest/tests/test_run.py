@@ -383,3 +383,11 @@ def test_resume_after_a_stop_fetches_only_what_is_missing(fakes, raw, monkeypatc
     assert set(fakes.downloads) - done == {"s1/p01.tif", "s1/p03.tif"}
     report = capsys.readouterr().err
     assert report.count("cached s1/") == 3 and report.count("downloaded s1/") == 2
+
+
+def test_a_pass_listed_twice_is_fetched_once(fakes, monkeypatch):
+    _many(fakes, 3)
+    fakes.passes = pd.concat([fakes.passes, fakes.passes.iloc[[1]]], ignore_index=True)
+    fakes.install(monkeypatch)
+    run.fetch_all(_workers(3))  # two threads on one pass would both miss the cache
+    assert sorted(_scene_calls(fakes)) == [f"s1.fetch_scene:p{i:02d}" for i in range(3)]

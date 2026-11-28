@@ -92,10 +92,8 @@ def fetch_all(config: Config) -> None:
             else step("s1.select_passes", lambda: s1.select_passes(passes, weather))
         )
         if chosen is not None:
-            rows = [
-                {str(k): v for k, v in r.items()}
-                for r in chosen[chosen["downloaded"]].to_dict("records")
-            ]
+            picked = chosen[chosen["downloaded"]].drop_duplicates("pass_id")  # one thread per pass
+            rows = [{str(k): v for k, v in r.items()} for r in picked.to_dict("records")]
             workers = int(config.get("ingest", {}).get("s1_workers", S1_WORKERS))
             _say(f"s1: {len(rows)} of {len(chosen)} passes selected, {workers} at a time")
             _fetch_scenes(raw, rows, workers, tally, failed)
