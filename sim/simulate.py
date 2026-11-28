@@ -19,6 +19,7 @@ from shapely.geometry import Point, box
 from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
+from sim._scores import cusum, gi_star
 from sim.raw import write_raw
 from sim.scenes import write_scenes
 from sim.static import write_static
@@ -556,8 +557,6 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "event_type": fc["event_type"].to_numpy(),
             "p_mid": pmid,
             "bh_flag": bh,
-            "gi_z": 0.0,
-            "cusum_s": 0.0,
             "context": 0.5,
             "U": u,
             "agreement": (u >= 0.9).astype(int),
@@ -566,6 +565,15 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     c_seen, mu_seen = fc["count"].to_numpy(), mu[seen]
     fuse_cells["y"] = (c_seen + 0.5) / (mu_seen + 0.5)
     week = pd.to_datetime(fuse_cells["date"]).dt.strftime("%G-W%V")
+    p6, kind, cid = (
+        config["p6"],
+        fuse_cells["event_type"].to_numpy(),
+        fuse_cells["cell_id"].to_numpy(),
+    )
+    fuse_cells["gi_z"] = gi_star(cid, kind, week.to_numpy(), c_seen, mu_seen, p6["gi_band_m"])
+    fuse_cells["cusum_s"] = cusum(
+        cid, kind, fc["day"].to_numpy(), c_seen, mu_seen, p6["cusum_rho"], p6["cusum_h"]
+    )
     g = pd.DataFrame(
         {"k": fuse_cells["cell_id"] + fuse_cells["event_type"] + week, "c": c_seen, "m": mu_seen}
     )
