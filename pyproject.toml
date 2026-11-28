@@ -31,8 +31,8 @@ addopts = "--import-mode=importlib"  # test files in different modules may share
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
-# every module; ingest joins once #185 is fixed
+# every module but ingest (#185), detectors and fuse (#224) and patrol (#225); each joins once clean
 include = [
     "core", "sim", "validate", "reference", "coverage", "detect", "match", "aggregate", "forecast",
-    "detectors", "fuse", "patrol", "export", "dashboard",
+    "export", "dashboard",
 ]

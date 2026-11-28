@@ -20,10 +20,15 @@ from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
 from sim.raw import write_raw
+from sim.regimes import REGIMES, plant
 from sim.scenes import write_scenes
 from sim.static import write_static
 from sim.world import SimWorld
 
+SITE_COLS = [
+    "site_id", "x_m", "y_m", "n_slowdowns", "S", "p_perm", "bh_flag", "recurrence",
+    "followup_unobserved", "agreement", "reasons", "top_piers",
+]  # fmt: skip
 NX, NY = 75, 13  # 150 km along the coast x 26 km out: 975 fine cells; iy = NY - 1 touches the shore
 SHORE_FRAC = 0.6  # the shore row is 60% sea
 KN = 0.514444
@@ -157,14 +162,9 @@ def _ship_key(seed: int, i: int) -> str:
     return hashlib.sha256(f"salt-{seed}-{i}".encode()).hexdigest()[:16]
 
 
-REGIMES = ("fixed", "two_sites", "pass_aware", "displacing", "null")  # docs/learning.md L1
-
-
 def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     if regime not in REGIMES:
-        raise ValueError(f"unknown regime {regime!r}; one of {REGIMES}")
-    if regime != "fixed":  # placeholder: only today's single planted site exists so far
-        raise NotImplementedError(f"regime {regime!r} is built in issue #150")
+        raise ValueError(f"unknown regime {regime!r}; expected one of {REGIMES}")
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])
@@ -219,60 +219,6 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         }
     )
 
-    # planted drop site 5-20 km offshore, away from the lane, anchorage, port and wind farm
-    rng = _rng(config, "pickups", seed)
-    ok = (
-        fine["dist_coast_m"].between(5000, 20000)
-        & ~fine["lane"]
-        & ~fine["exclusion"]
-        & (fine["static_frac"] == 0)
-        & (fine["ix"].between(10, 65))
-    ).to_numpy()
-    site = int(rng.choice(np.flatnonzero(ok)))
-    sx, sy = x0 + (fine["ix"][site] + 0.5) * FINE, y0 + (fine["iy"][site] + 0.5) * FINE
-    drop_days, d = [], float(rng.integers(3, 8))
-    while d < days:
-        drop_days.append(d + rng.uniform(0.3, 0.7))
-        d += s["drop_interval_days"] + int(rng.integers(-1, 2))
-    pick_days = []
-    for dd in drop_days:
-        if rng.random() >= s["pickup_prob"]:
-            continue
-        pd_ = dd + rng.uniform(*s["pickup_delay_days"])
-        if pd_ < days and rough[int(pd_)] and rng.random() < s["rough_pickup_delay_prob"]:
-            while pd_ < days and rough[int(pd_)]:
-                pd_ = np.floor(pd_) + 1 + (pd_ % 1)  # next calm day, same time of day
-        if pd_ < days:
-            pick_days.append(pd_)
-    nd, npk = len(drop_days), len(pick_days)
-    ships = pd.concat(
-        [
-            ships,
-            pd.DataFrame(
-                {
-                    "day": drop_days,
-                    "cell": site,
-                    "planted": True,
-                    "x_m": sx,
-                    "y_m": sy,
-                    "duration_min": rng.uniform(60, 240, nd),
-                }
-            ),
-        ],
-        ignore_index=True,
-    )
-    pickups = pd.DataFrame(
-        {
-            "kind": "pickup",
-            "day": pick_days,
-            "cell": site,
-            "x_m": sx + rng.normal(0, 300, npk),
-            "y_m": sy + rng.normal(0, 300, npk),
-            "length_m": rng.uniform(*s["small_boat_length_m"], npk),
-        }
-    )
-    boats = pd.concat([boats, pickups], ignore_index=True)
-
     # radar passes every 1-3 days over part of the region (east-west footprint in cell units)
     rng = _rng(config, "passes", seed)
     passes, d = [], 0
@@ -290,6 +236,73 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         )
         d += int(rng.integers(1, 4))
     passes = pd.DataFrame(passes)
+    # planted drop site 5-20 km offshore, away from the lane, anchorage, port and wind farm
+    rng = _rng(config, "pickups", seed)
+    ok = (
+        fine["dist_coast_m"].between(5000, 20000)
+        & ~fine["lane"]
+        & ~fine["exclusion"]
+        & (fine["static_frac"] == 0)
+        & (fine["ix"].between(10, 65))
+    ).to_numpy()
+    site = int(rng.choice(np.flatnonzero(ok)))
+    drop_days, d = [], float(rng.integers(3, 8))
+    while d < days:
+        drop_days.append(d + rng.uniform(0.3, 0.7))
+        # #177: random gaps (a Poisson process, mean drop_interval_days, at least 1 day). A near-fixed 10-day cadence
+        # let the site permutation test realign slowdowns with pick-ups by shifting whole periods.
+        d += max(1.0, float(rng.exponential(s["drop_interval_days"])))
+    # the regime moves or retimes drops with its own stream, so `fixed` consumes no extra draws (docs/learning.md L1)
+    pass_days = (
+        (passes["time_utc"] - pd.Timestamp(start, tz="UTC")).dt.total_seconds() / 86400
+    ).to_numpy()
+    drop_days, drop_cells, visit_days, visit_cells = plant(
+        config, regime, drop_days, site, ok, fine, pass_days, days,
+        np.random.default_rng([seed, REGIMES.index(regime)]),
+    )  # fmt: skip
+    ccx = x0 + (fine["ix"].to_numpy() + 0.5) * FINE  # cell centres
+    ccy = y0 + (fine["iy"].to_numpy() + 0.5) * FINE
+    pick_days, pick_cells = [], []
+    for dd, dc in zip(drop_days, drop_cells, strict=True):
+        if rng.random() >= s["pickup_prob"]:
+            continue
+        pd_ = dd + rng.uniform(*s["pickup_delay_days"])
+        if pd_ < days and rough[int(pd_)] and rng.random() < s["rough_pickup_delay_prob"]:
+            while pd_ < days and rough[int(pd_)]:
+                pd_ = np.floor(pd_) + 1 + (pd_ % 1)  # next calm day, same time of day
+        if pd_ < days:
+            pick_days.append(pd_)
+            pick_cells.append(dc)
+    pick_days, pick_cells = np.asarray(pick_days, float), np.asarray(pick_cells, int)
+    nd, npk = len(drop_days), len(pick_days)
+    ships = pd.concat(
+        [
+            ships,
+            pd.DataFrame(
+                {
+                    "day": drop_days,
+                    "cell": drop_cells,
+                    "planted": True,
+                    "x_m": ccx[drop_cells],
+                    "y_m": ccy[drop_cells],
+                    "duration_min": rng.uniform(60, 240, nd),
+                }
+            ),
+        ],
+        ignore_index=True,
+    )
+    pickups = pd.DataFrame(
+        {
+            "kind": "pickup",
+            "day": pick_days,
+            "cell": pick_cells,
+            "x_m": ccx[pick_cells] + rng.normal(0, 300, npk),
+            "y_m": ccy[pick_cells] + rng.normal(0, 300, npk),
+            "length_m": rng.uniform(*s["small_boat_length_m"], npk),
+        }
+    )
+    boats = pd.concat([boats, pickups], ignore_index=True)
+
     pass_of_day = {int(r.day): i for i, r in enumerate(passes.itertuples())}
 
     # coverage/exposure: every pass x every fine cell
@@ -572,26 +585,44 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     sums = g.groupby("k")[["c", "m"]].transform("sum")
     fuse_cells["y_week"] = ((sums["c"] + 0.5) / (sums["m"] + 0.5)).to_numpy()
 
-    # fuse/sites: the planted site, with its pick-ups that no pass could have seen
-    pk_seen = int(boats[(boats["kind"] == "pickup")]["pass"].ge(0).sum())
-    dist = np.hypot(piers["geometry"].x - sx, piers["geometry"].y - sy)
-    top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
-    sites = pd.DataFrame(
+    # fuse/sites: one row per planted site (none under `null`), with its pick-ups that no pass could have seen
+    pk = boats[boats["kind"] == "pickup"]
+    site_cells = list(
+        dict.fromkeys(drop_cells.tolist())
+    )  # first-drop order; `fixed` has exactly one
+    rows = []
+    for j, c in enumerate(site_cells):
+        npk_j = int((pick_cells == c).sum())
+        seen_j = int((pk["cell"] == c).mul(pk["pass"].ge(0)).sum())
+        dist = np.hypot(piers["geometry"].x - ccx[c], piers["geometry"].y - ccy[c])
+        top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
+        rows.append(
+            {
+                "site_id": str(cell_ids[c]),  # R1: site_id = cell_id (A2), as in truth and fuse
+                "x_m": ccx[c],
+                "y_m": ccy[c],
+                "n_slowdowns": int((drop_cells == c).sum()),
+                "S": float(npk_j),
+                "p_perm": 0.01,
+                "bh_flag": True,
+                "recurrence": npk_j,
+                "followup_unobserved": npk_j - seen_j,
+                "agreement": 4,
+                "reasons": ["planted drop site (simulated)"],
+                "top_piers": top,
+            }
+        )
+    sites = pd.DataFrame(rows, columns=SITE_COLS).astype(
         {
-            "site_id": ["site_0"],
-            "x_m": [sx],
-            "y_m": [sy],
-            "n_slowdowns": [nd],
-            "S": [float(npk)],
-            "p_perm": [0.01],
-            "bh_flag": [True],
-            "recurrence": [npk],
-            "followup_unobserved": [npk - pk_seen],
-            "agreement": [4],
-            "reasons": [["planted drop site (simulated)"]],
-            "top_piers": [top],
+            "x_m": float,
+            "y_m": float,
+            "n_slowdowns": int,
+            "S": float,
+            "p_perm": float,
+            "bh_flag": bool,
         }
-    )
+        | {"recurrence": int, "followup_unobserved": int, "agreement": int}
+    )  # typed even when `null` leaves it empty
 
     # reference/travel_hours: straight-line distance at the simulated boat speed
     cx, cy = x0 + (fine["ix"].to_numpy() + 0.5) * FINE, y0 + (fine["iy"].to_numpy() + 0.5) * FINE
@@ -605,17 +636,23 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         }
     )
 
-    # fuse/piers: P_j = S x exp(-T / 1 h) from the one site; fuse/links: S split into equal links of age 0
-    t_site = travel[travel["cell_id"] == cell_ids[site]].set_index("pier_id")["hours"]
-    fuse_piers = pd.DataFrame(
-        {
-            "pier_id": piers["pier_id"],
-            "P_j": float(npk) * np.exp(-t_site.reindex(piers["pier_id"]).to_numpy()),
-        }
-    )
-    k = int(np.ceil(npk))
-    fuse_links = pd.DataFrame(
-        {"site_id": ["site_0"] * k, "L": [npk / max(k, 1)] * k, "age_days": [0.0] * k}
+    # fuse/piers: P_j = sum of S x exp(-T / 1 h) over the planted sites; fuse/links: S split into links of age 0
+    P_j = np.zeros(len(piers))
+    links = []
+    for site_id, c, S in zip(sites["site_id"], site_cells, sites["S"], strict=True):
+        t_site = travel[travel["cell_id"] == cell_ids[c]].set_index("pier_id")["hours"]
+        P_j = P_j + S * np.exp(-t_site.reindex(piers["pier_id"]).to_numpy())
+        k = int(np.ceil(S))
+        links.append(
+            pd.DataFrame(
+                {"site_id": [site_id] * k, "L": [S / max(k, 1)] * k, "age_days": [0.0] * k}
+            )
+        )
+    fuse_piers = pd.DataFrame({"pier_id": piers["pier_id"], "P_j": P_j})
+    fuse_links = (
+        pd.concat(links, ignore_index=True)
+        if links
+        else pd.DataFrame({"site_id": pd.Series([], dtype=object), "L": [], "age_days": []})
     )
 
     for name, frame in {
@@ -650,28 +687,37 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         cell_id=cell_ids[boats["cell"].to_numpy()],
         pass_index=boats["pass"],
     )
-    td = pd.DataFrame(
-        {
-            "kind": "drop",
-            "time_utc": [_day_time(start, v) for v in drop_days],
-            "x_m": sx,
-            "y_m": sy,
-            "cell_id": cell_ids[site],
-            "length_m": np.nan,
-            "detected": False,
-            "pass_index": -1,
-            "site_id": "site_0",  # the planted site's id in fuse/sites
-        }
-    )
+
+    # learning layer (docs/learning.md L1): the regime on every row; per drop its site_id (= cell_id, as fuse/sites
+    # under A2), time_utc and active (a drop that happened); under `displacing`, the simulator's own patrol visits
+    def planted(kind: str, when: np.ndarray, at: np.ndarray, active: bool) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "kind": kind,
+                "time_utc": pd.Series(
+                    [_day_time(start, v) for v in when], dtype="datetime64[ns, UTC]"
+                ),
+                "x_m": ccx[at],
+                "y_m": ccy[at],
+                "cell_id": cell_ids[at],
+                "length_m": np.nan,
+                "detected": False,
+                "pass_index": -1,
+                "site_id": cell_ids[at],
+                "active": active,
+            }
+        )
+
     truth = pd.concat(
         [
             tb[
                 ["kind", "time_utc", "x_m", "y_m", "cell_id", "length_m", "detected", "pass_index"]
-            ].assign(site_id=None),
-            td,
+            ].assign(site_id=None, active=False),
+            planted("drop", drop_days, drop_cells, True),
+            *([planted("visit", visit_days, visit_cells, False)] if len(visit_days) else []),
         ],
         ignore_index=True,
-    ).assign(regime=regime, active=lambda t: t["kind"] == "drop")
+    ).assign(regime=regime)
     out = io.truth_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.to_parquet(out, index=False)
