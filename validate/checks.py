@@ -16,6 +16,7 @@ from validate.backtest import backtest
 from validate.injection import injection_test
 from validate.null import null_test
 from validate.policy import _block as policy_block
+from validate.power import _power_block
 
 LENGTH_BINS = [("<8", 0, 8), ("8-12", 8, 12), ("12-15", 12, 15), ("15-24", 15, 24)]
 KEYS = ("recall", "injection", "skill", "calibration", "brier", "null")
@@ -305,6 +306,7 @@ def run() -> Path:
             "injection": _injection(),
             "null": null_test(),
             "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
+            "power": _power_block(),  # #351: which cells can ever flag
             "policy": policy_block(),  # L6; None until #150, #151 and #152 land
         }
     )

@@ -94,6 +94,9 @@ validate:
   fixed_target_history: 8    # TODO(P1) #334: passes in the per-pixel median (earlier passes only)
   fixed_target_p_fa: 1.0e-6  # TODO(P1) #334: candidate CFAR p_fa on the median-ratio image (a lower threshold than p4.p_fa)
   persistence_radius_m: 50   # #334: a candidate this close to a fixed target is on it (GFW's persistence radius, the cited start)
+  power_rate_ratios: [2, 3]  # #351: rate ratios the power diagnostic asks about
+  power_alpha: 0.001         # TODO(P1) #351: per-cell test level; the issue's illustration, not a NarcoPolo value
+  power_min: 0.8             # TODO(P1) #351: a cell "can flag" when its power is at least this
   pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
 
 # P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
@@ -151,6 +154,8 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   slowdown_rate_cold: 0.01       # ... everywhere else
   pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
   seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fixed_targets: 11}
+  p_detect_scenarios: [0.1, 0.4]  # TODO(P1) #351: detection probabilities for the power comparison runs (the issue's illustration)
+  baseline_rate: 0.5             # TODO(P1) #351: placeholder small boats per cell-day for the comparison runs (issue's illustration)
   stand_in_sites: 15         # TODO(P1) #104: extra fuse/sites rows with no drops, so P7 has 16+ sites to rank and route
   site_gap_m: 4000           # A2: no site within 4 km of another
   fixed_targets:             # TODO(P1) #334: none of these are in the spec; a stack for the fixed-target suppression test
