@@ -182,6 +182,10 @@ def _sites(df: pd.DataFrame) -> list[dict]:
             "bh_flag": bool(r["bh_flag"]),
             "recurrence": int(r["recurrence"]),
             "agreement": int(r["agreement"]),
+            # D1 (#176): what the dashboard shows; the raw 0-4 count double-counts detectors that share counts
+            "agreement_merged": None
+            if pd.isna(r.get("agreement_merged"))
+            else int(r["agreement_merged"]),
             "followup_unobserved": int(r["followup_unobserved"]),
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],

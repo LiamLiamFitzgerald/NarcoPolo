@@ -23,7 +23,6 @@ from patrol import (
     air_hours,
     aircraft_plan,
     bandit,
-    exploration_pick,
     greedy_route,
     sea_hours,
     ship_plan,
@@ -112,13 +111,6 @@ def test_two_opt_untangles_a_crossed_route_and_keeps_the_ends():
     assert two_opt([0, 1, 2, 3, 0], d) == [0, 1, 2, 3, 0]  # already optimal: unchanged
 
 
-def test_exploration_pick_is_seeded():
-    ids = [f"S{i:02d}" for i in range(4, 16)]
-    assert exploration_pick(ids, seed=7) == exploration_pick(ids, seed=7)
-    assert {exploration_pick(ids, seed=s) for s in range(40)} > {exploration_pick(ids, seed=7)}
-    assert exploration_pick(["only"], seed=1) == "only"
-
-
 def _sites(n, flagged):
     """n sites on a line at x = 1 km, 2 km, ... with scores n, n-1, ... (rank 1 = best)."""
     return pd.DataFrame(
@@ -139,27 +131,31 @@ def _open_sea(nodes):
 START = pd.Timestamp("2026-11-28", tz="UTC")
 
 
-def test_plan_labels_unflagged_fill_sites_and_one_exploration_visit():
+def test_plan_labels_unflagged_fill_sites_and_has_no_fixed_exploration_slot():
+    # D3 (#176): without a Thompson draw there is no exploration visit; the route is the greedy fill on S
     sites = _sites(20, flagged=5)
-    stops = _plan_asset(
-        sites, (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START, explore_seed=3
-    )
+    stops = _plan_asset(sites, (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START)
     ids = [s["id"] for s in stops]
-    assert ids[0] == ids[-1] == "base"
-    assert sum(s.get("exploration", False) for s in stops) == 1
-    explored = next(s["id"] for s in stops if s.get("exploration"))
-    assert explored in set(sites["site_id"].iloc[3:15])  # ranks 4 to 15
+    assert ids[0] == ids[-1] == "base" and not any(s.get("exploration") for s in stops)
     flagged = dict(zip(sites["site_id"], sites["bh_flag"], strict=True))
     for s in stops[1:-1]:  # unflagged sites are labelled "not significant"
         assert s.get("not_significant", False) == (not flagged[s["id"]])
     assert [s["arrival_utc"] for s in stops] == sorted(s["arrival_utc"] for s in stops)
 
 
-def test_plan_skips_the_exploration_slot_with_fewer_than_four_sites():
+def test_thompson_explore_stops_are_the_exploration_visits():
+    # D3: the bandit's draw is the one exploration method; a stop off the posterior-mean route is "explore"
+    sites = _sites(20, flagged=5)
+    mean = pd.Series(sites["S"].to_numpy(), index=sites["site_id"])
+    theta = mean.copy()
+    theta["s12"] = 100.0  # the draw favours a low-ranked site the mean route would skip
     stops = _plan_asset(
-        _sites(3, 3), (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START, explore_seed=3
+        sites, (0.0, 0.0), _open_sea, budget_h=6, dwell_h=1, start=START, theta=theta, exploit=mean
     )
-    assert not any(s.get("exploration") for s in stops) and len(stops) == 5
+    explore = [s["id"] for s in stops if s.get("exploration")]
+    assert "s12" in explore
+    assert all(s["reason"] == "explore" for s in stops if s.get("exploration"))
+    assert all(s.get("exploration", False) == (s["reason"] == "explore") for s in stops[1:-1])
 
 
 def test_greedy_inputs_put_flagged_sites_first_then_fill_by_score():

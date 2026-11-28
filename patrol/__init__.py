@@ -28,7 +28,6 @@ TOP_SITES = 15
 SHIP_KN, AIR_KN = 12, 180  # aircraft_kn: TODO(confirm with the team)
 SHIP_BUDGET_H, SHIP_DWELL_H = 24, 1
 AIR_BUDGET_H, AIR_DWELL_H = 4, 0.2
-N_BOOT = 200
 SEA_RES_M = 250  # the spec's sea_250m.tif resolution
 
 
@@ -195,14 +194,6 @@ def two_opt(route: list[int], hours: np.ndarray) -> list[int]:
     return route
 
 
-def exploration_pick(sites_4_to_15: list[str], n_boot: int = N_BOOT, seed: int = 0) -> str:
-    """One site id to visit so the system does not only confirm itself. Seeded (seed = global seed + ISO
-    week), so the plan never changes between runs.
-    shortcut: a uniform seeded draw. The spec bootstraps each site's link scores L (n_boot resamples) and
-    takes the highest Thompson draw, but no stage file holds L (contract issue 98)."""
-    return sites_4_to_15[int(np.random.default_rng(seed).integers(len(sites_4_to_15)))]
-
-
 def _greedy_inputs(sites: pd.DataFrame) -> pd.DataFrame:
     """The top 15 candidates: by p_site once the site model writes it (learning L5), else flagged sites
     by S, filled with unflagged ones by S when fewer."""
@@ -220,15 +211,15 @@ def _plan_asset(
     budget_h: float,
     dwell_h: float,
     start: pd.Timestamp,
-    explore_seed: int | None = None,
     stand_in: bool = False,
     theta: pd.Series | None = None,
     exploit: pd.Series | None = None,
     exact_max_nodes: int = 0,
 ) -> list[dict]:
-    """theta (by site_id) replaces S as node weights (bandit, learning L5); then the Thompson draw is
-    the exploration and the fixed slot is skipped. A stop is 'exploit' if it is also on the route
-    planned with the `exploit` weights (posterior means), else 'explore'."""
+    """theta (by site_id) replaces S as node weights (bandit, learning L5): the Thompson draw is the one
+    exploration method (D3, #176). A stop is 'exploit' if it is also on the route planned with the `exploit`
+    weights (posterior means), else 'explore', which is marked `exploration` for the snapshot and dashboard.
+    Without theta (no bandit state), the route is the greedy fill on S."""
     cand = _greedy_inputs(sites).reset_index(drop=True)
     nodes = [
         {"x_m": base[0], "y_m": base[1]},
@@ -245,17 +236,11 @@ def _plan_asset(
                 return _exact(S, hours, budget_h, dwell_h)
             return two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours)
 
-        route, explore = solve(theta), None
+        route = solve(theta)
         on_mean = set(solve(exploit if exploit is not None else theta))
     else:
         S = np.array([0.0, *cand["S"]])
-        route, explore, on_mean = [0, 0], None, set()
-        if explore_seed is not None and len(cand) >= 4:  # fewer than 4 sites: skip the slot
-            pick = exploration_pick(list(cand["site_id"].iloc[3:TOP_SITES]), N_BOOT, explore_seed)
-            j = 1 + int(cand.index[cand["site_id"] == pick][0])
-            if 2 * hours[0, j] + dwell_h <= budget_h:  # reserve the visit before the greedy fill
-                route, explore = [0, j, 0], j
-        route = two_opt(_greedy(route, S, hours, budget_h, dwell_h), hours)
+        route, on_mean = two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours), set()
 
     stops, t = [], start
     for k, i in enumerate(route):
@@ -274,11 +259,11 @@ def _plan_asset(
             )
         if i and not cand["bh_flag"][i - 1]:
             stop["not_significant"] = True
-        if i == explore:
-            stop["exploration"] = True
         if i and theta is not None:
             stop["theta"] = float(theta[stop["id"]])
             stop["reason"] = "exploit" if i in on_mean else "explore"
+            if stop["reason"] == "explore":
+                stop["exploration"] = True
         stops.append(stop)
     return stops
 

@@ -224,6 +224,11 @@ def test_snapshot_sites_match_the_stage_file(world):
     assert all(len(s["top_piers"]) <= 3 and isinstance(s["reasons"], list) for s in snap["sites"])
     assert np.isfinite([s["S"] for s in snap["sites"]]).all()
     assert datetime.fromisoformat(snap["meta"]["generated_utc"])
+    # D1 (#176): the merged agreement the dashboard shows comes from fuse/sites (None where it has none)
+    merged = sites.set_index("site_id").get("agreement_merged")
+    for s in snap["sites"]:
+        want = None if merged is None or pd.isna(merged[s["id"]]) else int(merged[s["id"]])
+        assert s["agreement_merged"] == want
 
 
 def test_legends_are_quantile_breaks_over_observed_values_only():
