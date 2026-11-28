@@ -12,6 +12,7 @@ config `ingest:` (question #261).
 import json
 import math
 import tempfile
+import threading
 from collections.abc import Mapping
 from datetime import date, timedelta
 from pathlib import Path
@@ -43,6 +44,7 @@ _NODATA = -32768  # int16 minimum: no backscatter (no pass, or outside the swath
 _PX = 10.0  # m, the fixed region grid (issue 5)
 _EPSG = 32629
 _conn: Any = None
+_conn_lock = threading.Lock()  # ingest/run fetches passes in parallel (#33): one login, not N
 
 
 def list_passes(bbox: _stub.Bbox, start: date, end: date) -> pd.DataFrame:
@@ -250,11 +252,12 @@ def _extent(bbox: _stub.Bbox, x0: float, y0: float) -> list[float]:
 def _connection() -> Any:
     """openEO on Copernicus Data Space, OIDC device login; no refresh token is written to disk."""
     global _conn
-    if _conn is None:
-        import openeo
+    with _conn_lock:  # threads that arrive during the device login wait for it, then share it
+        if _conn is None:
+            import openeo
 
-        _conn = openeo.connect(OPENEO_URL).authenticate_oidc(store_refresh_token=False)
-    return _conn
+            _conn = openeo.connect(OPENEO_URL).authenticate_oidc(store_refresh_token=False)
+        return _conn
 
 
 def _to_db100(src: Path, dst: Path, x0: float, y0: float) -> None:

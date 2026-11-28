@@ -280,3 +280,35 @@ def test_fetch_scene_off_grid_fails_and_records_nothing(simraw, raw, monkeypatch
     with pytest.raises(ValueError, match="grid"):
         s1.fetch_scene(_row(meta))
     assert not (raw / "manifest.json").exists()
+
+
+def test_parallel_fetches_share_one_openeo_login(monkeypatch):
+    """ingest/run calls fetch_scene from several threads (#33); the device login must happen once."""
+    import sys
+    import threading
+    import time
+    import types
+
+    logins = []
+
+    class FakeConnection:
+        def authenticate_oidc(self, **_):
+            logins.append(1)
+            time.sleep(0.05)  # a slow device login: other threads arrive while it runs
+            return self
+
+    monkeypatch.setitem(
+        sys.modules, "openeo", types.SimpleNamespace(connect=lambda url: FakeConnection())
+    )
+    got, start = [], threading.Barrier(8)
+
+    def worker():
+        start.wait()
+        got.append(s1._connection())
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert len(logins) == 1 and len({id(c) for c in got}) == 1
