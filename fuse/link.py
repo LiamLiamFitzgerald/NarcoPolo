@@ -9,6 +9,7 @@ from statsmodels.stats.multitest import multipletests
 
 from core import io
 from core.grid import FINE, centroid, neighbours
+from core.schemas import SCHEMAS
 from fuse._common import _CFG, PARAMS, RADAR_HISTORY_DAYS, _provenance
 from fuse.features import site_features
 from fuse.learn import _add_learning_columns
@@ -310,12 +311,115 @@ def _strongest(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -
         rows[str(cid)] = {
             "agreement": int(agree.reindex([key]).fillna(0).iloc[0]),
             "small_cell": key[0], "small_date": pd.Timestamp(key[1]), "lag_days": int(lag[k]),
-            "event_id": s["event_id"],
+            "event_id": s["event_id"], "slow_date": pd.Timestamp(s["date"]),
         }  # fmt: skip
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
 _NO_PIER = "no road-access pier within reach"
+
+# #320: the briefing card's evidence meter. Written only once core/schemas declares them (P1's contract PR).
+_EVIDENCE = (
+    "check_rare_slowdown",
+    "check_followup_seen",
+    "check_outside_fishing",
+    "top_piers_hours",
+)
+
+
+def _declared(sites_: pd.DataFrame) -> pd.DataFrame:
+    """Drop each #320 evidence column that the fuse/sites schema does not declare yet, so the frame stays valid."""
+    cols = SCHEMAS["fuse/sites"].columns
+    return sites_.drop(columns=[c for c in _EVIDENCE if c in sites_.columns and c not in cols])
+
+
+def _rare_slowdown(cells: pd.DataFrame, cell_ids, dates) -> np.ndarray:
+    """#320 check_rare_slowdown per (cell, date): that slowdown cell-day is in the top top_frac of slowdown mid-p
+    ranks (rank of 1 - p_mid, pct, over the observed slowdown rows of `cells`), the agreement badge's rule
+    (detectors.scores.fuse). A cell-day with no scored row is False."""
+    s = cells[cells["event_type"] == "slowdown"]
+    if not len(s) or not len(cell_ids):
+        return np.zeros(len(cell_ids), bool)
+    top = pd.Series(
+        ((1 - s["p_mid"]).rank(pct=True) > 1 - PARAMS["top_frac"]).to_numpy(),
+        index=pd.MultiIndex.from_arrays([s["cell_id"].astype(str), _days(s["date"])]),
+    )
+    key = pd.MultiIndex.from_arrays([pd.Index(cell_ids).astype(str), _days(dates)])
+    return top.reindex(key).fillna(False).to_numpy(bool)
+
+
+_ROUTINE = ("lane", "anchorage", "port_zone")
+
+
+def _routine_stop(lay, sid: pd.Series) -> np.ndarray:
+    """True where the site's cell is a lane, anchorage or port zone (reference/cells), or where that is unknown."""
+    if lay is None or not all(c in lay.columns for c in _ROUTINE):
+        return np.ones(len(sid), bool)
+    flags = lay[list(_ROUTINE)].reindex(sid)
+    known = flags.notna().all(axis=1).to_numpy()
+    return ~known | flags.fillna(False).astype(bool).any(axis=1).to_numpy()
+
+
+def _evidence(
+    sites_: pd.DataFrame, slow: pd.DataFrame, strongest: pd.DataFrame, lay
+) -> pd.DataFrame:
+    """#320 checks per site (rows as sites_). rare: the strongest link's slowdown (strongest["rare_slowdown"]) is in
+    the top top_frac of slowdown mid-p ranks AND the site's cell is not a lane, anchorage or port zone, where ships
+    stop routinely (an anchorage with ~150 slowdowns always has one in the top 10%, #320); a cell whose layers are
+    unknown is not rare (unknown is never yes). followup_seen: some slowdown has L > 0, i.e. a small boat seen on a
+    calm pass (A5: U_small = 0 where C = 0). outside_fishing: inshore_frac < inshore_max, NA without an inshore
+    map."""
+    sid = sites_["site_id"].astype(str)
+    rare = (
+        strongest["rare_slowdown"]
+        if "rare_slowdown" in strongest.columns
+        else pd.Series(dtype=bool)
+    )
+    rare = rare.reindex(sid).fillna(False).to_numpy(bool) & ~_routine_stop(lay, sid)
+    seen = set(slow.loc[slow["L"] > 0, "cell_id"].astype(str)) if "L" in slow.columns else set()
+    has = lay is not None and "inshore_frac" in lay.columns
+    f = (lay["inshore_frac"] if has else pd.Series(dtype=float)).reindex(sid).to_numpy(float)
+    outside = pd.array(
+        [None if np.isnan(v) else bool(v < PARAMS["inshore_max"]) for v in f], dtype="boolean"
+    )
+    return pd.DataFrame(
+        {
+            "check_rare_slowdown": rare,
+            "check_followup_seen": sid.isin(seen).to_numpy(bool),
+            "check_outside_fishing": outside,
+        },
+        index=sites_.index,
+    )
+
+
+def _check_reasons(site) -> list[str]:
+    """One plain line per #320 check that the site row carries."""
+    out = []
+    k = round(100 * PARAMS["top_frac"])
+    if "check_rare_slowdown" in site:
+        out.append(
+            f"Rare slowdown: yes, the strongest one is among the top {k} in 100 most unusual slowdown cell-days."
+            if site["check_rare_slowdown"]
+            else "Rare slowdown: no, ships stop here routinely (lane, anchorage or port zone) or no linked "
+            f"slowdown here is among the top {k} in 100 most unusual."
+        )
+    if "check_followup_seen" in site:
+        near = f"on a calm pass within {PARAMS['link_radius_m'] / 1000:g} km and {PARAMS['link_days']} days"
+        out.append(
+            f"Small boat seen after: yes, a small unmatched boat {near} of a slowdown."
+            if site["check_followup_seen"]
+            else f"Small boat seen after: no small unmatched boat {near}."
+        )
+    if "check_outside_fishing" in site:
+        v = site["check_outside_fishing"]
+        out.append(
+            "Outside fishing grounds: unknown, no inshore fishing map for this cell."
+            if v is None or v is pd.NA
+            else "Outside fishing grounds: yes, little inshore fishing ground in this cell."
+            if v
+            else "Outside fishing grounds: no, inside inshore fishing grounds."
+        )
+    return out
 
 
 def _scored(sites: pd.DataFrame) -> pd.DataFrame:
@@ -379,9 +483,11 @@ def reasons(site, inputs) -> list[str]:
             f"{d / 1000:.0f} km from the coast"
             + (", in a shipping lane." if inputs.get("lane") else ", outside lanes.")
         )
+    checks = _check_reasons(site)
     f = inputs.get("inshore_frac")
-    if f is not None and np.isfinite(f) and f < 0.1:
+    if "check_outside_fishing" not in site and f is not None and np.isfinite(f) and f < 0.1:
         out.append("Outside inshore fishing grounds.")
+    out += checks
     if inputs.get("flags_off"):
         out.append(
             "Not flagged: the site significance test is being replaced (it is not valid at busy places), so "
@@ -438,6 +544,8 @@ def _scored_sites(
     out["bh_flag"] = flag
     agree = _small_rows(cells).set_index(["cell_id", "date"])["agreement"]
     strongest = _strongest(slow, u_small, agree, nbrs)
+    if len(strongest):
+        strongest["rare_slowdown"] = _rare_slowdown(cells, strongest.index, strongest["slow_date"])
     a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
     out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
     # ties on S (often S = 0 where no pick-up was seen) go to the cell with more slowdowns, so suppression never
@@ -483,7 +591,13 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
     )
     tested_ids = set(sites_.loc[(sites_["S"] > 0) & in_top, "site_id"]) if len(sites_) else set()
     n_tested = len(tested_ids)
-    rs, tp = [], []
+    sites_ = pd.concat([sites_, _evidence(sites_, slow, strongest, lay)], axis=1)
+    hours = (
+        road.groupby(["cell_id", "pier_id"])["hours"].first()
+        if len(road)
+        else pd.Series(dtype=float)
+    )
+    rs, tp, th = [], [], []
     for _, site in sites_.iterrows():
         sid = site["site_id"]
         inputs: dict = {
@@ -509,7 +623,8 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
             r.append(_NO_PIER.capitalize() + ".")
         rs.append(r)
         tp.append(piers_)
-    sites_ = sites_.assign(reasons=rs, top_piers=tp)
+        th.append([float(hours[(sid, p)]) for p in piers_])
+    sites_ = sites_.assign(reasons=rs, top_piers=tp, top_piers_hours=th)
     all_piers = pd.Index(sorted(set(road["pier_id"])), name="pier_id")
     piers_out = P.reindex(all_piers).fillna(0.0).reset_index()
     links = pd.DataFrame(columns=["site_id", "L", "age_days"])
@@ -533,7 +648,7 @@ def _run(
     no slowdown gets a link score and no site is flagged. T defaults to the last observed date."""
     if cells is None:
         cells = pd.DataFrame({c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()})
-    return cells, _all(observed, expected, layers, travel, events, cells, T)[0]
+    return cells, _declared(_all(observed, expected, layers, travel, events, cells, T)[0])
 
 
 def _history_cells(observed, expected, layers, events, T, cells):
@@ -573,6 +688,6 @@ def run_sites() -> None:
         *frames, cells=cells, T=io.read_snapshot()["T"], piers=io.read_stage("reference/piers")
     )
     prov = _provenance("aggregate/observed")
-    io.write_stage("fuse/sites", sites_, prov)  # type: ignore[arg-type]
+    io.write_stage("fuse/sites", _declared(sites_), prov)  # type: ignore[arg-type]
     io.write_stage("fuse/piers", piers, prov)  # type: ignore[arg-type]
     io.write_stage("fuse/links", links, prov)  # type: ignore[arg-type]
