@@ -175,3 +175,26 @@ def test_outcome_gets_the_week_start_timestamp():  # R2
     )
     _evaluate(["fixed_S"], "fixed", [0], deps)
     assert all(isinstance(t, pd.Timestamp) and str(t.tz) == "UTC" for t in seen)
+
+
+def test_drop_site_candidate_share_is_one_when_the_drop_site_is_always_a_candidate(fixed):
+    assert fixed["drop_site_candidate_share"].eq(1.0).all()
+
+
+def test_a_world_whose_candidates_miss_the_drop_site_says_so(caplog):
+    """The 09:40 run: every policy, the oracle too, scored 0 finds because the drop site was never a candidate.
+    That must show in the report, not pass as 'no regret'."""
+
+    def blind(regime, seed):
+        s = _world(regime, seed)
+        return _Season(s.truth, s.weeks, lambda c: SITES[SITES["site_id"] != "s1"], s.route)
+
+    with caplog.at_level("WARNING"):
+        f = _evaluate(POLICIES, "fixed", range(2), _Deps(blind, _outcome, DEPS.bandit))
+    assert f["drop_site_candidate_share"].eq(0.0).all()
+    assert (f["finds_per_patrol_hour"] == 0).all()  # nobody can find what is never offered
+    assert "never a patrol candidate" in caplog.text
+
+
+def test_null_regime_has_no_candidate_share():
+    assert _evaluate(POLICIES, "null", range(1), DEPS)["drop_site_candidate_share"].isna().all()

@@ -9,6 +9,7 @@ Only visited sites ever count (principle 3); scores are per site, never per vess
 
 import importlib
 import json
+import logging
 import os
 import tempfile
 from collections.abc import Callable, Iterable, Sequence
@@ -22,10 +23,12 @@ from scipy.stats import entropy
 from core import io
 from core.config import load
 
+log = logging.getLogger(__name__)
+
 POLICIES = ("fixed_S", "fixed_p_site", "bandit", "oracle", "random")
 COLUMNS = [
     "policy", "regime", "seed", "regret", "weeks_to_first_find", "finds_per_patrol_hour",
-    "coverage_entropy",
+    "coverage_entropy", "drop_site_candidate_share",
 ]  # fmt: skip
 _NAMES = (
     "aggregate/observed",
@@ -90,10 +93,16 @@ def _season(
             raise ValueError(f"unknown policy {policy!r}; one of {POLICIES}")
         state: dict = {}
         regret, finds, hours, first = 0.0, 0, 0.0, float("nan")
+        drop_weeks = offered = (
+            0  # weeks with a true drop / of those, weeks a drop site is a patrol candidate
+        )
         visits: list[pd.Series] = []
         for w, cutoff in enumerate(s.weeks):
             cands = s.sites_at(cutoff).reset_index(drop=True)
             true = _true_counts(s.truth, cutoff)
+            if len(true):
+                drop_weeks += 1
+                offered += bool(set(true.index) & set(cands["site_id"]))
             oracle_w = (
                 true.reindex(cands["site_id"]).fillna(0).to_numpy(float)
             )  # truth: no drop = 0
@@ -123,6 +132,14 @@ def _season(
             finds, hours = finds + found, hours + h
             visits.append(_visited(out))
         counts = pd.concat(visits).value_counts() if visits else pd.Series(dtype=float)
+        if drop_weeks and not offered and policy == "oracle":
+            log.warning(
+                "%s seed %s: a true drop site was never a patrol candidate in %d drop weeks, so finds and"
+                " regret measure nothing (check fuse ranking and the detector's small-boat recall)",
+                regime,
+                seed,
+                drop_weeks,
+            )
         rows.append(
             {
                 "policy": policy,
@@ -132,6 +149,7 @@ def _season(
                 "weeks_to_first_find": first,
                 "finds_per_patrol_hour": finds / hours if hours > 0 else float("nan"),
                 "coverage_entropy": _entropy(counts),
+                "drop_site_candidate_share": offered / drop_weeks if drop_weeks else float("nan"),
             }
         )
     return rows
