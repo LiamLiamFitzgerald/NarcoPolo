@@ -20,6 +20,7 @@ from shapely.geometry.base import BaseGeometry
 from core import io
 from core.config import load
 from core.crs import to_wgs84
+from core.schemas import SCHEMAS
 from core.time import iso_week
 
 # What export reads (the spec's inputs that have a schema). reports/validation.json and
@@ -136,13 +137,18 @@ def basemap(coastline: BaseGeometry) -> dict:
     }
 
 
-def _basemap(study_area: BaseGeometry, land: BaseGeometry | None) -> dict:
+def _basemap(
+    study_area: BaseGeometry, land: BaseGeometry | None, areas: pd.DataFrame | None = None
+) -> dict:
     """The study-area outline, and the land (#133) when reference/land exists: on real data that is the
-    real coast of Ireland from the OSM coastline; the simulator writes a straight one."""
+    real coast of Ireland from the OSM coastline; the simulator writes a straight one. Closed and
+    protected areas (#322) are added when reference/closed_areas exists."""
     fc = basemap(study_area)
     fc["features"][0]["properties"] = {"kind": "study_area"}
     if land is not None:
         fc["features"].append({**basemap(land)["features"][0], "properties": {"kind": "land"}})
+    if areas is not None:
+        fc["features"] += _closed_area_features(areas)
     return fc
 
 
@@ -251,21 +257,26 @@ def _links(df: pd.DataFrame) -> dict[str, list[dict]]:
     return out
 
 
-# The briefing card's three evidence checks (#314). PLACEHOLDER (#320): P6 has not written these yet, so
-# the column names below are our guess at the contract and every check reads None ("not available yet")
-# until fuse/sites carries them. The browser never derives a check.
+# The briefing card's three evidence checks (#314) from P6's fuse/sites columns (#320): card key, column.
+# A missing column or an NA (check_outside_fishing where no inshore map exists) is None, "not available".
+# The browser never derives a check.
 _CHECKS = (
-    (
-        "rare_slowdown",
-        "check_rare_slowdown",
-    ),  # TODO(P7) #320: a ship slowed where ships rarely slow
-    ("boats_after", "check_boats_after"),  # TODO(P7) #320: small boats seen afterwards nearby
-    ("outside_fishing", "check_outside_fishing"),  # TODO(P7) #320: outside normal fishing activity
+    ("rare_slowdown", "check_rare_slowdown"),  # a ship slowed where ships rarely slow
+    ("boats_after", "check_followup_seen"),  # small boats seen nearby afterwards
+    ("outside_fishing", "check_outside_fishing"),  # outside normal fishing activity; nullable
 )
 
 
 def _flag_or_none(v: Any) -> bool | None:
-    return None if v is None or (isinstance(v, float) and pd.isna(v)) else bool(v)
+    return None if v is None or pd.isna(v) else bool(v)
+
+
+def _minutes(hours: Any, n: int) -> list[float | None]:
+    """Sea travel minutes from P6's per-pier hours (top_piers_hours, top_harbours_hours), the first 3;
+    [None] * n where the column is missing."""
+    if not isinstance(hours, list | tuple | np.ndarray):
+        return [None] * min(3, n)
+    return [_num(float(h) * 60) for h in hours][:3]
 
 
 def _timeline(
@@ -348,12 +359,16 @@ def _hours(stops: list[dict]) -> float | None:
 
 
 def _figures(sites: list[dict], week_rows: list[dict], plan: dict, cfg: Any) -> dict:
-    """Headline numbers for the dashboard's figures strip, so the browser computes none of them."""
+    """Headline numbers for the dashboard's figures strip, so the browser computes none of them. The site
+    counts are drop-off sites; fisheries candidates (#321) are counted on their own."""
     p = cfg.get("patrol", {})
+    fisheries = [s for s in sites if s["lens"] == "fisheries"]
+    sites = [s for s in sites if s["lens"] != "fisheries"]
     return {
         "sites": len(sites),
         "flagged": sum(s["bh_flag"] for s in sites),
         "candidates": min(int(p.get("top_sites", 15)), len(sites)),
+        "fisheries": len(fisheries),
         "ship_h": _hours(plan.get("ship", [])),
         "ship_budget_h": float(p.get("ship_budget_h", 24)),  # spec defaults
         "aircraft_h": _hours(plan.get("aircraft", [])),
@@ -392,10 +407,8 @@ def _sites(
             "lens": str(r["lens"]) if "lens" in r and isinstance(r["lens"], str) else "dropoff",
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],
-            # PLACEHOLDER (#320): sea travel minutes to each top pier, from P6; None until it exists
-            "top_pier_minutes": [_num(x) for x in r["top_pier_minutes"]][:3]
-            if isinstance(r.get("top_pier_minutes"), list | tuple | np.ndarray)
-            else [None] * min(3, len(r["top_piers"])),
+            # sea travel minutes to each top pier, from P6's top_piers_hours (#320); None until it exists
+            "top_pier_minutes": _minutes(r.get("top_piers_hours"), len(r["top_piers"])),
             "checks": {k: _flag_or_none(r.get(col)) for k, col in _CHECKS},
             "timeline": timeline.get(str(r["site_id"]), []),
         }
@@ -417,12 +430,90 @@ def _piers(df: pd.DataFrame, scores: pd.DataFrame) -> list[dict]:
     ]
 
 
-def _mission_mix(cfg: Any) -> dict:
-    """The mission-mix slider (#316). PLACEHOLDER: only the 0 % fisheries plan exists, because fisheries
-    candidates (#321) and the `patrol.mission_mixes` presets (TODO(P7), P1 to add to config.yaml) do not.
-    `wanted` lists the presets the slider will offer; `ready` the mixes with a plan in `plan` today."""
-    wanted = cfg.get("patrol", {}).get("mission_mixes")
-    return {"wanted": [int(m) for m in wanted] if wanted else [0], "ready": [0]}
+def _fisheries_candidates(fish: pd.DataFrame, t: date, top: int) -> pd.DataFrame:
+    """The latest week <= T of fuse/fisheries, flagged cell-weeks first, then by y_fish, the top `top` (#321).
+    patrol._fisheries_inputs makes the same choice for the mission-mix plans."""
+    weeks = pd.to_datetime(fish["week"]).dt.date
+    if not (weeks <= t).any():
+        return fish.iloc[0:0]
+    week = fish[weeks == weeks[weeks <= t].max()]
+    return week.sort_values(["flag", "y_fish"], ascending=[False, False], kind="stable").head(top)
+
+
+def _fisheries_sites(fish: pd.DataFrame, ref: pd.DataFrame) -> list[dict]:
+    """Fisheries candidates as sites (#321): position = the 2 km cell's centre; drop-site-only fields are
+    None or [], never 0 (they were never computed for these cells)."""
+    centre = ref.set_index("cell_id").geometry.centroid
+    out = []
+    for r in fish.to_dict("records"):
+        c = centre[r["cell_id"]]
+        out.append(
+            {
+                "id": str(r["cell_id"]),
+                **_lonlat(c.x, c.y),
+                "lens": "fisheries",
+                "week": pd.Timestamp(r["week"]).date().isoformat(),
+                "flag": bool(r["flag"]),
+                "y_fish": _num(r["y_fish"]),
+                "y_fish_lo": _num(r["y_fish_lo"]),
+                "y_fish_hi": _num(r["y_fish_hi"]),
+                "in_closed_area": _flag_or_none(r["in_closed_area"]),
+                "reasons": [str(x) for x in r["reasons"]],
+                "top_piers": [str(x) for x in r["top_harbours"]][:3],
+                "top_pier_minutes": _minutes(r["top_harbours_hours"], len(r["top_harbours"])),
+                "S": None, "p_perm": None, "bh_flag": None, "recurrence": None, "agreement": None,
+                "agreement_merged": None, "followup_unobserved": None, "p_site": None,
+                "links": [], "timeline": [], "checks": {k: None for k, _ in _CHECKS},
+            }
+        )  # fmt: skip
+    return out
+
+
+def _read_optional(name: str) -> pd.DataFrame | None:
+    """A stage file other modules add later (#360): None until core.schemas declares it and it exists."""
+    if name not in SCHEMAS or not io.stage_path(name).exists():
+        return None
+    if name.startswith(
+        "reference/"
+    ):  # a layer of layers.gpkg: written once its stamp sidecar exists
+        try:
+            return io.read_stage(name)
+        except ValueError:  # no stamp, so P3 has not written the layer
+            return None
+    return io.read_stage(name)  # a stale or broken file fails loudly, never reads as "no data"
+
+
+def _closed_area_features(areas: pd.DataFrame) -> list[dict]:
+    """reference/closed_areas (#322) as basemap features in WGS 84, kind "closed_area"."""
+    return [
+        {
+            **basemap(r["geometry"])["features"][0],
+            "properties": {"kind": "closed_area", "name": str(r["name"]), "type": str(r["type"])},
+        }
+        for r in areas.to_dict("records")
+    ]
+
+
+def _mission_mix(cfg: Any, mixes: dict | None, t: date, lens: dict[str, str]) -> dict:
+    """The mission-mix slider (#316, #338). `wanted`: the presets in patrol.mission_mixes; `ready`: the mixes
+    with a ship and an aircraft plan. 0 % fisheries is `plan` itself; the others come from patrol's
+    patrol/plan_mixes.json (a P7-only file, not a stage file) when it was made for this T. Without fisheries
+    data patrol writes no other mix, so `ready` stays [0]."""
+    wanted = [int(m) for m in cfg.get("patrol", {}).get("mission_mixes", [0])]
+    plans = {}
+    if mixes and mixes.get("T") == t.isoformat():
+        plans = {
+            str(m): _plan(p, lens)
+            for m, p in mixes.get("plans", {}).items()
+            if int(m) in wanted and int(m) != 0 and {"ship", "aircraft"} <= set(p)
+        }
+    ready = sorted({0, *(int(m) for m in plans)})
+    return {"wanted": sorted({0, *wanted}), "ready": ready, "plans": plans}
+
+
+def _read_mixes() -> dict | None:
+    path = _data_root() / "patrol" / "plan_mixes.json"
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def _plan(plan: dict, lens: dict[str, str] | None = None) -> dict:
@@ -439,7 +530,13 @@ def _plan(plan: dict, lens: dict[str, str] | None = None) -> dict:
                 "at_h": _num((pd.Timestamp(s["arrival_utc"]) - t0[asset]).total_seconds() / 3600),
                 "dwell_h": s["dwell_h"],
                 **_lonlat(s["x_m"], s["y_m"]),
-                **({"lens": lens[s["id"]]} if s["id"] in lens else {}),
+                # a stop patrol labelled (a fisheries candidate, #338) keeps its lens; site ids can repeat
+                # across lenses, so a drop-off site's lens is looked up only for unlabelled stops
+                **(
+                    {"lens": s.get("lens") or lens[s["id"]]}
+                    if s.get("lens") or s["id"] in lens
+                    else {}
+                ),
                 **{
                     k: s[k]
                     for k in ("exploration", "not_significant", "stand_in", "reason")
@@ -482,7 +579,14 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
         _links(f["fuse/links"]),
         _timeline(f["fuse/links"], f["coverage/exposure"], t, first, int(cfg["p6"]["link_days"])),
     )
-    plan = _plan(io.read_json_stage("patrol/plan"), {s["id"]: s["lens"] for s in sites})
+    lens = {s["id"]: s["lens"] for s in sites}
+    top = int(cfg.get("patrol", {}).get("top_sites", 15))  # the spec's default
+    fish = _read_optional("fuse/fisheries")  # #321: switches on when P6's file exists
+    if fish is not None:
+        label = data_label([label, _provenance("fuse/fisheries")])
+        sites += _fisheries_sites(_fisheries_candidates(fish, t, top), ref)
+    areas = _read_optional("reference/closed_areas")  # #322
+    plan = _plan(io.read_json_stage("patrol/plan"), lens)
     cell_weeks = {
         w: heatmap_values(f["forecast/expected"], f["fuse/cells"], f["coverage/exposure"], w)
         for w in weeks
@@ -493,15 +597,15 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "generated_utc": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "region": dict(cfg["region_bbox"]),
             "T": t.isoformat(),
-            "top_sites": int(cfg.get("patrol", {}).get("top_sites", 15)),  # the spec's default
+            "top_sites": top,
             "figures": _figures(sites, cell_weeks[weeks[-1]], plan, cfg),
-            "mission_mix": _mission_mix(cfg),
+            "mission_mix": _mission_mix(cfg, _read_mixes(), t, lens),
             "week": weeks[-1],
             "weeks": weeks,
             "config_hash": cfg_hash,
         },
         "basemap": {
-            **_basemap(unary_union(list(fine.geometry)), _read_land()),
+            **_basemap(unary_union(list(fine.geometry)), _read_land(), areas),
             # a GeoJSON foreign member, so the snapshot keeps exactly its seven top-level keys
             **({"backdrop": bd} if (bd := _read_backdrop()) else {}),
         },

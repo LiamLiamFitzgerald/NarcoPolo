@@ -338,6 +338,10 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 .inshore { fill: none; stroke: var(--md-primary); stroke-width: 0.8; }
 .lane { fill: url(#lane); opacity: 0.5; }
 .exclusion { fill: url(#lane); stroke: var(--md-on-surface-variant); stroke-dasharray: 3 2; opacity: 0.8; }
+.closed { fill: none; stroke: var(--explore); stroke-width: 1.6; stroke-dasharray: 6 3; }
+.closed.protected_area { stroke-dasharray: 2 3; }
+.site.fisheries { stroke: var(--explore); }
+.site.fisheries.flagged { fill: var(--explore); fill-opacity: 0.6; }
 .route { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .route.aircraft { stroke-dasharray: 7 5; }
 .stop { fill: none; stroke: var(--ink); stroke-width: 1.5; }
@@ -398,6 +402,7 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 .outcome-note:empty { display: none; }
 .mix { margin-bottom: var(--sp-4); }
 .mix button:disabled { opacity: .45; cursor: not-allowed; }
+.quick-note { margin: 0 0 var(--sp-3); }
 .site-card .actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
 .lens-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); min-height: 22px; border-radius: var(--shape-full);
   font: var(--t-label-medium); background: var(--md-primary-container); color: var(--md-on-primary-container); }
@@ -541,10 +546,10 @@ const MAPS = {
 };
 const OVERLAYS = [
   ["backdrop", "Radar image"], ["inshore", "Inshore grounds"], ["lane", "Lanes and exclusion zones"], ["sites", "Drop sites"],
-  ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
+  ["closed", "Closed and protected areas"], ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
 ];
 let snap, ext, H, timer = null, selected = null;
-const view = { map: "normal", week: null, more: false, outcomes: {} };
+const view = { map: "normal", week: null, more: false, outcomes: {}, mix: 0 };
 const vb = { x: 0, y: 0, w: W, h: 260 }; // the map's current viewBox (#280)
 const TOP_LIST = 3; // Design principle 13: a weekly top 3, the rest one click away
 const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
@@ -571,6 +576,14 @@ const PHRASES = {
   route_ship: "Ship", route_aircraft: "Aircraft", route_stops: "{n} stops · {h} h of {b} h · leaves {time} UTC",
   route_none: "No trip worth making within the time budget", route_from_lens: "Every stop this week comes from Drop-off watch.",
   route_more: "Full route and timings",
+  route_from_mix: "{p} % of each asset's time goes to Fisheries watch, the rest to Drop-off watch.",
+  // fisheries cards (#321, #322): y_fish is a ratio of observed to expected, so it is said as "times normal"
+  fish_level: "About {y}× the normal number of dark fishing boats this week (range {lo}–{hi}×)",
+  fish_closed: "inside a closed area", fish_closed_na: "closed areas not available yet",
+  fish_harbours: "harbours where a catch would likely land: {list}", not_significant: "not significant",
+  quick_title: "Quick validation",
+  quick_body: "These numbers come from a quick run with fewer repetitions. They are a preview, not the full result.",
+  limits_quick: "Validation this week is a quick run with fewer repetitions: its numbers are a preview, not the full result.",
   limits: [
     "Pick-ups that happen between two radar passes are missed: passes come every one to three days, a pick-up can take hours.",
     "Small boats in rough seas are missed, so rough passes count as no satellite look for small boats.",
@@ -591,14 +604,16 @@ const PHRASES = {
   pass_rough: "{date}: rough pass, small boats unobserved", no_pass: "no radar pass afterwards: follow-up unobserved",
   pier_time: "{pier}, about {min} min by small boat", pier_time_na: "{pier} (travel time not available yet)",
   numbers: "Numbers", numbers_line: "score {S} · p = {p} · seen {n} time(s)",
-  // "we checked" (#317); saved to a draft file until the outcomes file is agreed (issue 329)
+  // "we checked" (#317): kept in patrol/outcomes, which patrol learns from (#339); a draft file before contract 329
   outcome_q: "We checked this site this week:", outcome_found_something: "Found something",
   outcome_found_nothing: "Found nothing", outcome_not_visited: "Not visited",
-  outcome_saved: "Saved. Next week's plan will use it once patrol reads outcomes (issue 329).",
+  outcome_saved: "Saved. Plans for the weeks after this one will learn from it.",
+  outcome_saved_draft: "Saved to a draft file. Plans will learn from it once the outcomes file is agreed (issue 329).",
   outcome_failed: "Not saved: open the dashboard window or the local server to record answers.",
   // plan (#316)
   mix_title: "Mission mix", mix_value: "{p} % fisheries",
   mix_na: "Only the 0 % fisheries plan exists until fisheries data arrives (issue 321).",
+  mix_ready: "Each mix is a plan the pipeline made: switching shows it, nothing is recomputed here.",
   reason_exploit: "best bet", reason_explore: "exploration visit",
 };
 // phrases:end
@@ -820,7 +835,7 @@ function drawBasemap() {
   }
   const path = ring => "M" + ring.map(p => project(...p).join(",")).join("L") + "Z";
   for (const ring of landRings()) el("path", { d: path(ring), class: "land" }, g, "land");
-  for (const f of snap.basemap.features.filter(f => f.properties?.kind !== "land"))
+  for (const f of snap.basemap.features.filter(f => !["land", "closed_area"].includes(f.properties?.kind)))
     for (const ring of rings(f)) el("path", { d: path(ring), class: "basemap" }, g);
 }
 
@@ -911,8 +926,13 @@ function drawOverlays(first = false) {
   for (const cid of L.lane) el("rect", { ...cellRect(cid), class: "lane" }, lanes, "Shipping lane");
   for (const cid of L.exclusion) el("rect", { ...cellRect(cid), class: "exclusion" }, lanes, "Exclusion zone");
 
+  const closed = layer("closed");
+  for (const f of snap.basemap.features.filter(f => f.properties?.kind === "closed_area"))
+    for (const ring of rings(f)) el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", class: `closed ${f.properties.type}` }, closed,
+      `${f.properties.name} (${f.properties.type === "closure" ? "fishing closure" : "protected area"})`);
+
   const routes = layer("routes");
-  for (const [asset, stops] of Object.entries(snap.plan)) {
+  for (const [asset, stops] of Object.entries(currentPlan())) {
     if (stops.length < 2) continue;
     // the ship's route draws itself on first load (#278)
     el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), class: `route ${asset}${first && asset === "ship" ? " draw" : ""}`, pathLength: 1 }, routes,
@@ -933,15 +953,16 @@ function drawOverlays(first = false) {
     sq.dataset.id = p.id;
   }
 
-  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...candidates().map(s => s.S), 1e-9);
+  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...candidates().map(s => s.S ?? 0), 1e-9);
   for (const s of candidates()) { // not all sites: a map of everything is not a plan
-    const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS);
-    const tip = `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`;
+    const fish = s.lens === "fisheries", [x, y] = project(s.lon, s.lat), r = fish ? 8 : Math.max(5, 20 * s.S / maxS);
+    const tip = fish ? `${s.id}: ${fishLevel(s)}${s.flag ? "" : ", not significant"}`
+      : `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`;
     const g = el("g", { class: "site-g", tabindex: 0, role: "button", "aria-label": `${tip}. Show in the list` }, sites, tip);
     g.dataset.id = s.id;
     // ring, mark, thin edge: the orange stays visible over every heat-map colour (contrast relief)
     el("circle", { cx: x, cy: y, r, class: "site-ring" }, g);
-    el("circle", { cx: x, cy: y, r, class: s.bh_flag ? "site flagged" : "site" }, g);
+    el("circle", { cx: x, cy: y, r, class: `site${fish ? " fisheries" : ""}${(fish ? s.flag : s.bh_flag) ? " flagged" : ""}` }, g);
     el("circle", { cx: x, cy: y, r: r + 1.6, class: "site-edge" }, g);
     if (s.id === selected) { g.classList.add("selected"); el("circle", { cx: x, cy: y, r: r + 6, class: "sel-ring" }, g); }
     g.onclick = () => selectSite(s.id, { fromMap: true });
@@ -963,6 +984,9 @@ function drawOverlays(first = false) {
 
 // The sites the patrol planner chose from (meta.top_sites, in D1 order); the map and the list draw these, not every site.
 const candidates = () => [...snap.sites].filter(inLens).sort(siteOrder).slice(0, snap.meta.top_sites);
+// The plan for the chosen mission mix (#338): export made every one; the browser only picks it.
+const currentPlan = () => (view.mix && snap.meta.mission_mix?.plans?.[String(view.mix)]) || snap.plan;
+const fishLevel = s => t("fish_level", { y: fmt(s.y_fish, 1), lo: fmt(s.y_fish_lo, 1), hi: fmt(s.y_fish_hi, 1) });
 const pierLabel = id => { const p = snap.piers.find(q => q.id === id); return p ? p.name ?? p.id : id; };
 
 // D1 (#176): p_site ranks sites (highest first), S breaks ties; sites without p_site come after, by S
@@ -976,7 +1000,7 @@ const isExplore = s => s.reason === "explore" || s.exploration === true;
 // Selecting a site links the list and the map both ways (#280).
 function selectSite(id, { fromMap = false } = {}) {
   selected = id;
-  const s = snap.sites.find(q => q.id === id);
+  const s = snap.sites.find(q => q.id === id && inLens(q)) ?? snap.sites.find(q => q.id === id); // ids can repeat across lenses
   if (!s) return;
   if (candidates().findIndex(q => q.id === id) >= TOP_LIST && !view.more) view.more = true;
   drawOverlays(); drawSiteList(); drawTop3();
@@ -989,6 +1013,7 @@ function selectSite(id, { fromMap = false } = {}) {
 
 // A site card for This week and Fisheries watch (#313): plain reason first, numbers behind "Why, in detail".
 function siteCard(s, i) {
+  if (s.lens === "fisheries") return fisheriesCard(s, i);
   const lens = s.lens ?? "dropoff", nm = s.agreement_merged;
   const facts = [nm == null ? null : nm ? t("signals", { n: nm }) : t("no_signals"), t("seen", { n: s.recurrence }),
     s.followup_unobserved ? t("followup_unobserved", { n: s.followup_unobserved }) : null].filter(Boolean).join(" · ");
@@ -1008,6 +1033,27 @@ function siteCard(s, i) {
   return card;
 }
 
+// A fisheries card (#321): the reason, the level against normal with its range, the closed-area chip and the
+// harbours. No drop-off evidence meter or timeline: those were never computed for these cells.
+function fisheriesCard(s, i) {
+  const map = h("button", { type: "button", className: "link-btn state" });
+  map.innerHTML = icon("locate"); map.append(t("show_on_map"));
+  map.onclick = () => selectSite(s.id);
+  const chips = [h("span", { className: "lens-chip fisheries" }, t("lens_fisheries")), h("span", { className: "muted" }, s.id)];
+  if (s.in_closed_area === true) chips.push(h("span", { className: "tag explore" }, t("fish_closed")));
+  if (!s.flag) chips.push(h("span", { className: "tag" }, t("not_significant")));
+  const card = h("article", { className: `site-card${s.id === selected ? " selected" : ""}` },
+    h("div", { className: "lead" }, String(i + 1)),
+    h("div", {}, h("div", { className: "kicker" }, i ? t("topN") : t("top1")),
+      h("div", { className: "headline" }, ...chips),
+      h("div", { className: "why" }, s.reasons[0] ?? ""), h("div", { className: "facts" }, fishLevel(s)),
+      s.in_closed_area === null ? h("div", { className: "facts muted" }, t("fish_closed_na")) : "",
+      pierTimes(s, "fish_harbours"), h("div", { className: "actions" }, map)));
+  card.dataset.id = s.id;
+  card.style.animationDelay = `${i * 60}ms`;
+  return card;
+}
+
 // The three plain checks (#314): filled dot yes, empty dot no, dashed dot not available yet (placeholder, #320).
 function evidenceMeter(s) {
   const c = s.checks ?? {};
@@ -1018,10 +1064,10 @@ function evidenceMeter(s) {
   }));
 }
 
-function pierTimes(s) {
+function pierTimes(s, key = "piers") {
   if (!s.top_piers.length) return "";
   const mins = s.top_pier_minutes ?? [];
-  return h("div", { className: "facts pier-times" }, t("piers", { list: s.top_piers.map((p, i) => mins[i] == null
+  return h("div", { className: "facts pier-times" }, t(key, { list: s.top_piers.map((p, i) => mins[i] == null
     ? t("pier_time_na", { pier: pierLabel(p) }) : t("pier_time", { pier: pierLabel(p), min: Math.round(mins[i]) })).join("; ") }));
 }
 
@@ -1041,7 +1087,7 @@ function numbersDetails(s) {
     h("p", { className: "muted" }, t("numbers_line", { S: fmt(s.S, 2), p: fmt(s.p_perm, 3), n: s.recurrence })));
 }
 
-// "We checked" buttons (#317). PLACEHOLDER: the answers go to a draft file until contract issue 329.
+// "We checked" buttons (#317). The app answers { rows, stored: "stage" | "draft" } (#339).
 async function saveOutcome(id, outcome) {
   const row = { site_id: id, iso_week: snap.meta.week, outcome };
   if (window.pywebview?.api?.record_outcome) return window.pywebview.api.record_outcome(row.site_id, row.iso_week, outcome);
@@ -1067,7 +1113,11 @@ function outcomeButtons(s) {
     const b = h("button", { type: "button", className: "state" }, t(`outcome_${v}`));
     b.dataset.v = v;
     b.onclick = async () => {
-      try { await saveOutcome(s.id, v); (view.outcomes ??= {})[s.id] = v; note.textContent = t("outcome_saved"); }
+      try {
+        const res = await saveOutcome(s.id, v);
+        (view.outcomes ??= {})[s.id] = v;
+        note.textContent = t(res?.stored === "stage" ? "outcome_saved" : "outcome_saved_draft");
+      }
       catch (e) { note.textContent = t("outcome_failed"); }
       paint();
     };
@@ -1084,13 +1134,13 @@ function drawTop3() {
 
 function drawRoute() {
   const box = document.getElementById("route"), f = snap.meta.figures ?? {};
-  const lines = Object.entries(snap.plan).map(([a, st]) => h("div", { className: "route-line" }, h("strong", {}, t(`route_${a}`)),
+  const lines = Object.entries(currentPlan()).map(([a, st]) => h("div", { className: "route-line" }, h("strong", {}, t(`route_${a}`)),
     h("span", { className: "muted" }, st.length > 2
-      ? t("route_stops", { n: st.length - 2, h: fmt(f[`${a}_h`], 1), b: f[`${a}_budget_h`] ?? "–", time: st[0].arrival_utc.slice(11, 16) })
+      ? t("route_stops", { n: st.length - 2, h: fmt(st[st.length - 1].at_h, 1), b: f[`${a}_budget_h`] ?? "–", time: st[0].arrival_utc.slice(11, 16) })
       : t("route_none"))));
   const btn = h("button", { type: "button", className: "tonal-btn state" }, t("route_more"));
   btn.onclick = () => go("plan");
-  box.replaceChildren(...lines, h("p", { className: "muted" }, t("route_from_lens")), btn);
+  box.replaceChildren(...lines, h("p", { className: "muted" }, view.mix ? t("route_from_mix", { p: view.mix }) : t("route_from_lens")), btn);
 }
 
 function drawFisheries() {
@@ -1101,7 +1151,8 @@ function drawFisheries() {
 }
 
 function drawLimits() {
-  const items = [...PHRASES.limits, ...(Object.values(snap.plan).some(st => st[0]?.stand_in) ? [t("limits_stand_in")] : [])];
+  const items = [...(snap.validation?.mode === "quick" ? [t("limits_quick")] : []), ...PHRASES.limits,
+    ...(Object.values(snap.plan).some(st => st[0]?.stand_in) ? [t("limits_stand_in")] : [])];
   document.getElementById("limitsList").replaceChildren(...items.map(x => h("li", {}, x)));
   document.getElementById("printLimits").textContent = PHRASES.limits.slice(0, 4).join(" ");
 }
@@ -1123,15 +1174,18 @@ function drawSiteList() {
     const locate = h("button", { type: "button", className: "link-btn state", title: "Show on the map" });
     locate.innerHTML = icon("locate"); locate.append("Map");
     locate.onclick = () => selectSite(s.id);
-    const head = h("div", { className: "headline" }, h("span", {}, s.id), badge, h("span", { className: "muted" }, `score ${s.S.toFixed(2)} · p = ${s.p_perm.toFixed(3)}`));
-    if (!s.bh_flag) head.append(h("span", { className: "tag" }, "not significant"));
+    const fish = s.lens === "fisheries";
+    const head = h("div", { className: "headline" }, h("span", {}, s.id), fish ? h("span", { className: "lens-chip fisheries" }, t("lens_fisheries")) : badge,
+      h("span", { className: "muted" }, fish ? fishLevel(s) : `score ${s.S.toFixed(2)} · p = ${s.p_perm.toFixed(3)}`));
+    if (!(fish ? s.flag : s.bh_flag)) head.append(h("span", { className: "tag" }, "not significant"));
     head.append(locate);
     const timeline = h("div");
     const more = h("details", {}, h("summary", { className: "state" }, "Why, and what to check"), timeline,
       h("ul", {}, ...s.reasons.slice(1).map(r => h("li", {}, r))),
-      h("p", {}, `Seen ${s.recurrence} time${s.recurrence === 1 ? "" : "s"}` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
+      fish ? h("p", {}, s.top_piers.length ? `Harbours to watch: ${s.top_piers.map(pier).join(", ")}.` : "")
+        : h("p", {}, `Seen ${s.recurrence} time${s.recurrence === 1 ? "" : "s"}` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
         (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pier).join(", ")}.` : ".")));
-    more.addEventListener("toggle", () => { if (more.open && !timeline.childElementCount) timeline.append(siteTimeline(s)); }); // built on first open
+    if (!fish) more.addEventListener("toggle", () => { if (more.open && !timeline.childElementCount) timeline.append(siteTimeline(s)); }); // built on first open
     const li = h("li", {}, lead, h("div", {}, head, h("div", { className: "supporting" }, s.reasons[0] ?? ""), more));
     li.dataset.id = s.id;
     li.style.animationDelay = `${Math.min(i, 10) * 30}ms`;
@@ -1353,7 +1407,7 @@ function scheduleChart(asset, stops, budget) {
 
 function drawPlan() {
   const box = document.getElementById("plan"), fig = snap.meta.figures ?? {};
-  const parts = Object.entries(snap.plan).flatMap(([asset, stops]) => {
+  const parts = Object.entries(currentPlan()).flatMap(([asset, stops]) => {
     if (stops.length <= 2) return [h("h3", {}, asset === "ship" ? "Ship (sea route)" : "Aircraft"), empty("Nothing worth the trip within the time budget.")];
     const card = stops.every(s => s.at_h !== undefined) ? scheduleChart(asset, stops, fig[`${asset}_budget_h`]) : h("h3", {}, asset);
     const list = h("ol", { className: "timeline" }, ...stops.map(s => {
@@ -1374,17 +1428,18 @@ function drawPlan() {
     box.append(h("p", { className: "muted" }, "The base port and start time are stand-ins on simulated data until they are set in config.yaml."));
 }
 
-// Mission mix (#316): the slider only switches between plans export made; a mix with no plan is shown, disabled.
-// PLACEHOLDER: only 0 % fisheries is ready until fisheries data (issue 321) and the patrol.mission_mixes setting exist.
+// Mission mix (#316, #338): the slider only switches between plans export made (meta.mission_mix.plans; 0 % is
+// snap.plan); a mix with no plan is shown, disabled. Switching redraws the route, the schedule and the stops.
 function missionMix() {
   const mm = snap.meta.mission_mix ?? { wanted: [0], ready: [0] };
   const seg = h("div", { className: "seg", role: "radiogroup", "aria-label": t("mix_title") }, ...mm.wanted.map(p => {
-    const b = h("button", { type: "button", role: "radio", className: "state", "aria-checked": String(p === 0) }, t("mix_value", { p }));
+    const b = h("button", { type: "button", role: "radio", className: "state", "aria-checked": String(p === view.mix) }, t("mix_value", { p }));
     b.disabled = !mm.ready.includes(p);
+    b.onclick = () => { view.mix = p; drawPlan(); drawRoute(); drawOverlays(); document.querySelector(`.mix button[aria-checked="true"]`)?.focus(); };
     return b;
   }));
   return h("div", { className: "mix" }, h("h3", {}, t("mix_title")), seg,
-    mm.ready.length < 2 ? h("p", { className: "muted" }, t("mix_na")) : "");
+    h("p", { className: "muted" }, mm.ready.length < 2 ? t("mix_na") : t("mix_ready")));
 }
 
 function drawPiers() {
@@ -1424,6 +1479,8 @@ function drawValidation() {
   const v = snap.validation, box = document.getElementById("validation");
   if (!v) { box.replaceChildren(empty("Validation has not been run (make validate).", "info")); return; }
   const parts = [];
+  // #370: a quick run is never shown as the full result; a report without `mode` is a full run
+  if (v.mode === "quick") parts.push(h("div", { className: "quick-note" }, h("span", { className: "tag explore" }, t("quick_title")), " ", h("span", { className: "muted" }, t("quick_body"))));
   parts.push(v.recall?.length ? recallChart(v.recall) : chartCard("Chance of seeing a boat that is there", "Recall", "", empty("Not available yet."), null));
   parts.push(v.calibration?.length ? calibrationChart(v.calibration, v.brier) : chartCard("Are the probabilities honest?", `Brier ${fmt(v.brier, 3)}`, "", empty("Not available yet."), null));
   if (v.skill?.length) parts.push(skillChart(v.skill));
@@ -1561,6 +1618,7 @@ function setupControls() {
     inshore: '<rect x="3" y="5" width="18" height="14" fill="none" class="inshore" stroke-width="2"/>',
     lane: '<rect x="3" y="5" width="18" height="14" fill="url(#lane)" class="lane-line-svg" stroke-width="0"/><path d="M3 8h18M3 12h18M3 16h18" class="lane-line-svg" stroke-width="1.2"/>',
     sites: '<circle cx="12" cy="12" r="7" class="site flagged"/>',
+    closed: '<rect x="3" y="5" width="18" height="14" class="closed"/>',
     followup: '<path d="M12 4l8 8-8 8-8-8z" class="diamond" stroke-width="2"/>',
     agreement: '<circle cx="6" cy="12" r="2.5" class="dot"/><circle cx="12" cy="12" r="2.5" class="dot"/><circle cx="18" cy="12" r="2.5" class="dot"/>',
     piers: '<rect x="7" y="7" width="10" height="10" class="pier"/>',
