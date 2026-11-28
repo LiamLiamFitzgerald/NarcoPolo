@@ -91,6 +91,9 @@ validate:
   injection_n_per_pass: 10   # TODO(P1): not in the spec
   injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
   visible_pickup_length_m: [15, 24]  # TODO(P1) #266: pick-ups the radar sees (sim p_det ~0.95 at 20 m) that match still counts as small or medium (25-50 m come out "large" and leave dark_small)
+  fixed_target_history: 8    # TODO(P1) #334: passes in the per-pixel median (earlier passes only)
+  fixed_target_p_fa: 1.0e-6  # TODO(P1) #334: candidate CFAR p_fa on the median-ratio image (a lower threshold than p4.p_fa)
+  persistence_radius_m: 50   # #334: a candidate this close to a fixed target is on it (GFW's persistence radius, the cited start)
   pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
 
 # P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
@@ -147,9 +150,16 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   slowdown_rate_hot: 1.0         # ship slowdowns per cell-day in the anchorage and port zones
   slowdown_rate_cold: 0.01       # ... everywhere else
   pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
-  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fishing: 11, illegal_fishing: 12}
+  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fixed_targets: 11, fishing: 12, illegal_fishing: 13}
   stand_in_sites: 15         # TODO(P1) #104: extra fuse/sites rows with no drops, so P7 has 16+ sites to rank and route
   site_gap_m: 4000           # A2: no site within 4 km of another
+  fixed_targets:             # TODO(P1) #334: none of these are in the spec; a stack for the fixed-target suppression test
+    size_px: 256             # 2.56 km square at 10 m
+    n_passes: 16
+    n_fixed: 30              # rocks, buoys, fish-farm cages: same pixels every pass
+    fixed_db: 20             # peak over the sea mean, = sim/scenes.py SHIP_DB
+    boats_per_pass: 15
+    boat_db: [3, 12]         # small-boat peak over the sea mean at the two ends of pickup_length_m, linear in length
   # #346 fishing boats and planted illegal fishing (fisheries lens #321). TODO(P1): none of these values is in a spec;
   # chosen so the simulator has a steady medium-size fleet and an illegal-fishing surplus the weekly lens can find
   fishing_rate_inshore: 0.5      # TODO(P1): medium-size fishing boats per full-sea cell-day where inshore_frac = 1

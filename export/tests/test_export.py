@@ -19,6 +19,7 @@ from export import (
     _legends,
     _provenance,
     _scan,
+    _timeline,
     _weeks,
     basemap,
     build_snapshot,
@@ -413,3 +414,52 @@ def test_cells_carry_a_plain_ratio_and_sites_a_lens(world):
         assert 2 ** c["obs_vs_exp"] == pytest.approx(c["ratio"], rel=2e-3, abs=2e-4)
     assert all(c["ratio"] is None for c in rows if c["obs_vs_exp"] is None)  # unobserved stays None
     assert {s["lens"] for s in snap["sites"]} == {"dropoff"}  # fisheries sites arrive with #321
+
+
+def test_timeline_lists_each_slowdown_with_the_passes_after_it():
+    # T = 27 Nov. Site a: slowdowns 4 and 20 days ago; the old one is before the shown weeks (from 10 Nov).
+    # Passes over a: 24 Nov calm, 25 Nov rough, 26 Nov not covered (no look); site b: no pass at all.
+    links = pd.DataFrame(
+        {"site_id": ["a", "a", "b"], "L": [0.4, 0.9, 0.0], "age_days": [4.0, 20.0, 2.0]}
+    )
+    ex = pd.DataFrame({"cell_id": ["a", "a", "a"], "time_utc": [_t("2026-11-24"), _t("2026-11-25"), _t("2026-11-26")],
+                       "covered_frac": [0.6, 0.6, 0.0], "exposure_small": [0.5, 0.0, 0.0]})  # fmt: skip
+    tl = _timeline(links, ex, date(2026, 11, 27), date(2026, 11, 10), 7)
+    assert tl["a"] == [{"date": "2026-11-23", "L": 0.4, "passes": [
+        {"date": "2026-11-24", "state": "calm", "seen": None},
+        {"date": "2026-11-25", "state": "rough", "seen": None}]}]  # fmt: skip
+    assert tl["b"] == [
+        {"date": "2026-11-25", "L": 0.0, "passes": []}
+    ]  # no pass: an empty list, not "nothing seen"
+    short = _timeline(
+        links, ex, date(2026, 11, 27), date(2026, 11, 10), 1
+    )  # link_days cuts the window
+    assert [p["date"] for p in short["a"][0]["passes"]] == ["2026-11-24"]
+
+
+def test_site_cards_carry_placeholder_checks_and_pier_times_until_p6_writes_them(world):
+    _, snap = world
+    for s in snap["sites"]:
+        assert s["checks"] == {"rare_slowdown": None, "boats_after": None, "outside_fishing": None}
+        assert s["top_pier_minutes"] == [None] * len(s["top_piers"])  # PLACEHOLDER (#320)
+        assert all(p["seen"] is None for e in s["timeline"] for p in e["passes"])
+        assert all(e["date"] >= "2026-11-02" for e in s["timeline"])  # within the shown weeks
+
+
+def test_plan_stops_carry_their_lens_and_only_the_zero_mix_is_ready(world):
+    _, snap = world
+    ship = snap["plan"]["ship"]
+    assert "lens" not in ship[0] and ship[1]["lens"] == "dropoff" and ship[1]["reason"] == "explore"
+    assert snap["meta"]["mission_mix"] == {"wanted": [0], "ready": [0]}  # PLACEHOLDER (#316, #321)
+
+
+def test_headline_figures_match_a_hand_count_on_the_simulator(world):
+    # #279: every figure in the strip comes from the snapshot, checked against its source here
+    _, snap = world
+    fig, sites = snap["meta"]["figures"], io.read_stage("fuse/sites")
+    cfg = load(io.CONFIG_PATH)[0]["patrol"]
+    assert fig["sites"] == len(sites) and fig["flagged"] == int(sites["bh_flag"].sum())
+    assert fig["candidates"] == min(cfg["top_sites"], len(sites))
+    assert fig["aircraft_h"] is None  # the fixture plan has no aircraft stops: unknown, not 0 h
+    week = snap["cells"]["weeks"][snap["meta"]["week"]]
+    assert fig["observed_share"] == pytest.approx(sum(c["observed"] for c in week) / len(week))

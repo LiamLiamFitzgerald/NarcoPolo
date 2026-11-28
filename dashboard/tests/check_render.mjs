@@ -140,6 +140,18 @@ for (const mode of ["light", "dark"]) {
   check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 2.3 })) === "About 2.3× more small boats than normal this week", "plain ratio wording (more)");
   check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 0.5 })) === "About 2.0× fewer small boats than normal this week", "plain ratio wording (fewer)");
   check(await page.locator("#limitsList li").count() >= 6, "limits list");
+  // site card evidence (#314), "we checked" (#317) and the mission mix (#316); placeholders read "not available yet"
+  const card = page.locator("#top3 .site-card").first();
+  check(await card.locator(".meter li").count() === 3, "site card: three evidence checks");
+  if (base.sites.every(s => Object.values(s.checks ?? {}).every(v => v === null)))
+    check(await card.locator(".meter li.na").count() === 3, "site card: placeholder checks say not available yet");
+  check(await card.locator(".outcome button").count() === 3, "site card: three 'we checked' answers");
+  await card.locator(".outcome button").nth(1).click();
+  check((await card.locator(".outcome-note").textContent()).startsWith("Not saved"), "opened as a file, an answer is not claimed as saved");
+  await show("plan");
+  check(await page.locator("#plan .mix button[role=radio]").count() === (base.meta.mission_mix?.wanted.length ?? 1), "plan: one mix button per preset");
+  check(await page.locator("#plan .mix button:disabled").count() === (base.meta.mission_mix?.wanted ?? [0]).filter(p => !(base.meta.mission_mix?.ready ?? [0]).includes(p)).length, "plan: mixes without a plan are disabled");
+  await show("this-week");
 
   // 4c. the Friday briefing prints to one A4 page (#319)
   const pdf = await page.pdf({ format: "A4", printBackground: true });

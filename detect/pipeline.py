@@ -89,11 +89,12 @@ def run_all(model: Any, exposure: pd.DataFrame, *, raw: Path | None = None) -> p
     """Every pass in coverage/exposure -> the detect/detections frame (schema-checked; run() writes it).
 
     Candidates in cells where that pass is not calm (or not covered) are dropped: those cells have small-boat
-    exposure 0. model is the fitted fit_pboat result.
+    exposure 0, so a pass with no calm cell is not read at all. A calm pass without a scene is an error: its
+    cells have exposure, and no detections there would read as zero boats. model is the fitted fit_pboat result.
     """
-    frames = [run_pass(p, root=raw) for p in exposure["pass_id"].unique()]
-    dets = pd.concat(frames, ignore_index=True)
     calm = exposure.loc[exposure["calm"].astype(bool), ["cell_id", "pass_id"]].drop_duplicates()
+    frames = [run_pass(p, root=raw) for p in calm["pass_id"].unique()]
+    dets = pd.concat(frames, ignore_index=True)
     dets = dets.merge(calm, on=["cell_id", "pass_id"], how="inner")
     dets["p_boat"] = predict_pboat(model, features(dets, exposure)) if len(dets) else []
     return SCHEMAS["detect/detections"].validate(dets[DETECTIONS_COLUMNS])

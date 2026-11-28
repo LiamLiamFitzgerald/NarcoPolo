@@ -377,6 +377,27 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 .site-card.selected { outline: 2px solid var(--md-primary); }
 .site-card .why { font: var(--t-body-medium); margin-top: var(--sp-1); }
 .site-card .facts { font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
+.meter { list-style: none; margin: var(--sp-2) 0 0; padding: 0; font: var(--t-body-small); }
+.meter li { display: grid; grid-template-columns: 10px minmax(0, 1fr); align-items: baseline; gap: var(--sp-2); min-height: 20px; }
+.meter .dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--md-primary); flex: none; }
+.meter .yes .dot { background: var(--md-primary); }
+.meter .na .dot { border-style: dashed; border-color: var(--md-outline); }
+.card-more { font: var(--t-body-small); margin-top: var(--sp-2); }
+.card-more summary { cursor: pointer; color: var(--md-primary); width: fit-content; border-radius: var(--shape-sm); }
+.evidence-tl { list-style: none; margin: var(--sp-1) 0 0; padding: 0; display: grid; gap: var(--sp-1); }
+.evidence-tl li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+.evidence-tl .slow { font-weight: 500; margin-right: var(--sp-1); }
+.evidence-tl .pass { display: inline-grid; place-items: center; min-width: 26px; height: 22px; border-radius: var(--shape-full); font-size: 11px; }
+.evidence-tl .pass.calm { border: 2px solid var(--md-primary); }
+.evidence-tl .pass.rough { border: 2px dashed var(--md-outline); color: var(--md-on-surface-variant); }
+.outcomes { margin-top: var(--sp-2); }
+.outcome { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
+.outcome button { font: var(--t-label-medium); min-height: 32px; padding: 0 var(--sp-3); border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline); background: transparent; color: var(--md-on-surface-variant); cursor: pointer; }
+.outcome button[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+.outcome-note:empty { display: none; }
+.mix { margin-bottom: var(--sp-4); }
+.mix button:disabled { opacity: .45; cursor: not-allowed; }
 .site-card .actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
 .lens-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); min-height: 22px; border-radius: var(--shape-full);
   font: var(--t-label-medium); background: var(--md-primary-container); color: var(--md-on-primary-container); }
@@ -392,7 +413,7 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 @page { size: A4; margin: 12mm; }
 @media print {
   body { background: none; font-size: 11px; }
-  .appbar, .tabs, .skip, .footer, .map-tools, #toggles, .tip, dialog, .screen:not([data-screen="this-week"]), .site-card .actions, #play, #prev, #next, .toolbar, .chart-card .seg { display: none !important; }
+  .appbar, .tabs, .skip, .footer, .map-tools, #toggles, .tip, dialog, .screen:not([data-screen="this-week"]), .site-card .actions, .site-card .outcomes, .site-card .card-more, .site-card .meter, #play, #prev, #next, .toolbar, .chart-card .seg { display: none !important; }
   .screen[data-screen="this-week"] { display: block !important; }
   .print-head, .print-only { display: block; margin: 0 0 var(--sp-2); }
   .card, .figure, .site-card, .chart-card { box-shadow: none !important; border: 1px solid var(--md-outline-variant); break-inside: avoid; }
@@ -523,7 +544,7 @@ const OVERLAYS = [
   ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
 ];
 let snap, ext, H, timer = null, selected = null;
-const view = { map: "normal", week: null, more: false };
+const view = { map: "normal", week: null, more: false, outcomes: {} };
 const vb = { x: 0, y: 0, w: W, h: 260 }; // the map's current viewBox (#280)
 const TOP_LIST = 3; // Design principle 13: a weekly top 3, the rest one click away
 const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
@@ -560,6 +581,25 @@ const PHRASES = {
   ],
   limits_stand_in: "On simulated data the base port and start time are stand-ins until they are set in config.yaml.",
   print_meta: "{label} data · as of {T} · week {week} · lens: {lens}",
+  // site card evidence (#314); "not available yet" marks the placeholders waiting on issue 320
+  evidence: "Evidence", na: "not available yet",
+  check_rare_slowdown: "A ship slowed where ships rarely slow", check_boats_after: "Small boats seen nearby afterwards",
+  check_outside_fishing: "Outside normal fishing activity",
+  check_yes: "yes", check_no: "no",
+  timeline: "Last four weeks", timeline_none: "No ship slowdown here in the last four weeks.",
+  slowdown: "Ship slowed {date}", pass_calm: "{date}: calm pass, small boats visible (whether one was seen: not available yet)",
+  pass_rough: "{date}: rough pass, small boats unobserved", no_pass: "no radar pass afterwards: follow-up unobserved",
+  pier_time: "{pier}, about {min} min by small boat", pier_time_na: "{pier} (travel time not available yet)",
+  numbers: "Numbers", numbers_line: "score {S} · p = {p} · seen {n} time(s)",
+  // "we checked" (#317); saved to a draft file until the outcomes file is agreed (issue 329)
+  outcome_q: "We checked this site this week:", outcome_found_something: "Found something",
+  outcome_found_nothing: "Found nothing", outcome_not_visited: "Not visited",
+  outcome_saved: "Saved. Next week's plan will use it once patrol reads outcomes (issue 329).",
+  outcome_failed: "Not saved: open the dashboard window or the local server to record answers.",
+  // plan (#316)
+  mix_title: "Mission mix", mix_value: "{p} % fisheries",
+  mix_na: "Only the 0 % fisheries plan exists until fisheries data arrives (issue 321).",
+  reason_exploit: "best bet", reason_explore: "exploration visit",
 };
 // phrases:end
 const t = (key, vars = {}) => String(PHRASES[key]).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
@@ -951,8 +991,7 @@ function selectSite(id, { fromMap = false } = {}) {
 function siteCard(s, i) {
   const lens = s.lens ?? "dropoff", nm = s.agreement_merged;
   const facts = [nm == null ? null : nm ? t("signals", { n: nm }) : t("no_signals"), t("seen", { n: s.recurrence }),
-    s.followup_unobserved ? t("followup_unobserved", { n: s.followup_unobserved }) : null,
-    s.top_piers.length ? t("piers", { list: s.top_piers.map(pierLabel).join(", ") }) : null].filter(Boolean).join(" · ");
+    s.followup_unobserved ? t("followup_unobserved", { n: s.followup_unobserved }) : null].filter(Boolean).join(" · ");
   const map = h("button", { type: "button", className: "link-btn state" });
   map.innerHTML = icon("locate"); map.append(t("show_on_map"));
   map.onclick = () => selectSite(s.id);
@@ -962,10 +1001,80 @@ function siteCard(s, i) {
     h("div", { className: "lead" }, String(i + 1)),
     h("div", {}, h("div", { className: "kicker" }, i ? t("topN") : t("top1")),
       h("div", { className: "headline" }, h("span", { className: `lens-chip ${lens}` }, t(`lens_${lens}`)), h("span", { className: "muted" }, s.id)),
-      h("div", { className: "why" }, s.reasons[0] ?? ""), h("div", { className: "facts" }, facts), h("div", { className: "actions" }, map, more)));
+      h("div", { className: "why" }, s.reasons[0] ?? ""), evidenceMeter(s), pierTimes(s), h("div", { className: "facts" }, facts),
+      evidenceTimeline(s), numbersDetails(s), outcomeButtons(s), h("div", { className: "actions" }, map, more)));
   card.dataset.id = s.id;
   card.style.animationDelay = `${i * 60}ms`;
   return card;
+}
+
+// The three plain checks (#314): filled dot yes, empty dot no, dashed dot not available yet (placeholder, #320).
+function evidenceMeter(s) {
+  const c = s.checks ?? {};
+  return h("ul", { className: "meter", "aria-label": t("evidence") }, ...["rare_slowdown", "boats_after", "outside_fishing"].map(k => {
+    const v = c[k] ?? null, state = v === null ? "na" : v ? "yes" : "no";
+    return h("li", { className: state }, h("span", { className: "dot", "aria-hidden": "true" }),
+      h("span", {}, t(`check_${k}`), h("span", { className: "muted" }, ` · ${v === null ? t("na") : t(v ? "check_yes" : "check_no")}`)));
+  }));
+}
+
+function pierTimes(s) {
+  if (!s.top_piers.length) return "";
+  const mins = s.top_pier_minutes ?? [];
+  return h("div", { className: "facts pier-times" }, t("piers", { list: s.top_piers.map((p, i) => mins[i] == null
+    ? t("pier_time_na", { pier: pierLabel(p) }) : t("pier_time", { pier: pierLabel(p), min: Math.round(mins[i]) })).join("; ") }));
+}
+
+// Slowdown, then each radar pass in the link window after it (#314). Unobserved follow-up is said, never "nothing came".
+function evidenceTimeline(s) {
+  const tl = (s.timeline ?? []).slice(-3);
+  const body = tl.length ? h("ol", { className: "evidence-tl" }, ...tl.map(e => h("li", {},
+    h("span", { className: "slow" }, t("slowdown", { date: e.date.slice(5) })),
+    ...(e.passes.length ? e.passes.map(p => h("span", { className: `pass ${p.state}`, "data-tip": t(`pass_${p.state}`, { date: p.date.slice(5) }),
+      "aria-label": t(`pass_${p.state}`, { date: p.date.slice(5) }) }, p.date.slice(8))) : [h("span", { className: "muted" }, t("no_pass"))]))))
+    : h("p", { className: "muted" }, t("timeline_none"));
+  return h("details", { className: "card-more" }, h("summary", { className: "state" }, t("timeline")), body, siteTimeline(s));
+}
+
+function numbersDetails(s) {
+  return h("details", { className: "card-more" }, h("summary", { className: "state" }, t("numbers")),
+    h("p", { className: "muted" }, t("numbers_line", { S: fmt(s.S, 2), p: fmt(s.p_perm, 3), n: s.recurrence })));
+}
+
+// "We checked" buttons (#317). PLACEHOLDER: the answers go to a draft file until contract issue 329.
+async function saveOutcome(id, outcome) {
+  const row = { site_id: id, iso_week: snap.meta.week, outcome };
+  if (window.pywebview?.api?.record_outcome) return window.pywebview.api.record_outcome(row.site_id, row.iso_week, outcome);
+  if (location.protocol === "file:") throw new Error("not saved");
+  const r = await fetch("/outcomes.json", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) });
+  if (!r.ok) throw new Error("not saved");
+  return r.json();
+}
+
+async function loadOutcomes() {
+  if (!window.pywebview?.api?.get_outcomes && location.protocol === "file:") return; // opened as a file: no place to keep answers
+  try {
+    const rows = window.pywebview?.api?.get_outcomes ? await window.pywebview.api.get_outcomes() : await (await fetch("/outcomes.json")).json();
+    view.outcomes = Object.fromEntries(rows.filter(r => r.iso_week === snap.meta.week).map(r => [r.site_id, r.outcome]));
+  } catch (e) { view.outcomes = {}; }
+}
+
+function outcomeButtons(s) {
+  const note = h("p", { className: "muted outcome-note", "aria-live": "polite" });
+  const group = h("div", { className: "outcome", role: "group", "aria-label": t("outcome_q") });
+  const paint = () => group.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(view.outcomes?.[s.id] === b.dataset.v)));
+  for (const v of ["found_something", "found_nothing", "not_visited"]) {
+    const b = h("button", { type: "button", className: "state" }, t(`outcome_${v}`));
+    b.dataset.v = v;
+    b.onclick = async () => {
+      try { await saveOutcome(s.id, v); (view.outcomes ??= {})[s.id] = v; note.textContent = t("outcome_saved"); }
+      catch (e) { note.textContent = t("outcome_failed"); }
+      paint();
+    };
+    group.append(b);
+  }
+  paint();
+  return h("div", { className: "outcomes" }, h("div", { className: "facts" }, t("outcome_q")), group, note);
 }
 
 function drawTop3() {
@@ -1252,15 +1361,30 @@ function drawPlan() {
       if (s.id === "base") tags.push(h("span", { className: "tag" }, s.stand_in ? "base · simulated stand-in" : "base"));
       if (isExplore(s)) tags.push(h("span", { className: "tag explore" }, "exploration visit"));
       if (s.not_significant) tags.push(h("span", { className: "tag" }, "not significant"));
+      if (s.lens) tags.push(h("span", { className: `lens-chip ${s.lens}` }, t(`lens_${s.lens}`)));
+      if (s.reason === "exploit") tags.push(h("span", { className: "tag" }, t("reason_exploit")));
       return h("li", {}, h("div", { className: "time" }, `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC`),
         h("div", { className: "headline" }, h("span", {}, s.id === "base" ? "Base" : s.id), ...tags),
         s.id === "base" ? "" : h("div", { className: "supporting" }, `${s.dwell_h} h on station`));
     }));
     return [card, h("details", {}, h("summary", { className: "state" }, `All ${stops.length} stops`), list)];
   });
-  box.replaceChildren(...parts);
+  box.replaceChildren(missionMix(), ...parts);
   if (Object.values(snap.plan).some(st => st[0]?.stand_in))
     box.append(h("p", { className: "muted" }, "The base port and start time are stand-ins on simulated data until they are set in config.yaml."));
+}
+
+// Mission mix (#316): the slider only switches between plans export made; a mix with no plan is shown, disabled.
+// PLACEHOLDER: only 0 % fisheries is ready until fisheries data (issue 321) and the patrol.mission_mixes setting exist.
+function missionMix() {
+  const mm = snap.meta.mission_mix ?? { wanted: [0], ready: [0] };
+  const seg = h("div", { className: "seg", role: "radiogroup", "aria-label": t("mix_title") }, ...mm.wanted.map(p => {
+    const b = h("button", { type: "button", role: "radio", className: "state", "aria-checked": String(p === 0) }, t("mix_value", { p }));
+    b.disabled = !mm.ready.includes(p);
+    return b;
+  }));
+  return h("div", { className: "mix" }, h("h3", {}, t("mix_title")), seg,
+    mm.ready.length < 2 ? h("p", { className: "muted" }, t("mix_na")) : "");
 }
 
 function drawPiers() {
@@ -1501,6 +1625,7 @@ function showError() {
   try { snap = await loadSnapshot(); }
   catch (e) { showError(); return; }
   view.week = snap.meta.week;
+  await loadOutcomes();
   setExtent(); enableControls(); drawBasemap(); drawBanner(); drawFigures(); drawHeatmap(view.map, view.week);
   drawOverlays(true); drawSiteList(); drawTop3(); drawRoute(); drawPlan(); drawPiers(); drawFisheries(); drawValidation(); drawTrends(); drawLimits(); drawFooter();
   route();

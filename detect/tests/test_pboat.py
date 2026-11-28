@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import numpy as np
 import pandas as pd
+import statsmodels.api as sm
 
 from core.split import Split
 from detect.pboat import FEATURES, features, fit_pboat, predict_pboat
@@ -22,9 +23,9 @@ def _injections(n, seed, flip_after_cut=False):
     df["date"] = df["time_utc"].dt.date  # core.Split splits on the date
     eta = BETA["const"] + sum(BETA[f] * df[f].astype(float) for f in FEATURES)
     df["true_p"] = 1 / (1 + np.exp(-eta))
-    df["is_boat"] = rng.random(n) < df["true_p"]
+    df["label"] = rng.random(n) < df["true_p"]
     if flip_after_cut:
-        df.loc[df["time_utc"] >= CUT, "is_boat"] = ~df["is_boat"]
+        df.loc[df["time_utc"] >= CUT, "label"] = ~df["label"]
     return df
 
 
@@ -33,25 +34,25 @@ def test_fit_recovers_known_coefficients_and_is_calibrated_out_of_sample():
     split = Split(CUT.date(), test_days=23)
     m = fit_pboat(df, split)
     for k, b in BETA.items():
-        assert abs(m.params[k] - b) < 4 * m.bse[k], k
+        assert abs(m.logit.params[k] - b) < 4 * m.logit.bse[k], k
     test = split.test(df)
     p = predict_pboat(m, test)
     rel = (
-        pd.DataFrame({"p": p, "y": test["is_boat"].to_numpy()})
+        pd.DataFrame({"p": p, "y": test["label"].to_numpy()})
         .assign(bin=pd.cut(p, np.linspace(0, 1, 11).tolist()))
         .groupby("bin", observed=True)
         .agg(["mean", "size"])
     )
     big = rel[("p", "size")] >= 100
     assert (abs(rel[("p", "mean")] - rel[("y", "mean")])[big] < 0.05).all()
-    assert np.mean((p - test["is_boat"]) ** 2) < np.mean(
-        (test["is_boat"].mean() - test["is_boat"]) ** 2
-    )
+    assert np.mean((p - test["label"]) ** 2) < np.mean((test["label"].mean() - test["label"]) ** 2)
 
 
 def test_fit_never_sees_data_after_the_cutoff():
-    a = fit_pboat(_injections(5000, 1), Split(CUT.date(), test_days=23)).params
-    b = fit_pboat(_injections(5000, 1, flip_after_cut=True), Split(CUT.date(), test_days=23)).params
+    a = fit_pboat(_injections(5000, 1), Split(CUT.date(), test_days=23)).logit.params
+    b = fit_pboat(
+        _injections(5000, 1, flip_after_cut=True), Split(CUT.date(), test_days=23)
+    ).logit.params
     assert np.allclose(a, b)
 
 
@@ -66,4 +67,35 @@ def test_features_join_wind_on_cell_and_pass():
         list(X.index) == [5, 6, 7]
         and list(X["wind_ms"]) == [1.0, 2.0, 3.0]
         and list(X.columns) == FEATURES
+    )
+
+
+def _reliability_gap(p, y):
+    rel = pd.DataFrame({"p": p, "y": y}).assign(bin=pd.cut(p, np.linspace(0, 1, 11).tolist()))
+    g = rel.groupby("bin", observed=True).agg(["mean", "size"])
+    big = g[("p", "size")] >= 100
+    return float(abs(g[("p", "mean")] - g[("y", "mean")])[big].max())
+
+
+def test_isotonic_recalibration_fixes_a_miscalibrated_logit():
+    """True p = 0.3 sigmoid(eta): a ceiling the Logit cannot fit, monotone in its output, so the isotonic map can."""
+    df = _injections(40_000, 2)
+    df["label"] = np.random.default_rng(3).random(len(df)) < 0.3 * df["true_p"]
+    split = Split(CUT.date(), test_days=23)
+    m = fit_pboat(df, split)
+    test = split.test(df)
+    raw = np.asarray(
+        m.logit.predict(sm.add_constant(test[FEATURES].astype(float), has_constant="add"))
+    )
+    cal = predict_pboat(m, test)
+    y = test["label"].to_numpy(float)
+    assert _reliability_gap(cal, y) < 0.05 < _reliability_gap(raw, y)
+    assert np.mean((cal - y) ** 2) < np.mean((raw - y) ** 2)
+
+
+def test_one_training_date_keeps_the_logit_output():
+    df = _injections(3000, 4).assign(date=(CUT - pd.Timedelta(days=3)).date())
+    m = fit_pboat(df, Split(CUT.date()))
+    assert np.allclose(
+        predict_pboat(m, df), m.logit.predict(sm.add_constant(df[FEATURES].astype(float)))
     )

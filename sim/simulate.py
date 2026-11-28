@@ -291,7 +291,7 @@ def _fisheries(
     cfg: Config,
     f: pd.DataFrame,
     mu: np.ndarray,
-    dates: list[date],
+    dates: dict[int, date],
     fine: pd.DataFrame,
     travel: pd.DataFrame,
     piers: pd.DataFrame,
@@ -301,11 +301,12 @@ def _fisheries(
     y_fish > 1. The range uses the daily Poisson 90% bounds summed over the week. in_closed_area: the cell lies in a
     simulated closed area (the sim's areas are whole cells). Harbours: the 3 road-access piers nearest by sea."""
     keep = f["event_type"].to_numpy() == "dark_medium"
-    mondays = np.array([d - timedelta(days=d.weekday()) for d in dates], dtype=object)
     m = pd.DataFrame(
         {
             "cell_id": f["cell_id"].to_numpy()[keep],
-            "week": mondays[f["day"].to_numpy()[keep]],
+            "week": [
+                dates[d] - timedelta(days=dates[d].weekday()) for d in f["day"].to_numpy()[keep]
+            ],
             "count": f["count"].to_numpy()[keep],
             "mu": mu[keep],
             "lo": poisson.ppf(0.05, mu[keep]),
@@ -371,6 +372,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])
+    # #273: ships (and so slowdowns) cover the whole ship history, as the real GFW fetch does; radar stays at `days`.
+    # Day numbers before the radar start are negative: h0 = days - ship_history_days.
+    h0 = min(0, days - int(config["ship_history_days"]))
     x0, y0 = _origin()
     m = _make_map(config)
     fine, cells, piers, areas = m["fine"], m["cells"], m["piers"], m["closed_areas"]
@@ -409,9 +413,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     ship_rate = np.where(hot, s["slowdown_rate_hot"], s["slowdown_rate_cold"])
     # rates are per full sea cell (docs/specs/P3.md), and slowdown exposure is sea_frac, so a 60%-sea shore cell gets
     # 60% of the slowdowns; otherwise its expected count is 0.6 of its true one
-    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days, n)))
+    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days - h0, n)))
     sd, sci = np.nonzero(sc)
-    sd, sci = np.repeat(sd, sc[sd, sci]), np.repeat(sci, sc[sd, sci])
+    sd, sci = np.repeat(sd, sc[sd, sci]) + h0, np.repeat(sci, sc[sd, sci])
     ns = len(sd)
     ships = pd.DataFrame(
         {
@@ -602,7 +606,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     for sh in ships[
         ~ships["planted"]
     ].itertuples():  # a bright ship leaves a ghost at the ambiguity offset
-        k = pass_of_day.get(int(sh.day), -1)
+        k = pass_of_day.get(int(np.floor(sh.day)), -1)
         if k >= 0 and passes["a"][k] <= (sh.x_m - x0) / FINE <= passes["b"][k]:
             rows.append(
                 (
@@ -726,7 +730,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     events["day"] = (
         (events["time_utc"] - pd.Timestamp(start, tz="UTC")).dt.total_seconds() // 86400
     ).astype(int)
-    dates = [start + timedelta(days=int(i)) for i in range(days)]
+    dates = {i: start + timedelta(days=i) for i in range(h0, days)}
     ex_day = (
         pd.DataFrame(
             {
@@ -738,9 +742,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         .groupby(["cell_id", "day"])["e"]
         .sum()
     )
-    full = pd.MultiIndex.from_product([cell_ids, range(days)], names=["cell_id", "day"])
     parts = []
     for et in ("dark_small", "slowdown", "dark_medium"):
+        span = range(h0, days) if et == "slowdown" else range(days)  # ship history vs radar
+        full = pd.MultiIndex.from_product([cell_ids, span], names=["cell_id", "day"])
         c = (
             events[events["event_type"] == et]
             .groupby(["cell_id", "day"])["p"]
@@ -751,7 +756,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             ex_day.reindex(full, fill_value=0.0)  # dark_medium: the same calm-pass exposure (#345)
             if et != "slowdown"
             else pd.Series(
-                np.tile(fine["sea_frac"].to_numpy()[:, None], (1, days)).ravel(), index=full
+                np.tile(fine["sea_frac"].to_numpy()[:, None], (1, len(span))).ravel(), index=full
             )
         )
         parts.append(pd.DataFrame({"count": c, "exposure": e, "event_type": et}).reset_index())
@@ -801,9 +806,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         * (0.75 * pdet_fish)[:, None]
     )
     et_ = f["event_type"].to_numpy()
+    d_ = np.where(et_ == "slowdown", 0, f["day"].to_numpy())  # slowdown days may be < 0
     rate = np.select(
         [et_ == "dark_small", et_ == "dark_medium"],
-        [small_rate[f["day"].to_numpy(), ci_], fish_rate[f["day"].to_numpy(), ci_]],
+        [small_rate[d_, ci_], fish_rate[d_, ci_]],
         ship_rate[ci_],
     )
     mu = f["exposure"].to_numpy() * rate
@@ -1029,7 +1035,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     fb = fishing["boats"].drop(columns="ais")
     world = SimWorld(
         config, seed, start, days, fine, weather, passes,
-        pd.concat([boats, fb], ignore_index=True), ships, detections,
+        pd.concat([boats, fb], ignore_index=True), ships, detections, history_start=h0,
     )  # fmt: skip
     write_scenes(world)
     write_static(world)

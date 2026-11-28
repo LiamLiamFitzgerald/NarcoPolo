@@ -16,6 +16,10 @@ _SPEC: dict[str, Any] = {
     "match_gate_m": 500,
     "match_big_cost": 1e9,  # spec: large finite cost, scipy can reject inf
     "presence_slow_kn": 2,  # issue 3 / pseudo-codebase: slowest GFW bin, < 2 kn
+    # TODO(P1): config keys. #239 decision (Liam, 28 Nov 10:50): cargo + carrier (tankers assumed inside cargo),
+    # GFW speed_bin label "<2" as P2 writes it
+    "presence_vessel_types": ["cargo", "carrier"],
+    "presence_slow_bins": ["<2"],
     "slow_kn": 3,
     "cruise_kn": 8,
     "slow_min": 20,
