@@ -1,4 +1,6 @@
 import json
+import struct
+import zlib
 from datetime import UTC, date, datetime
 
 import numpy as np
@@ -11,8 +13,10 @@ from core.config import load
 from core.crs import to_utm
 from core.schemas import check_json
 from export import (
+    _backdrop,
     _legends,
     _provenance,
+    _scan,
     _weeks,
     basemap,
     build_snapshot,
@@ -23,6 +27,29 @@ from export import (
 from sim.simulate import simulate
 
 WEEK = "2026-W48"  # Monday 2026-11-23 to Sunday 2026-11-29
+
+
+def _png(w: int = 4, h: int = 2) -> bytes:
+    """A valid 8-bit greyscale PNG, w x h, a left-to-right gradient."""
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    rows = b"".join(b"\x00" + bytes(255 * x // max(w - 1, 1) for x in range(w)) for _ in range(h))
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
+BACKDROP_META = {
+    "bounds": [-10.6, 51.1, -7.9, 51.95],
+    "crs": "EPSG:4326",
+    "from": "2026-08-30",
+    "to": "2026-11-27",
+    "n_scenes": 30,
+    "attribution": "Contains modified Copernicus Sentinel data 2026",
+}
 
 
 def _t(day: str) -> pd.Timestamp:
@@ -150,6 +177,11 @@ def world(tmp_path_factory):
         "aircraft": [],
     }  # fmt: skip
     io.write_json_stage("patrol/plan", plan, "simulated")
+    ref = io.stage_path(
+        "reference/cells"
+    ).parent  # the radar backdrop P3 will write (contract #263)
+    (ref / "radar_backdrop.png").write_bytes(_png())
+    (ref / "radar_backdrop.json").write_text(json.dumps(BACKDROP_META))
     (root / "reports").mkdir()
     (root / "reports" / "validation.json").write_text(json.dumps({"brier": 0.1, "recall": []}))
     yield root, build_snapshot()
@@ -267,3 +299,36 @@ def test_snapshot_carries_legends_and_the_overlay_layers(world):
     assert set(snap["cells"]["layers"]["inshore"]) <= geom
     breaks = snap["cells"]["legends"]["normal"]["breaks"]
     assert breaks == sorted(set(breaks)) and len(breaks) >= 2
+
+
+def test_backdrop_is_an_embedded_png_with_its_bounds_and_attribution():
+    bd = _backdrop(_png(), BACKDROP_META)
+    assert bd["image"].startswith("data:image/png;base64,")
+    assert bd["bounds"] == BACKDROP_META["bounds"] and "Copernicus" in bd["attribution"]
+    assert (bd["from"], bd["to"]) == ("2026-08-30", "2026-11-27")
+    with pytest.raises(ValueError, match="PNG"):
+        _backdrop(b"GIF89a....", BACKDROP_META)
+    with pytest.raises(ValueError, match="1 MB"):
+        _backdrop(_png()[:8] + bytes(1_000_001), BACKDROP_META)
+    with pytest.raises(ValueError, match="bounds"):
+        _backdrop(_png(), {**BACKDROP_META, "bounds": [1, 2, 3]})
+
+
+def test_the_image_is_not_text_so_the_identity_scan_skips_it_but_not_the_rest():
+    snap = {
+        "basemap": {"backdrop": {"image": "data:image/png;base64,+123456789+", "attribution": "x"}}
+    }
+    with pytest.raises(ValueError):
+        scan_identities(snap)  # base64 can contain a 9-digit run by chance
+    _scan(snap)  # the export scan ignores the pixels
+    with pytest.raises(ValueError):
+        _scan({**snap, "sites": [{"reasons": ["id 123456789"]}]})  # but still scans everything else
+
+
+def test_snapshot_embeds_the_radar_backdrop_when_p3_has_written_it(world):
+    _, snap = world
+    bd = snap["basemap"]["backdrop"]
+    assert (
+        bd["image"].startswith("data:image/png;base64,") and bd["bounds"] == BACKDROP_META["bounds"]
+    )
+    check_json("export/snapshot", snap)  # still exactly the seven top-level keys

@@ -1,6 +1,7 @@
 """Snapshot export (P7): freeze the plan, heat maps, sites, piers and validation into one JSON file.
 The dashboard only draws what is written here (docs/specs/P7.md)."""
 
+import base64
 import json
 import os
 import re
@@ -146,6 +147,46 @@ def scan_identities(snapshot: dict) -> None:
         raise ValueError(f"possible vessel identifier in snapshot: {hit.group(0)!r}")
 
 
+def _scan(snapshot: dict) -> None:
+    """scan_identities on everything but the backdrop's pixels: base64 is not text, and a 9-digit run
+    can appear in it by chance. Its bounds and attribution are still scanned."""
+    bd = snapshot.get("basemap", {}).get("backdrop")
+    if bd:
+        snapshot = {**snapshot, "basemap": {**snapshot["basemap"], "backdrop": {**bd, "image": ""}}}
+    scan_identities(snapshot)
+
+
+_PNG = b"\x89PNG\r\n\x1a\n"
+_BACKDROP_MAX = 1_000_000  # bytes (contract #263); the snapshot must stay under 5 MB
+
+
+def _backdrop(png: bytes, meta: dict) -> dict:
+    """The Sentinel-1 radar backdrop as a data URI the dashboard can draw offline."""
+    if not png.startswith(_PNG):
+        raise ValueError("radar backdrop is not a PNG")
+    if len(png) > _BACKDROP_MAX:
+        raise ValueError("radar backdrop is over 1 MB")
+    if len(meta.get("bounds", [])) != 4:
+        raise ValueError("radar backdrop needs bounds [lon_min, lat_min, lon_max, lat_max]")
+    return {
+        "image": "data:image/png;base64," + base64.b64encode(png).decode(),
+        "bounds": [float(v) for v in meta["bounds"]],
+        "attribution": str(meta.get("attribution", "Contains modified Copernicus Sentinel data")),
+        "from": meta.get("from"),
+        "to": meta.get("to"),
+    }
+
+
+def _read_backdrop() -> dict | None:
+    """reference/radar_backdrop.png and .json if P3 has written them (contract #263), else None.
+    shortcut: reads the files directly; switch to the core.io reader once P1 adds it in #263."""
+    ref = io.stage_path("reference/cells").parent
+    png, meta = ref / "radar_backdrop.png", ref / "radar_backdrop.json"
+    if not (png.exists() and meta.exists()):
+        return None
+    return _backdrop(png.read_bytes(), json.loads(meta.read_text()))
+
+
 def _legends(weeks: dict[str, list[dict]]) -> dict:
     """Colour-scale breaks computed here, so the browser only maps a value to a colour.
     Quantile breaks (6 points, 5 bins) over observed values of all shown weeks, so the same colour
@@ -267,7 +308,11 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "weeks": weeks,
             "config_hash": cfg_hash,
         },
-        "basemap": basemap(unary_union(list(fine.geometry))),
+        "basemap": {
+            **basemap(unary_union(list(fine.geometry))),
+            # a GeoJSON foreign member, so the snapshot keeps exactly its seven top-level keys
+            **({"backdrop": bd} if (bd := _read_backdrop()) else {}),
+        },
         "cells": {
             "geometry": geometry,
             "weeks": cell_weeks,
@@ -285,7 +330,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
         "plan": _plan(io.read_json_stage("patrol/plan")),
         "validation": json.loads(vpath.read_text()) if vpath.exists() else None,  # not run yet
     }
-    scan_identities(snap)
+    _scan(snap)
     # the stamp only decides which config keys make the file stale: a mixed snapshot uses the
     # simulated set, which is a superset of the real one
     io.write_json_stage("export/snapshot", snap, "real" if label == "real" else "simulated")
