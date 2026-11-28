@@ -9,6 +9,7 @@ import pytest
 from core.schemas import check_json
 from patrol import _exact, _greedy, _plan_asset, air_hours, bandit, sea_hours, two_opt
 from patrol.tests.test_patrol import START, _sea, _sites
+from sim.patrol import COLUMNS
 
 N0 = 5
 
@@ -18,9 +19,9 @@ def _open_sea(nodes):
 
 
 def _outcomes(rows):
-    """Stand-in for sim.patrol_outcome (issue 150): [site_id, asset, visited, found], no rows for
-    unvisited sites. Swap for the real function once it is on integration."""
-    return pd.DataFrame(rows, columns=["site_id", "asset", "visited", "found"])
+    """Hand-made rows in sim.patrol_outcome's shape, for exact counts; the end-to-end run with the
+    real function is in test_patrol.py."""
+    return pd.DataFrame(rows, columns=COLUMNS)
 
 
 def test_prior_uses_p_site_else_rescaled_S():

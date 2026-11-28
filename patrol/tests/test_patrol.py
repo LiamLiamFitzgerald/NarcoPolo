@@ -10,6 +10,7 @@ from core import io
 from core.config import load
 from core.crs import to_utm
 from core.schemas import check_json
+from core.time import iso_week
 from export import build_snapshot
 from patrol import (
     KN_MS,
@@ -21,12 +22,14 @@ from patrol import (
     _start,
     air_hours,
     aircraft_plan,
+    bandit,
     exploration_pick,
     greedy_route,
     sea_hours,
     ship_plan,
     two_opt,
 )
+from sim import patrol_outcome
 from sim.simulate import simulate
 
 RES = 250.0
@@ -245,3 +248,21 @@ def test_simulator_plans_carry_bandit_fields_and_save_the_state(world):
         )
     state = io.read_json_stage("patrol/bandit_state")  # checked against the contract on read
     assert {s["id"] for a in plan.values() for s in a[1:-1]} <= set(state)
+
+
+def test_simulated_patrol_outcomes_update_only_visited_sites(world):
+    """End to end: plan -> sim.patrol_outcome on the simulator truth -> bandit.update."""
+    _, plan = world
+    state = io.read_json_stage("patrol/bandit_state")
+    week = iso_week(io.read_snapshot()["T"])[1]
+    out = patrol_outcome(pd.read_parquet(io.truth_path()), plan, week)
+    new = bandit.update(state, out, discount=0.9, week=week)
+    visits = out[out["site_id"].isin(state)].groupby("site_id")["found"].agg(["sum", "count"])
+    for site, st in state.items():
+        found, n = (
+            (visits.loc[site, "sum"], visits.loc[site, "count"]) if site in visits.index else (0, 0)
+        )
+        assert new[site]["alpha"] == pytest.approx(0.9 * st["alpha"] + found)
+        assert new[site]["beta"] == pytest.approx(0.9 * st["beta"] + n - found)
+        assert (new[site]["last_visit_week"] == week) == (n > 0)
+    check_json("patrol/bandit_state", new)
