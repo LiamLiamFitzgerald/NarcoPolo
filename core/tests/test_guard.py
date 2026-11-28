@@ -14,7 +14,7 @@ def _guard(path: str, module: str = "", **env: str) -> int:
     payload = json.dumps({"tool_name": "Write", "tool_input": {"file_path": path}})
     hook = str(ROOT / ".claude" / "hooks" / "guard.py")
     return subprocess.run(
-        [sys.executable, hook], input=payload, text=True, env=e, capture_output=True
+        [sys.executable, hook], check=False, input=payload, text=True, env=e, capture_output=True
     ).returncode
 
 
