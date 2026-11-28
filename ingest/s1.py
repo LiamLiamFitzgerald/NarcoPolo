@@ -85,9 +85,8 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
     lon0, lat0, lon1, lat1 = _stub.region(cfg)
     with netCDF4.Dataset(era5) as nc:
         t = nc.variables["valid_time" if "valid_time" in nc.variables else "time"]
-        hours = pd.DatetimeIndex(
-            [pd.Timestamp(str(d), tz="UTC") for d in netCDF4.num2date(t[:], t.units)]
-        )
+        stamps: Any = netCDF4.num2date(t[:], t.units)
+        hours = pd.DatetimeIndex([pd.Timestamp(str(d), tz="UTC") for d in np.asarray(stamps)])
         lat = np.asarray(nc.variables["latitude"][:], dtype=float)
         lon = np.asarray(nc.variables["longitude"][:], dtype=float)
         u, v, hs = (
@@ -98,13 +97,13 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
     in_region = (lon2 >= lon0) & (lon2 <= lon1) & (lat2 >= lat0) & (lat2 <= lat1)
     calm = (np.hypot(u, v) < cov["calm_wind_ms"]) & (hs < cov["calm_hs_m"])
     shares = []
-    for p in passes.itertuples():
-        when = pd.Timestamp(p.time)
+    for time, footprint in zip(passes["time"].tolist(), passes["footprint"].tolist(), strict=True):
+        when = pd.Timestamp(time)
         k = int(np.abs((hours - when).total_seconds()).argmin()) if len(hours) else -1
         if k < 0 or abs((hours[k] - when).total_seconds()) > 1800:
             shares.append(math.nan)  # no ERA5 hour for this pass: unknown, never calm or rough
             continue
-        sea = in_region & shapely.contains_xy(shapely.from_wkt(p.footprint), lon2, lat2)
+        sea = in_region & shapely.contains_xy(shapely.from_wkt(str(footprint)), lon2, lat2)
         sea &= ~np.isnan(hs[k])  # no wave value = land point
         shares.append(float(calm[k][sea].mean()) if sea.any() else math.nan)
     share = pd.Series(shares, index=passes.index, dtype=float)
@@ -219,12 +218,13 @@ def _write_passes(out: pd.DataFrame) -> None:
     """raw/s1_passes.json: every pass in the window with its downloaded flag; rewritten only on change."""
     rows = [
         {
-            "pass_id": str(r.pass_id), "time": pd.Timestamp(r.time).isoformat(),
-            "orbit_dir": str(r.orbit_dir), "rel_orbit": int(r.rel_orbit), "footprint": str(r.footprint),
-            "calm_share": None if math.isnan(r.calm_share) else r.calm_share,
-            "downloaded": bool(r.downloaded),
+            "pass_id": str(r["pass_id"]), "time": pd.Timestamp(r["time"]).isoformat(),
+            "orbit_dir": str(r["orbit_dir"]), "rel_orbit": int(r["rel_orbit"]),
+            "footprint": str(r["footprint"]),
+            "calm_share": None if math.isnan(r["calm_share"]) else float(r["calm_share"]),
+            "downloaded": bool(r["downloaded"]),
         }
-        for r in out.itertuples()
+        for r in out.to_dict("records")
     ]  # fmt: skip
     text = json.dumps(rows, indent=1)
     path = raw_root() / "s1_passes.json"
