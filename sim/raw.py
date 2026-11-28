@@ -45,6 +45,7 @@ def _gfw_sar(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
     p, sh = world.passes, world.ships
     k = (
         sh["day"]
+        .floordiv(1)
         .astype(int)
         .map({int(d): i for i, d in enumerate(p["day"])})
         .fillna(-1)
@@ -79,16 +80,17 @@ def _presence_rows(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
     x0, y0 = _origin()
     sh = world.ships
     lane = world.fine[world.fine["lane"]]
-    lane_day = np.repeat(np.arange(world.days), len(lane))
+    span = np.arange(world.history_start, world.days)  # presence covers the ship history (#273)
+    lane_day = np.repeat(span, len(lane))
     lane_ix, lane_iy = (
-        np.tile(lane["ix"].to_numpy(), world.days),
-        np.tile(lane["iy"].to_numpy(), world.days),
+        np.tile(lane["ix"].to_numpy(), len(span)),
+        np.tile(lane["iy"].to_numpy(), len(span)),
     )
     rows = pd.DataFrame(
         {
             "x": np.concatenate([sh["x_m"].to_numpy(), x0 + (lane_ix + 0.5) * FINE]),
             "y": np.concatenate([sh["y_m"].to_numpy(), y0 + (lane_iy + 0.5) * FINE]),
-            "day": np.concatenate([sh["day"].to_numpy(int), lane_day]),
+            "day": np.concatenate([np.floor(sh["day"].to_numpy()).astype(int), lane_day]),
             "speed_bin": [_SLOW] * len(sh) + [_FAST] * len(lane_day),
             "vessel_type": rng.choice(_TYPES, len(sh) + len(lane_day)),
             "hours": np.concatenate(
