@@ -9,6 +9,7 @@ import pandas as pd
 from core import io
 from core.grid import FINE, neighbours
 from fuse._common import PARAMS, RADAR_HISTORY_DAYS, _provenance
+from fuse.learn import _add_learning_columns
 
 _SITE_COLUMNS = {
     "site_id": str, "x_m": float, "y_m": float, "n_slowdowns": int, "S": float, "p_perm": float,
@@ -208,7 +209,7 @@ def _run(observed, expected, layers, travel, events) -> tuple[pd.DataFrame, pd.D
         {c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()}
     )  # stub, issue 24
     slow = events[events["event_type"] == "slowdown"] if events is not None else pd.DataFrame()
-    return cells, suppress(sites(slow))
+    return cells, _add_learning_columns(suppress(sites(slow)), PARAMS["fdr_q"])
 
 
 def run_sites() -> None:
