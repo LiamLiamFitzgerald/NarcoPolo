@@ -141,3 +141,28 @@ def test_run_cells_scores_only_observed_rows_in_the_evaluation_window(sim_data):
     assert (
         cells.groupby(["event_type", "cell_id", week])["gi_z"].nunique() == 1
     ).all()  # a day gets its week's z
+
+
+def test_score_cells_is_the_pure_core_of_run_cells(
+    tmp_path, monkeypatch
+):  # #177: the null test calls it
+    import shutil
+
+    from core import io
+    from core.config import load
+    from detectors import score_cells
+    from sim.simulate import simulate
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("NARCO_RAW", str(tmp_path / "raw"))
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(io.ROOT / "config.yaml", cfg)
+    monkeypatch.setattr(io, "CONFIG_PATH", cfg)
+    simulate(load(cfg)[0], 7)
+    frames = [
+        io.read_stage(n)
+        for n in ("aggregate/observed", "forecast/expected", "reference/cells", "match/events")
+    ]
+    a = score_cells(*frames, io.read_snapshot()["T"])
+    b = score_cells(*frames, io.read_snapshot()["T"])
+    assert len(a) and a.equals(b) and {"U", "agreement", "y", "y_week"} <= set(a.columns)

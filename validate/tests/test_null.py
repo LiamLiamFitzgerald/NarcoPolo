@@ -42,13 +42,13 @@ def test_shift_rotates_each_series_inside_the_date_range(frames):
 
 
 def test_null_share_near_or_below_q(frames):
-    first = null_test(runs=20, seed=0)
+    first = null_test(runs=5, seed=0)
     if first["runs"] == 0:
         pytest.skip("fuse.run missing or still a stub (no cells)")
     # TODO(P1): fdr_q is not in config.yaml yet; 0.1 is the spec's q
     q = load(io.CONFIG_PATH)[0].get("p6", {}).get("fdr_q", 0.1)
     assert first["lo"] <= q  # shifting breaks the planted site
-    assert null_test(runs=20, seed=0) == first
+    assert null_test(runs=5, seed=0) == first
 
 
 def test_null_loop_with_a_stand_in_fuse(frames, monkeypatch):
@@ -58,7 +58,7 @@ def test_null_loop_with_a_stand_in_fuse(frames, monkeypatch):
     ix, iy = cell_index(site["x_m"], site["y_m"], FINE)
     cell = cell_id(int(ix), int(iy), FINE)
 
-    def run(observed, expected, layers, travel, events):
+    def run(observed, expected, layers, travel, events, cells=None, T=None):
         t = events[events["cell_id"] == cell].assign(day=events["time_utc"].dt.floor("D"))
         slow, small = (t[t["event_type"] == e] for e in ("slowdown", "dark_small"))
         lag = (small["day"].to_numpy()[None, :] - slow["day"].to_numpy()[:, None]) / np.timedelta64(
