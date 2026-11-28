@@ -6,6 +6,8 @@ cutoff, so look-ahead fails loudly instead of quietly improving the backtest (pr
 """
 
 import gc
+import json
+import logging
 import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -30,6 +32,7 @@ from core.io import (
 from core.split import Split, folds
 
 _ID = ["cell_id", "date"]
+log = logging.getLogger(__name__)
 
 
 def _decayed_sums(split: Split, train: pd.DataFrame, delta: float) -> pd.DataFrame:
@@ -70,6 +73,24 @@ def ewma(
 def _shrink(s_c: pd.Series, s_e: pd.Series, prior_rate: Any, k: float) -> pd.Series:
     """Rate with k units of prior exposure at prior_rate (a gamma-Poisson posterior mean)."""
     return (s_c + k * prior_rate) / (s_e + k)
+
+
+def _ewma_phi(
+    split: Split, train2: pd.DataFrame, train10: pd.DataFrame, delta: float, min_se: float
+) -> float:
+    """EWMA dispersion: Pearson X^2 / n of its cutoff rates on its own training rows with E > 0 (D8, #175).
+
+    The same measure as the GLM's scale="X2", with n for df (the EWMA has no fitted coefficients). The
+    rates are the ones frozen at the cutoff, so a rate that drifted over the history adds to phi: it is
+    variation the forecast doesn't follow. Detectors divide by max(phi, 1), so this is always finite;
+    with no observed rows (or no events anywhere, so mu = 0) there is nothing to measure and it is 1.
+    """
+    seen = train2[train2["exposure"] > 0]
+    mu = ewma(split, train2, train10, seen, delta, min_se)
+    ok = mu > 0
+    if not ok.any():
+        return 1.0
+    return float(((seen["count"][ok] - mu[ok]) ** 2 / mu[ok]).sum() / int(ok.sum()))
 
 
 def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str) -> pd.DataFrame:
@@ -149,23 +170,39 @@ def _fit(
     old = gc.get_threshold()
     gc.set_threshold(100, 1, 1)
     try:
-        res = sm.GLM(
-            rows["count"].to_numpy(),
-            rows[cols].to_numpy(),
-            family=sm.families.Poisson(),
-            offset=np.log(rows["exposure"].to_numpy()),
-        ).fit(scale="X2")
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            res = sm.GLM(
+                rows["count"].to_numpy(),
+                rows[cols].to_numpy(),
+                family=sm.families.Poisson(),
+                offset=np.log(rows["exposure"].to_numpy()),
+            ).fit(scale="X2")
     finally:
         gc.set_threshold(*old)
         gc.collect()
-    if not res.converged:
-        # e.g. a covariate whose cells never have events (fully static cells): its coefficient
-        # runs off towards -inf; say so rather than use an unconverged fit silently (#156)
-        warnings.warn(
-            f"GLM did not converge for cutoff {split.cutoff} ({len(rows)} rows, columns {cols})",
-            stacklevel=2,
-        )
+    # e.g. a covariate whose cells never have events (fully static cells): its coefficient runs off towards
+    # -inf; say so rather than use an unconverged fit silently (#156), in one line, not a warning traceback
+    _log_fit("GLM", split, caught, bool(res.converged), f"{len(rows)} rows, columns {cols}")
     return pd.Series(res.params, index=cols), float(res.scale), rows
+
+
+def _log_fit(
+    name: str, split: Split, caught: list[warnings.WarningMessage], converged: bool, what: str
+) -> None:
+    """One log line per fit and cutoff for non-convergence or statsmodels warnings, not tracebacks."""
+    kinds = sorted({w.category.__name__ for w in caught})
+    if converged and not kinds:
+        return
+    state = "converged" if converged else "did not converge"
+    log.warning(
+        "forecast: %s %s for cutoff %s (%s); warnings: %s",
+        name,
+        state,
+        split.cutoff,
+        what,
+        ", ".join(kinds) or "none",
+    )
 
 
 def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
@@ -183,10 +220,15 @@ def nb2_alpha(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> float:
     alpha near 0 agrees with phi near 1; a large alpha alongside phi near 1 means they disagree.
     """
     rows, cols = _fit_rows(split, train2, X2)
-    res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
-        disp=0
-    )
-    return float(res.params["alpha"])
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")  # e.g. HessianInversionWarning: logged below in one line
+        res = sm.NegativeBinomial(rows["count"], rows[cols], offset=np.log(rows["exposure"])).fit(
+            disp=0
+        )
+    alpha = float(res.params["alpha"])
+    converged = bool(res.mle_retvals.get("converged", True))
+    _log_fit("NB2 check", split, caught, converged, f"alpha {alpha:.3g}")
+    return alpha
 
 
 def predict_glm(beta: pd.Series, theta: pd.Series, rows2: pd.DataFrame) -> pd.Series:
@@ -279,17 +321,18 @@ def expected_rows(
 ) -> pd.DataFrame:
     """Expected rows for split.test of the 2 km frame, fitted on split.train only.
 
-    frames = (fine, coarse, X2) for one event type. The GLM's dispersion is used for the
-    EWMA's intervals too: phi describes the data, and the EWMA has no fit of its own to give one.
+    frames = (fine, coarse, X2) for one event type. Each model brings its own phi from its own
+    training rows (Pearson X^2): the GLM's scale, or _ewma_phi for the EWMA (D8, #175).
     glm: this fold's (mu, phi) from glm_mu if already computed, so it isn't fitted twice.
     """
     f2, f10, X2 = frames
     target = split.test(f2)
-    mu_glm, phi = glm or glm_mu(split, split.train(f2), target, X2)
     if model == "ewma":
-        mu = ewma(split, split.train(f2), split.train(f10), target, delta, min_se)
+        train2, train10 = split.train(f2), split.train(f10)
+        mu = ewma(split, train2, train10, target, delta, min_se)
+        phi = _ewma_phi(split, train2, train10, delta, min_se)
     elif model == "glm":
-        mu = mu_glm
+        mu, phi = glm or glm_mu(split, split.train(f2), target, X2)
     else:
         raise ValueError(f"unknown model {model!r}")
     lo, hi = nb_interval(mu, phi, level)
@@ -321,19 +364,27 @@ def forecast_window(
 
 
 def choose_baseline(
-    event_type: str, skills: dict[str, pd.DataFrame], decisions: str | None, when: str
+    event_type: str,
+    skills: dict[str, pd.DataFrame],
+    decisions: str | None,
+    when: str,
+    margin: float = 0.0,
 ) -> str:
     """Keep the model with the higher mean backtest skill and append the choice to DECISIONS.md.
 
-    Refuses to choose on NaN or infinite skill, so a broken backtest can't be recorded as a win.
+    Refuses to choose on NaN or infinite skill, or on no folds, so a broken backtest can't be recorded
+    as a win. margin: how much more mean skill another model needs than the EWMA (the spec's "build
+    first" baseline) to replace it; 0 is the spec's plain "higher mean skill".
     decisions=None records nothing (simulator runs); a choice equal to the last one P5 recorded
     for this event type isn't written again, so repeated runs don't fill the log.
     """
     means = {name: t["skill"].mean() for name, t in skills.items()}
-    bad = [n for n, t in skills.items() if not np.isfinite(t["skill"]).all()]
+    bad = [n for n, t in skills.items() if t.empty or not np.isfinite(t["skill"]).all()]
     if bad:
-        raise ValueError(f"non-finite backtest skill for {bad}; not choosing a baseline")
+        raise ValueError(f"non-finite or no backtest skill for {bad}; not choosing a baseline")
     best = max(means, key=means.__getitem__)
+    if "ewma" in means and best != "ewma" and means[best] - means["ewma"] <= margin:
+        best = "ewma"
     ranges = "; ".join(
         f"{n}: mean {means[n]:.3f}, range {t['skill'].min():.3f} to {t['skill'].max():.3f}"
         for n, t in skills.items()
@@ -401,10 +452,10 @@ def _fold_model(
 
     def predict(split: Split) -> pd.Series:
         fold = fs.index(split) + 1
-        if fold not in glm_fits:
+        if name == "glm" and fold not in glm_fits:
             f2, _, X2 = frames
             glm_fits[fold] = glm_mu(split, split.train(f2), split.test(f2), X2)
-        rows = expected_rows(name, split, fold, frames, *params, glm=glm_fits[fold])
+        rows = expected_rows(name, split, fold, frames, *params, glm=glm_fits.get(fold))
         store[(name, fold)] = rows
         return rows["mu"].set_axis(split.test(frames[0]).index)
 
@@ -423,8 +474,12 @@ def forecast_all(
     """The whole forecast stage for both event types. Returns (expected rows, report).
 
     expected: fold 0 (evaluation window) plus every backtest fold, all from the chosen model.
-    report: per type and model, backtest skill mean/min/max, phi and the NB2 alpha check.
-    baseline forces a model per type (skips choose_baseline), e.g. while backtest skill is broken.
+    report: per type and model, backtest skill mean/min/max over all folds, the same over the folds
+    the choice used (select_*), the window's phi and the NB2 alpha check.
+    The model per type is chosen on backtest folds whose test week ends before the evaluation window
+    starts (D8, #175), so the window's days never pick their own model.
+    baseline forces a model per type (skips choose_baseline), e.g. while backtest skill is broken;
+    config forecast.model_by_type does the same from config.yaml, and "auto" (the default) chooses.
     cfg is the full config: split.n_folds_* plus P5's ewma_delta, ewma_min_se and interval.
     """
     n_folds = {
@@ -451,8 +506,15 @@ def forecast_all(
             )
             for name in ("ewma", "glm")
         }
-        chosen = (baseline or {}).get(event_type) or _choose_or_default(
-            event_type, skills, decisions, when
+        # choose on the folds whose test week ends before the evaluation window, never on days it scores
+        sel = _selection_folds(fs, T)
+        for i in sel:  # raises if a chosen-on test day is inside the evaluation window
+            evaluation_split(T).assert_train(fs[i - 1].test(f2))
+        picked = {n: t[t["fold"].isin(sel)] for n, t in skills.items()}
+        chosen = (
+            (baseline or {}).get(event_type)
+            or _fixed_model(cfg, event_type)
+            or _choose_or_default(event_type, picked, decisions, when, _select_margin(cfg))
         )
         window = forecast_window(chosen, T, frames, *params)
         expected += [window, *(fold_rows[(chosen, i)] for i in range(1, k + 1))]
@@ -479,6 +541,11 @@ def forecast_all(
                     "skill_mean": table["skill"].mean(),
                     "skill_min": table["skill"].min(),
                     "skill_max": table["skill"].max(),
+                    # what the choice saw: folds before the evaluation window only
+                    "select_folds": len(sel),
+                    "select_mean": picked[name]["skill"].mean(),
+                    "select_min": picked[name]["skill"].min(),
+                    "select_max": picked[name]["skill"].max(),
                     "phi": window["phi"].iloc[0],
                     "nb2_alpha": alpha,
                     "coverage": coverage if name == chosen else np.nan,
@@ -502,7 +569,53 @@ def stage(
     observed = read_stage("aggregate/observed")
     observed["date"] = pd.to_datetime(observed["date"])
     expected, report = forecast_all(observed, read_cells(), T, cfg, decisions, when, baseline)
-    return write_stage("forecast/expected", expected, provenance), report
+    path = write_stage("forecast/expected", expected, provenance)
+    _write_choice(path.with_name("baseline_choice.json"), T, report)
+    return path, report
+
+
+def _write_choice(path: Path, T: pd.Timestamp, report: pd.DataFrame) -> None:
+    """The chosen model per type with the skill it was chosen on, beside forecast/expected (D8, #175).
+
+    A P5 side file, not a stage file: nothing downstream reads it; it is there to check the choice.
+    """
+    rows = report.astype(object).where(report.notna(), None).to_dict(orient="records")
+    path.write_text(json.dumps({"T": str(T.date()), "models": rows}, indent=2), encoding="utf-8")
+
+
+def _selection_folds(fs: list[Split], T: pd.Timestamp) -> list[int]:
+    """Numbers (1-based) of the backtest folds whose test week ends before the evaluation window starts.
+
+    Those folds' fits and test days are all before the window, so choosing on them leaves the window out.
+    """
+    start = pd.Timestamp(evaluation_split(T).cutoff)
+    keep = []
+    for k, s in enumerate(fs, start=1):
+        end = pd.Timestamp(s.cutoff) + pd.Timedelta(days=s.embargo_days + s.test_days)
+        if end <= start:  # test days are [cutoff + embargo, end)
+            keep.append(k)
+    return keep
+
+
+def _forecast_cfg(cfg: Mapping[str, Any]) -> Mapping[str, Any]:
+    # TODO(P5): config.yaml is P1's file; until P1 adds the forecast block (#272), the spec's
+    # rule applies: choose per type by the higher mean skill (model_by_type auto, margin 0).
+    return cfg.get("forecast") or {}
+
+
+def _fixed_model(cfg: Mapping[str, Any], event_type: str) -> str | None:
+    """forecast.model_by_type: "auto" (choose) or {event_type: "ewma" | "glm" | "auto"}."""
+    rule = _forecast_cfg(cfg).get("model_by_type", "auto")
+    pick = rule if isinstance(rule, str) else rule.get(event_type, "auto")
+    if pick not in ("auto", "ewma", "glm"):
+        raise ValueError(f"forecast.model_by_type for {event_type}: unknown model {pick!r}")
+    return None if pick == "auto" else pick
+
+
+def _select_margin(cfg: Mapping[str, Any]) -> float:
+    """forecast.select_margin: mean skill the GLM must gain over the EWMA to replace it."""
+    # TODO(P5): 0 is the spec's plain "higher mean skill" until a margin is agreed
+    return float(_forecast_cfg(cfg).get("select_margin", 0.0))
 
 
 def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
@@ -512,14 +625,18 @@ def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
 
 
 def _choose_or_default(
-    event_type: str, skills: dict[str, pd.DataFrame], decisions: str | None, when: str
+    event_type: str,
+    skills: dict[str, pd.DataFrame],
+    decisions: str | None,
+    when: str,
+    margin: float = 0.0,
 ) -> str:
     """choose_baseline, or EWMA (the spec's "build first" baseline) while skill is undefined (#58).
 
     Nothing is written to DECISIONS.md in the fallback: no comparison was made.
     """
     try:
-        return choose_baseline(event_type, skills, decisions, when)
+        return choose_baseline(event_type, skills, decisions, when, margin)
     except ValueError as e:
         print(f"forecast: {e}; using ewma for {event_type} until #58 is fixed")
         return "ewma"

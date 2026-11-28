@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -341,8 +343,23 @@ def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatc
     obs = read_stage("aggregate/observed")
     assert set(obs.level) == {2000, 10000} and set(obs.event_type) == set(TYPES)
     forecast.run()
-    live = read_stage("forecast/expected").query("fold == 0")
+    expected = read_stage("forecast/expected")
+    live = expected.query("fold == 0")
     assert set(live.event_type) == set(TYPES) and (live.mu >= 0).all()
+    # D8 (#175): on the simulator, chosen on folds before the window: EWMA for slowdowns, GLM for dark_small
+    choice = json.loads((tmp_path / "forecast" / "baseline_choice.json").read_text())
+    chosen = {r["event_type"]: r["model"] for r in choice["models"] if r["chosen"]}
+    assert chosen == {"slowdown": "ewma", "dark_small": "glm"}, choice
+    assert all(r["select_folds"] > 0 and r["select_mean"] is not None for r in choice["models"])
+    assert {et: set(g.model) for et, g in expected.groupby("event_type")} == {
+        et: {m} for et, m in chosen.items()
+    }
+    # finite mu and phi wherever the cell was observed; detectors divide by max(phi, 1)
+    fine = obs[obs.level == 2000].assign(date=lambda d: pd.to_datetime(d.date))
+    seen = expected.assign(date=pd.to_datetime(expected.date)).merge(
+        fine.loc[fine.exposure > 0, ["cell_id", "date", "event_type"]]
+    )
+    assert len(seen) and np.isfinite(seen[["mu", "phi"]]).all().all()
     assert log.read_bytes() == before  # simulated runs record no decision
 
 
@@ -420,5 +437,115 @@ def test_glm_is_fitted_once_per_fold(monkeypatch):
     observed, cells = _all_observed()
     forced = {"slowdown": "glm", "dark_small": "ewma"}
     forecast_all(observed, cells, observed.date.max(), CFG, None, "x", forced)
-    # one fit per backtest fold plus one for the evaluation window, per event type
-    assert len(calls) == (12 + 1) + (6 + 1)
+    # one fit per backtest fold for the comparison, plus the window only where the GLM is chosen
+    assert len(calls) == (12 + 1) + 6
+
+
+@pytest.mark.parametrize("event_type", TYPES)
+def test_ewma_phi_is_finite_and_near_one_on_poisson_data(event_type):
+    """The fake simulator is Poisson with constant rates, so Pearson X^2 / n of the EWMA is about 1."""
+    from forecast import _ewma_phi
+
+    f2, f10, *_ = _setup(event_type)
+    phi = _ewma_phi(SPLIT, SPLIT.train(f2), SPLIT.train(f10), DELTA, MIN_SE)
+    assert np.isfinite(phi) and phi == pytest.approx(1.0, abs=0.15), phi
+
+
+def test_ewma_phi_sees_extra_variation():
+    """Doubling every other day's counts adds variation the EWMA doesn't follow: phi must go up."""
+    from forecast import _ewma_phi
+
+    f2, f10, *_ = _setup("slowdown")
+    noisy = f2.assign(count=f2["count"] * np.where(f2.date.dt.day % 2 == 0, 2.0, 0.0))
+    phi = _ewma_phi(SPLIT, SPLIT.train(noisy), SPLIT.train(f10), DELTA, MIN_SE)
+    assert phi > 1.5, phi
+
+
+def test_ewma_rows_carry_the_ewma_phi_not_the_glm_phi():
+    from forecast import _ewma_phi
+
+    frames = _frames("slowdown")
+    f2, f10, _ = frames
+    rows = expected_rows("ewma", SPLIT, 1, frames, DELTA, MIN_SE, LEVEL, glm=(None, 99.0))  # type: ignore[arg-type]
+    own = _ewma_phi(SPLIT, SPLIT.train(f2), SPLIT.train(f10), DELTA, MIN_SE)
+    assert (rows.phi == own).all() and np.isfinite(rows.phi).all()
+
+
+def test_choice_uses_only_folds_tested_before_the_evaluation_window():
+    from forecast import _selection_folds
+
+    for T in pd.date_range("2026-11-02", periods=7):  # every weekday the window can start on
+        fs = folds(T.date(), 12)
+        sel = _selection_folds(fs, T)
+        window = evaluation_split(T)
+        days = pd.DataFrame({"date": pd.date_range(T - pd.Timedelta(days=120), T)})
+        for k, s in enumerate(fs, start=1):
+            if k in sel:
+                window.assert_train(s.test(days))  # no chosen-on day is in the window
+            else:
+                with pytest.raises(ValueError, match="look-ahead"):
+                    window.assert_train(s.test(days))
+        assert sel == list(range(sel[0], 13)) and sel[0] in (5, 6)
+
+
+def test_a_wild_evaluation_window_does_not_change_the_choice():
+    """Folds inside the window may score anything; the choice is made on the folds before it."""
+    from forecast import forecast_all
+
+    observed, cells = _all_observed()
+    T = observed.date.max()
+    _, before = forecast_all(observed, cells, T, CFG, None, "x")
+    wild = observed.copy()
+    inside = (wild.date >= pd.Timestamp(evaluation_split(T).cutoff)) & (wild.exposure > 0)
+    wild.loc[inside, "count"] += 20
+    _, after = forecast_all(wild, cells, T, CFG, None, "x")
+    pd.testing.assert_series_equal(before.chosen, after.chosen)
+    pd.testing.assert_series_equal(before.select_mean, after.select_mean)
+    from forecast import _selection_folds
+
+    n = {
+        et: len(_selection_folds(folds(T.date(), k), T))
+        for et, k in [("slowdown", 12), ("dark_small", 6)]
+    }
+    assert (before.select_folds == before.event_type.map(n)).all() and (
+        before.select_folds > 0
+    ).all()
+
+
+def test_choose_baseline_keeps_ewma_unless_the_margin_is_beaten():
+    skills = {
+        "ewma": pd.DataFrame({"fold": [5, 6], "skill": [0.10, 0.10]}),
+        "glm": pd.DataFrame({"fold": [5, 6], "skill": [0.14, 0.14]}),
+    }
+    assert choose_baseline("dark_small", skills, None, "x") == "glm"
+    assert choose_baseline("dark_small", skills, None, "x", margin=0.05) == "ewma"
+    assert choose_baseline("dark_small", skills, None, "x", margin=0.03) == "glm"
+
+
+def test_model_by_type_in_config_fixes_the_model():
+    from forecast import forecast_all
+
+    observed, cells = _all_observed()
+    cfg = {**CFG, "forecast": {"model_by_type": {"slowdown": "glm", "dark_small": "auto"}}}
+    expected, _ = forecast_all(observed, cells, observed.date.max(), cfg, None, "x")
+    assert set(expected[expected.event_type == "slowdown"].model) == {"glm"}
+    bad = {**CFG, "forecast": {"model_by_type": "poisson"}}
+    with pytest.raises(ValueError, match="unknown model"):
+        forecast_all(observed, cells, observed.date.max(), bad, None, "x")
+
+
+def test_a_fit_problem_is_one_log_line_not_a_warning(caplog):
+    import warnings
+
+    from forecast import _log_fit
+
+    caught = [
+        warnings.WarningMessage("x", UserWarning, "f", 1),
+        warnings.WarningMessage("y", UserWarning, "f", 2),
+    ]
+    with caplog.at_level("WARNING", logger="forecast"), warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _log_fit("GLM", SPLIT, caught, False, "10 rows")
+        _log_fit("GLM", SPLIT, [], True, "10 rows")  # a clean fit says nothing
+    assert len(caplog.records) == 1
+    assert "did not converge for cutoff" in caplog.text and "UserWarning" in caplog.text
