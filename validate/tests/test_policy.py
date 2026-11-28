@@ -38,11 +38,12 @@ def _world(regime: str, seed: int) -> _Season:
     return _Season(truth=truth, weeks=WEEKS, sites_at=lambda c: SITES, route=route)
 
 
-def _outcome(truth, plan, week):
-    """Rows for visited stops only; found = a drop at that site in the week after the cutoff."""
+def _outcome(truth, plan, week: int):
+    """Stand-in for sim.patrol_outcome(truth, plan, week): rows for visited stops only;
+    found = a drop at that site in the week after cutoff WEEKS[week]."""
     ids = [s["id"] for stops in plan.values() for s in stops if s["id"] != "base"]
     t = truth["time_utc"]
-    c = week.tz_localize("UTC")
+    c = WEEKS[week].tz_localize("UTC")
     hit = set(truth.loc[(t > c) & (t <= c + pd.Timedelta(days=7)), "site_id"])
     return pd.DataFrame(
         {"site_id": ids, "asset": "ship", "visited": True, "found": [i in hit for i in ids]}
@@ -55,12 +56,15 @@ def _prior(sites, n0):
     }
 
 
-def _update(state, out, discount):
+def _update(state, out, discount, week=None):
+    """Stand-in for patrol.bandit.update (#159), same signature."""
     new = {
-        k: {"alpha": discount * v["alpha"], "beta": discount * v["beta"]} for k, v in state.items()
+        k: {**v, "alpha": discount * v["alpha"], "beta": discount * v["beta"]}
+        for k, v in state.items()
     }
     for r in out[out["visited"]].itertuples():
         new[r.site_id]["alpha" if r.found else "beta"] += 1
+        new[r.site_id]["last_visit_week"] = week
     return new
 
 
@@ -111,6 +115,19 @@ def test_same_seed_same_results():
     a = _evaluate(["bandit", "random"], "fixed", [7], DEPS)
     b = _evaluate(["bandit", "random"], "fixed", [7], DEPS)
     pd.testing.assert_frame_equal(a, b)
+
+
+def test_the_loop_updates_the_bandit_every_week_with_its_week_number():
+    weeks = []
+
+    def update(state, out, discount, week=None):
+        weeks.append(week)
+        return _update(state, out, discount, week=week)
+
+    deps = _Deps(world=_world, outcome=_outcome,
+                 bandit=SimpleNamespace(prior=_prior, update=update, sample=_sample))  # fmt: skip
+    _evaluate(["bandit", "fixed_S"], "fixed", [0], deps)
+    assert weeks == list(range(len(WEEKS)))  # bandit policy only, once per week
 
 
 def test_columns_and_unknown_policy():

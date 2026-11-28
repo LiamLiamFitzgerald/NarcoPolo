@@ -52,10 +52,10 @@ class _Season:
 @dataclass(frozen=True)
 class _Deps:
     world: Callable[[str, int], _Season]
-    outcome: Callable[[pd.DataFrame, dict, pd.Timestamp], pd.DataFrame]  # sim.patrol_outcome
-    bandit: (
-        Any  # module with prior(sites, n0), update(state, outcomes, discount), sample(state, seed)
-    )
+    outcome: Callable[
+        [pd.DataFrame, dict, int], pd.DataFrame
+    ]  # sim.patrol_outcome(truth, plan, week)
+    bandit: Any  # patrol.bandit: prior(sites, n0), update(state, outcomes, discount, week=), sample(state, seed)
 
 
 def _true_counts(truth: pd.DataFrame, cutoff: pd.Timestamp) -> pd.Series:
@@ -108,10 +108,10 @@ def _season(
             else:
                 weights = cands[policy.removeprefix("fixed_")].to_numpy(float)
             plan, h = s.route(cands, weights, cutoff)
-            out = deps.outcome(s.truth, plan, cutoff)
-            if policy == "bandit":
-                state = deps.bandit.update(state, out, learn["discount"])
-            best = deps.outcome(s.truth, s.route(cands, oracle_w, cutoff)[0], cutoff)
+            out = deps.outcome(s.truth, plan, w)
+            if policy == "bandit":  # the only caller of bandit.update; week= fills last_visit_week
+                state = deps.bandit.update(state, out, learn["discount"], week=w)
+            best = deps.outcome(s.truth, s.route(cands, oracle_w, cutoff)[0], w)
             regret += float(
                 true.reindex(_visited(best)).fillna(0).sum()
                 - true.reindex(_visited(out)).fillna(0).sum()
@@ -179,17 +179,21 @@ def _block(deps: _Deps | None = None) -> dict[str, Any] | None:
     }
 
 
-def _attr(module: str, name: str) -> Any:
+def _module(name: str) -> Any:
     try:
-        return getattr(importlib.import_module(module), name, None)
+        return importlib.import_module(name)
     except ImportError:
         return None
+
+
+def _attr(module: str, name: str) -> Any:
+    return getattr(_module(module), name, None)
 
 
 def _real_deps() -> _Deps | None:
     """The real modules, imported lazily so validate runs before #150, #151 and #152 land."""
     outcome = _attr("sim", "patrol_outcome")
-    bandit = _attr("patrol", "bandit")
+    bandit = _module("patrol.bandit")
     site_value = _attr("fuse.learn", "site_value")
     if (
         outcome is None
@@ -205,7 +209,7 @@ def _real_world(regime: str, seed: int) -> _Season:  # pragma: no cover - runs o
     patrol = importlib.import_module("patrol")
     fuse = importlib.import_module("fuse")
     site_value = importlib.import_module("fuse.learn").site_value
-    simulate = importlib.import_module("sim").simulate
+    simulate = importlib.import_module("sim.simulate").simulate
     cfg, _ = load(io.CONFIG_PATH)
     model_path = io.ROOT / "models" / "site_model.json"
     model = json.loads(model_path.read_text()) if model_path.exists() else None  # None: rung 0
