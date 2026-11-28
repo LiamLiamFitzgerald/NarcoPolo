@@ -59,6 +59,9 @@ def test_every_stage_file_reads_back_valid(world):
     mp.setenv("NARCO_DATA", str(data))
     for name in io.SCHEMAS:
         assert len(io.read_stage(name)) > 0
+    assert (
+        io.read_stage("forecast/expected")["fold"] == 0
+    ).all()  # live forecast, like forecast.run (#172)
     cells = io.read_stage("reference/cells")
     assert (cells["level"] == 2000).sum() == NX * NY
     assert (
