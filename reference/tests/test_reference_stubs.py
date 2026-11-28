@@ -39,7 +39,9 @@ def test_build_cells_keeps_only_sea_cells_on_the_core_grid():
 
 
 def test_fine_and_coarse_layers_pass_the_cells_schema(sim):
-    fine = gpd.GeoDataFrame(io.read_stage("reference/cells").query("level == 2000"))
+    fine = gpd.GeoDataFrame(io.read_stage("reference/cells").query("level == 2000")).set_index(
+        "cell_id", drop=False
+    )  # every layer series is indexed by cell_id, as build_cells returns
     harbours = gpd.GeoDataFrame(geometry=fine.centroid.iloc[:1], crs=32629)
     port = rc.port_zones(fine, harbours)
     anch = rc.anchorages(fine, rc.regrid_presence(pd.DataFrame()))

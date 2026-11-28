@@ -107,3 +107,10 @@ learn:
   discount: 0.9               # per week, TODO(P1)
   exact_max_nodes: 16         # TODO(P1)
   displace_visit_days: 14     # TODO(P1): sim only; `displacing` regime: the simulator's own patrol visits the active site this often
+  attention_tau: 1.0          # TODO(P1): softness of regret-based CCT weights
+  attention_floor: 0.05       # TODO(P1): minimum weight per merged group
+  horizon_weeks: 4            # TODO(P1): season-layer look-ahead
+  day_slots: 7                # days in the week layer
+  min_week_share: 0.5         # TODO(P1): least share of the weekly budget any week gets
+  n_regret_samples: 200       # TODO(P1): posterior draws for expected-regret exploration
+  n_seeds_quick: 3            # make validate; n_seeds only for the final report
