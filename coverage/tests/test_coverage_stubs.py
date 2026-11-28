@@ -48,4 +48,5 @@ def test_unknown_weather_gives_zero_small_boat_exposure(sim):
     assert first["covered_frac"].tolist() == pytest.approx([0.5, 0.5])
     # rough or unknown passes are unobserved for small boats
     assert (out["exposure_small"] == 0).all()
+    assert not out["post_storm"].any()  # unknown weather is never a storm
     check("coverage/exposure", out.assign(wind_ms=0.0, hs_m=0.0))

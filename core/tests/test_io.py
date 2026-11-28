@@ -13,6 +13,9 @@ def sandbox(tmp_path, monkeypatch):
     cfg = tmp_path / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
     monkeypatch.setattr(io, "CONFIG_PATH", cfg)
+    io.write_stage(
+        "reference/cells", frame("reference/cells"), "simulated"
+    )  # every cell_id must exist here
     return cfg
 
 
@@ -72,3 +75,35 @@ def test_unstamped_file_and_bad_names_and_gpkg():
         io.stage_path("nope/nothing")
     assert io.stage_path("aggregate/observed").name == "observed.parquet"
     assert isinstance(pd.read_parquet(p), pd.DataFrame)
+
+
+def test_date_reads_back_as_timestamps():
+    io.write_stage("aggregate/observed", frame("aggregate/observed"), "simulated")
+    assert pd.api.types.is_datetime64_dtype(io.read_stage("aggregate/observed")["date"])
+
+
+def test_raster_paths_sit_under_the_data_root():
+    assert (
+        io.raster_path("reference/sea_250m")
+        == io.stage_path("reference/cells").parent / "sea_250m.tif"
+    )
+    with pytest.raises(KeyError):
+        io.raster_path("reference/nope")
+
+
+@pytest.mark.parametrize("provenance", ["simulated", "real"])
+@pytest.mark.parametrize("name", ["aggregate/observed", "reference/cells"])
+def test_read_provenance_round_trips(name, provenance):
+    io.write_stage(name, frame(name), provenance)
+    assert io.read_provenance(name) == provenance
+
+
+def test_read_provenance_without_stamp_raises():
+    io._sidecar("reference/cells").unlink()
+    with pytest.raises(ValueError, match="no config stamp"):
+        io.read_provenance("reference/cells")
+
+
+def test_read_cells_drops_geometry():
+    cells = io.read_cells()
+    assert "geometry" not in cells.columns and "cell_id" in cells.columns
