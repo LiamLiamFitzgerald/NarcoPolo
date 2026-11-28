@@ -49,6 +49,36 @@ validate:
   injection_n_per_pass: 10   # TODO(P1): not in the spec
   injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
 
+# P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
+p4:
+  pixel_m: 10                # shared.md issue 5: 10 m pixels on the fixed region grid
+  land_buffer_m: 300         # CFAR step 1: land plus a 300 m buffer set to NaN
+  cfar_outer: 41
+  cfar_guard: 11
+  p_fa: 1.0e-7               # then calibrated on the injection and null tests (CFAR step 4)
+  enl: 4.4                   # estimate_enl default
+  cluster_px: [1, 200]
+  size_small_max_px: 4       # size_class: 1-4 small, 5-20 medium, > 20 large
+  size_medium_max_px: 20
+  pol_agree_m: 30
+  radar_wavelength_m: 0.0555 # ghost rule: lambda ~ 5.55 cm
+  ghost_db: 20
+  ghost_tol_m: 200
+  ghost_band_m: [4000, 8000] # ghost_offset_m when PRF is missing
+  ais_window_min: 30
+  match_gate_m: 500
+  match_big_cost: 1000000000 # matching step 2: large finite cost
+  presence_slow_kn: 2        # issue 3: slowest GFW presence bin
+  slow_kn: 3
+  cruise_kn: 8
+  slow_min: 20
+  storm_hs_m: 4
+  rolling_median_min: 10     # slowdown step 2
+  min_pings_cruise_hour: 3   # sparse AIS (Resolved ambiguities)
+  min_pings_slow: 2
+  slowdown_hour_utc: 12      # slowdowns_from_presence: 12:00 UTC of the date
+  ship_types: [[70, 79], [80, 89]]  # cargo, tankers
+
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
   beta0: -4
