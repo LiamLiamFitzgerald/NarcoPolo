@@ -1,6 +1,7 @@
 // Render checks for the dashboard (issues 257, 263, 276, 281). Needs Node and Playwright with Chromium; axe-core
 // is used when it can be resolved (a dev tool only, never shipped in the page).
 // Usage: node dashboard/tests/check_render.mjs <snapshot.json> [screenshot-dir]
+//        BASELINE_DIR=<dir> also compares the screenshots with a baseline set (report only).
 // Checks, in light and dark at 390, 800 and 1400 px: no console errors, no network requests, no horizontal
 // overflow, hatched cells == unobserved or unavailable cells for every heat map, the data-label chip for
 // simulated, real and mixed snapshots, land drawn when present. Then: charts and their table views, zoom and
@@ -180,6 +181,23 @@ for (const [what, image, drawn] of [["embedded png", "data:image/png;base64," + 
 }
 
 await browser.close();
+
+// 9. Visual regression (report only): compare each screenshot with the same file in $BASELINE_DIR, using pngjs and
+// pixelmatch when they can be resolved. Changed screens are listed for the PR; a human judges them.
+if (shots && process.env.BASELINE_DIR) {
+  try {
+    const { PNG } = require("pngjs"), pixelmatch = require("pixelmatch");
+    const { readdirSync, existsSync } = await import("node:fs");
+    for (const f of readdirSync(shots).filter(n => n.startsWith("dashboard-") && n.endsWith(".png"))) {
+      const ref = path.join(process.env.BASELINE_DIR, f);
+      if (!existsSync(ref)) { notes.push(`visual: ${f} has no baseline`); continue; }
+      const a = PNG.sync.read(readFileSync(path.join(shots, f))), b = PNG.sync.read(readFileSync(ref));
+      if (a.width !== b.width || a.height !== b.height) { notes.push(`visual: ${f} changed size (${b.width}x${b.height} to ${a.width}x${a.height})`); continue; }
+      const diff = pixelmatch(a.data, b.data, null, a.width, a.height, { threshold: 0.1 });
+      notes.push(`visual: ${f} ${diff ? `${(100 * diff / (a.width * a.height)).toFixed(2)}% of pixels changed` : "unchanged"}`);
+    }
+  } catch { notes.push("visual: skipped (pngjs and pixelmatch not installed)"); }
+}
 for (const n of notes) console.log(n);
 console.log(failures.length ? `FAIL\n${failures.join("\n")}` : "All render checks passed.");
 process.exit(failures.length ? 1 : 0);

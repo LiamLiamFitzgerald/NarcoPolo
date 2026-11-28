@@ -808,7 +808,7 @@ function drawSiteList() {
     const timeline = h("div");
     const more = h("details", {}, h("summary", { className: "state" }, "Why, and what to check"), timeline,
       h("ul", {}, ...s.reasons.slice(1).map(r => h("li", {}, r))),
-      h("p", {}, `Seen ${s.recurrence} times` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
+      h("p", {}, `Seen ${s.recurrence} time${s.recurrence === 1 ? "" : "s"}` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
         (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pier).join(", ")}.` : ".")));
     more.addEventListener("toggle", () => { if (more.open && !timeline.childElementCount) timeline.append(siteTimeline(s)); }); // built on first open
     const li = h("li", {}, lead, h("div", {}, head, h("div", { className: "supporting" }, s.reasons[0] ?? ""), more));
