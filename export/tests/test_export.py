@@ -3,6 +3,7 @@ import struct
 import zlib
 from datetime import UTC, date, datetime
 
+import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
@@ -15,8 +16,12 @@ from core.schemas import check_json
 from export import (
     _backdrop,
     _basemap,
+    _closed_area_features,
     _daily,
+    _fisheries_candidates,
+    _fisheries_sites,
     _legends,
+    _mission_mix,
     _provenance,
     _scan,
     _timeline,
@@ -353,7 +358,8 @@ def test_basemap_draws_land_when_the_land_layer_exists_and_only_the_outline_othe
 def test_snapshot_basemap_has_the_simulated_land(world):
     _, snap = world
     kinds = [f["properties"]["kind"] for f in snap["basemap"]["features"]]
-    assert kinds == ["study_area", "land"]  # the simulator writes reference/land (#133)
+    assert kinds[:2] == ["study_area", "land"]  # the simulator writes reference/land (#133)
+    assert set(kinds[2:]) <= {"closed_area"}  # and reference/closed_areas once #360 is in (#322)
     # the land lies along the simulated grid (which starts at x0, a little west of region_bbox)
     boxes = list(snap["cells"]["geometry"].values())
     west, east = min(b[0] for b in boxes), max(b[2] for b in boxes)
@@ -438,10 +444,20 @@ def test_timeline_lists_each_slowdown_with_the_passes_after_it():
 
 
 def test_site_cards_carry_placeholder_checks_and_pier_times_until_p6_writes_them(world):
+    # before #360 the simulator's fuse/sites has no #320 columns: every check and time is None, never False
+    # or 0; once it carries them, the card shows them (hours x 60 = minutes)
     _, snap = world
-    for s in snap["sites"]:
-        assert s["checks"] == {"rare_slowdown": None, "boats_after": None, "outside_fishing": None}
-        assert s["top_pier_minutes"] == [None] * len(s["top_piers"])  # PLACEHOLDER (#320)
+    stage = io.read_stage("fuse/sites").set_index("site_id")
+    cols = {"rare_slowdown": "check_rare_slowdown", "boats_after": "check_followup_seen",
+            "outside_fishing": "check_outside_fishing"}  # fmt: skip
+    for s in (x for x in snap["sites"] if x["lens"] == "dropoff"):
+        row = stage.loc[s["id"]]
+        for k, col in cols.items():
+            v = row.get(col)
+            assert s["checks"][k] == (None if v is None or pd.isna(v) else bool(v))
+        hours = row.get("top_piers_hours")
+        want = [None] * len(s["top_piers"]) if hours is None else [round(h * 60, 4) for h in hours]
+        assert s["top_pier_minutes"] == want[:3]
         assert all(p["seen"] is None for e in s["timeline"] for p in e["passes"])
         assert all(e["date"] >= "2026-11-02" for e in s["timeline"])  # within the shown weeks
 
@@ -450,7 +466,12 @@ def test_plan_stops_carry_their_lens_and_only_the_zero_mix_is_ready(world):
     _, snap = world
     ship = snap["plan"]["ship"]
     assert "lens" not in ship[0] and ship[1]["lens"] == "dropoff" and ship[1]["reason"] == "explore"
-    assert snap["meta"]["mission_mix"] == {"wanted": [0], "ready": [0]}  # PLACEHOLDER (#316, #321)
+    mm = snap["meta"][
+        "mission_mix"
+    ]  # the fixture writes no plan_mixes.json: only the 0 % plan is ready
+    assert mm["ready"] == [0] and mm["plans"] == {} and 0 in mm["wanted"]
+    want = load(io.CONFIG_PATH)[0]["patrol"].get("mission_mixes", [0])
+    assert mm["wanted"] == sorted({0, *want})
 
 
 def test_headline_figures_match_a_hand_count_on_the_simulator(world):
@@ -463,3 +484,103 @@ def test_headline_figures_match_a_hand_count_on_the_simulator(world):
     assert fig["aircraft_h"] is None  # the fixture plan has no aircraft stops: unknown, not 0 h
     week = snap["cells"]["weeks"][snap["meta"]["week"]]
     assert fig["observed_share"] == pytest.approx(sum(c["observed"] for c in week) / len(week))
+
+
+# Fisheries lens (#321, #322) on hand-built frames
+def _fish(rows):
+    base = {"count": 1.0, "mu": 0.5, "p_mid": 0.01, "y_fish_lo": 1.0, "y_fish_hi": 3.0, "reasons": ["r"],
+            "top_harbours": ["p1", "p2"], "top_harbours_hours": [0.5, 1.25], "lens": "fisheries"}  # fmt: skip
+    return pd.DataFrame([{**base, **r} for r in rows]).assign(
+        week=lambda d: pd.to_datetime(d["week"]),
+        in_closed_area=lambda d: d["in_closed_area"].astype("boolean"),
+    )
+
+
+def test_fisheries_candidates_use_the_latest_week_up_to_T_flagged_first():
+    fish = _fish([
+        {"cell_id": "a", "week": "2026-11-16", "y_fish": 9.0, "flag": True, "in_closed_area": True},
+        {"cell_id": "b", "week": "2026-11-23", "y_fish": 5.0, "flag": False, "in_closed_area": None},
+        {"cell_id": "c", "week": "2026-11-23", "y_fish": 2.0, "flag": True, "in_closed_area": False},
+        {"cell_id": "d", "week": "2026-11-23", "y_fish": 3.0, "flag": True, "in_closed_area": True},
+        {"cell_id": "e", "week": "2026-11-30", "y_fish": 99.0, "flag": True, "in_closed_area": True},
+    ])  # fmt: skip
+    got = _fisheries_candidates(fish, date(2026, 11, 28), top=2)
+    assert list(got["cell_id"]) == [
+        "d",
+        "c",
+    ]  # W48 only (e is after T, a older); flagged, then y_fish
+    assert _fisheries_candidates(fish, date(2026, 11, 1), top=2).empty  # nothing up to T
+
+
+def test_fisheries_sites_carry_their_fields_and_no_made_up_drop_off_numbers():
+    x, y = (float(v) for v in to_utm(-9.0, 51.5))
+    ref = pd.DataFrame(
+        {
+            "cell_id": ["b"],
+            "geometry": [Polygon([(x, y), (x + 2000, y), (x + 2000, y + 2000), (x, y + 2000)])],
+        }
+    )
+    ref = gpd.GeoDataFrame(ref, crs=32629)
+    fish = _fish(
+        [
+            {
+                "cell_id": "b",
+                "week": "2026-11-23",
+                "y_fish": 5.0,
+                "flag": False,
+                "in_closed_area": None,
+            }
+        ]
+    )
+    (s,) = _fisheries_sites(fish, ref)
+    assert s["id"] == "b" and s["lens"] == "fisheries" and s["week"] == "2026-11-23"
+    assert (s["y_fish"], s["y_fish_lo"], s["y_fish_hi"]) == (5.0, 1.0, 3.0)
+    assert s["in_closed_area"] is None  # NA: no closed-areas layer covers the cell, never "outside"
+    assert s["top_piers"] == ["p1", "p2"] and s["top_pier_minutes"] == [30.0, 75.0]
+    assert abs(s["lon"] + 8.9857) < 1e-3  # the cell centre, 1 km east of its corner
+    for k in ("S", "p_perm", "bh_flag", "recurrence", "agreement", "followup_unobserved", "p_site"):
+        assert s[k] is None, k
+    assert s["links"] == [] and s["timeline"] == [] and set(s["checks"].values()) == {None}
+
+
+def test_closed_areas_become_wgs84_basemap_features_with_name_and_type():
+    x, y = (float(v) for v in to_utm(-9.0, 51.5))
+    areas = pd.DataFrame({"name": ["Area A"], "type": ["closure"],
+                          "geometry": [Polygon([(x, y), (x + 4000, y), (x + 4000, y + 4000)])]})  # fmt: skip
+    (f,) = _closed_area_features(areas)
+    assert f["properties"] == {"kind": "closed_area", "name": "Area A", "type": "closure"}
+    lon, lat = f["geometry"]["coordinates"][0][0]
+    assert abs(lon + 9.0) < 1e-3 and abs(lat - 51.5) < 1e-3
+    sea = Polygon([(x, y), (x + 10, y), (x + 10, y + 10)])
+    kinds = [g["properties"]["kind"] for g in _basemap(sea, None, areas)["features"]]
+    assert kinds == ["study_area", "closed_area"]
+
+
+def test_mission_mix_offers_only_mixes_patrol_planned_for_this_T():
+    stop = {
+        "id": "base",
+        "arrival_utc": "2026-11-29T00:00:00Z",
+        "dwell_h": 0,
+        "x_m": 500000.0,
+        "y_m": 5700000.0,
+    }
+    fish_stop = {**stop, "id": "c9", "lens": "fisheries", "dwell_h": 1}
+    p = {"ship": [stop, fish_stop, stop], "aircraft": [stop, stop]}
+    cfg = {"patrol": {"mission_mixes": [0, 25, 50]}}
+    mixes = {"T": "2026-11-28", "plans": {"25": p, "50": {"ship": [stop]}, "75": p}}
+    mm = _mission_mix(cfg, mixes, date(2026, 11, 28), {"c9": "dropoff"})
+    assert mm["wanted"] == [0, 25, 50] and mm["ready"] == [
+        0,
+        25,
+    ]  # 50 lacks aircraft, 75 not wanted
+    assert (
+        mm["plans"]["25"]["ship"][1]["lens"] == "fisheries"
+    )  # the stop's own lens wins over the id
+    assert _mission_mix(cfg, mixes, date(2026, 11, 29), {})["ready"] == [
+        0
+    ]  # made for another T: stale
+    assert _mission_mix({}, None, date(2026, 11, 28), {}) == {
+        "wanted": [0],
+        "ready": [0],
+        "plans": {},
+    }
