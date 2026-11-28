@@ -264,5 +264,5 @@ def test_simulated_patrol_outcomes_update_only_visited_sites(world):
         )
         assert new[site]["alpha"] == pytest.approx(0.9 * st["alpha"] + found)
         assert new[site]["beta"] == pytest.approx(0.9 * st["beta"] + n - found)
-        assert (new[site]["last_visit_week"] == week) == (n > 0)
+        assert (new[site]["last_visit_week"] == week) == (int(n) > 0)
     check_json("patrol/bandit_state", new)
