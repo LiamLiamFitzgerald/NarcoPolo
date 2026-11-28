@@ -16,7 +16,7 @@ depends_on = ["core"]
 
 [[modules]]
 path = "validate"
-depends_on = ["core", "detect", "forecast", "fuse"]
+depends_on = ["core", "detect", "detectors", "forecast", "fuse"]
 
 [[modules]]
 path = "ingest"
