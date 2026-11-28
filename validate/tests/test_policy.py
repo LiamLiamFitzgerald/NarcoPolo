@@ -138,7 +138,7 @@ def test_columns_and_unknown_policy():
 
 
 def test_block_splits_train_and_held_out(monkeypatch):
-    learn = {"regimes": {"train": ["fixed"], "held_out": ["null"]}, "n_seeds": 2,
+    learn = {"regimes": {"train": ["fixed"], "held_out": ["null"]}, "n_seeds": 20, "n_seeds_quick": 2,
              "prior_strength": 5, "discount": 0.9}  # fmt: skip
     monkeypatch.setattr(policy, "load", lambda _: ({"learn": learn}, ""))
     b = _block(DEPS)
