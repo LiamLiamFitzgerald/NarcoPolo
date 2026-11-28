@@ -5,6 +5,7 @@ import pytest
 from core.split import Split, folds
 from forecast import (
     EXPECTED_COLUMNS,
+    _pit_coverage,
     backtest,
     choose_baseline,
     design_matrix,
@@ -128,11 +129,25 @@ def test_interval_covers_about_ninety_percent():
     f2, f10, X2, X10, _ = _setup("slowdown")
     mu, phi = _glm(f2, f10, X2, X10)
     test = SPLIT.test(f2)
-    lo, hi = nb_interval(mu, phi, LEVEL)
-    coverage = ((test["count"] >= lo) & (test["count"] <= hi)).mean()
-    assert 0.88 <= coverage <= 0.995, (
-        coverage
-    )  # discrete counts make central intervals conservative
+    seen = (test.exposure > 0).to_numpy()
+    coverage = _pit_coverage(test["count"][seen], mu[seen], phi, LEVEL)
+    assert abs(coverage - LEVEL) <= 0.02, coverage
+
+
+def test_pit_coverage_recovers_known_nb_coverage():
+    """D7 (#175): at small mu the raw "count in [lo, hi]" measure has a floor near P(0); PIT doesn't."""
+    from scipy import stats
+
+    rng = np.random.default_rng(20261127)
+    phi, n = 2.0, 200_000
+    for mu in (0.05, 5.0):
+        c = stats.nbinom(n=mu / (phi - 1), p=1 / phi).rvs(n, random_state=rng)
+        m = np.full(n, mu)
+        lo, hi = nb_interval(m, phi, LEVEL)
+        if mu == 0.05:
+            assert ((c >= lo) & (c <= hi)).mean() >= 0.95  # the old measure, fooled by P(0)
+        assert abs(_pit_coverage(c, m, phi, LEVEL) - LEVEL) <= 0.01, mu
+    assert _pit_coverage(c, m, 4.0, LEVEL) > 0.92  # too-wide intervals are caught (power)
 
 
 def test_negative_binomial_interval_is_wider_when_overdispersed():
