@@ -48,12 +48,37 @@ def null_pvalue(scores: pd.Series, null) -> pd.Series:
     return pd.Series(p, index=scores.index, name=scores.name)
 
 
+def attention() -> dict[str, float] | None:
+    """Regret weight per merged group from reports/attention.json (L6, docs/learning.md L3 step 4a), keyed by the
+    group's agents joined with "+" (e.g. "oe+midp"). None, logged, when it is missing, unreadable or fitted under
+    another config: then every group votes equally."""
+    path = Path(os.environ.get("NARCO_REPORTS", io.ROOT / "reports")) / "attention.json"
+    if not path.exists():
+        log.info("no reports/attention.json: equal votes per merged group")
+        return None
+    try:
+        body = json.loads(path.read_text())
+        if body.get("config_hash") != load(io.CONFIG_PATH)[1]:
+            log.warning("reports/attention.json config_hash is stale: equal votes per merged group")
+            return None
+        return {g: float(v["weight"]) for g, v in body["groups"].items()}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as e:
+        log.warning("reports/attention.json unreadable (%s): equal votes per merged group", e)
+        return None
+
+
 def weights(columns, merged: list[list[str]]) -> pd.Series:
-    """Equal weight 1/m per merged group, split equally over the group's agents that have a column, so three
-    agents driven by the same counts carry one vote, not three. Groups with no column drop out of m."""
+    """CCT weight per agent. Each merged group gets its regret weight from attention() (a group the file does not
+    list gets learn.attention_floor), or 1 when there is no file; group weights are renormalised over the groups
+    with a column and split equally over the group's agents present, so three agents driven by the same counts
+    share one vote. Weights are fixed from simulator backtests before they are applied (L3 4a), so CCT stays valid."""
     present = [[a for a in g if a in columns] for g in merged]
-    present = [g for g in present if g]
-    w = {a: 1 / (len(present) * len(g)) for g in present for a in g}
+    keyed = [("+".join(g), p) for g, p in zip(merged, present, strict=True) if p]
+    att = attention()
+    floor = float(load(io.CONFIG_PATH)[0]["learn"]["attention_floor"]) if att is not None else 1.0
+    gw = {k: (att.get(k, floor) if att is not None else 1.0) for k, _ in keyed}
+    total = sum(gw.values())
+    w = {a: gw[k] / total / len(p) for k, p in keyed for a in p} if total > 0 else {}
     return pd.Series(w, dtype=float)
 
 

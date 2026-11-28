@@ -231,3 +231,45 @@ def test_scores_with_null_samples_join_the_combination(data_root):
 def test_score_without_null_samples_is_left_out(data_root):
     s = _stub_sites().assign(score_gi=1.0)
     assert list(learn._agent_pvalues(s, ["gi", "link"]).columns) == ["link"]
+
+
+def _attention(root, weights, config_hash=None):
+    (root / "reports").mkdir(exist_ok=True)
+    body = {"groups": {g: {"weight": w} for g, w in weights.items()}}
+    body["config_hash"] = config_hash or load(io.CONFIG_PATH)[1]
+    (root / "reports" / "attention.json").write_text(json.dumps(body))
+
+
+def test_no_attention_file_keeps_equal_weights_per_group(data_root):
+    w = combine.weights(["oe", "midp", "link"], [["oe", "midp"], ["link"]])
+    assert w.to_dict() == pytest.approx({"oe": 0.25, "midp": 0.25, "link": 0.5})
+
+
+@pytest.mark.parametrize("stale", [False, True])
+def test_attention_weights_per_group_split_within_and_sum_to_one(data_root, stale):
+    _attention(data_root, {"oe+midp": 0.8, "link": 0.2}, "stale" if stale else None)
+    w = combine.weights(["oe", "midp", "link"], [["oe", "midp"], ["link"]])
+    assert w.sum() == pytest.approx(1.0)
+    want = (
+        {"oe": 0.25, "midp": 0.25, "link": 0.5} if stale else {"oe": 0.4, "midp": 0.4, "link": 0.2}
+    )
+    assert w.to_dict() == pytest.approx(want)  # a stale file is ignored, never half-applied
+
+
+def test_attention_renormalises_over_groups_present_and_floors_unlisted_ones(data_root):
+    _attention(data_root, {"oe+midp": 0.9, "link": 0.1})
+    assert combine.weights(["link"], [["oe", "midp"], ["link"]]).to_dict() == pytest.approx(
+        {"link": 1.0}
+    )
+    floor = load(io.CONFIG_PATH)[0]["learn"]["attention_floor"]
+    w = combine.weights(["oe", "gi"], [["oe"], ["gi"]])  # neither group is in the file
+    assert w.to_dict() == pytest.approx({"oe": 0.5, "gi": 0.5}) and floor > 0
+
+
+def test_a_heavier_group_pulls_p_comb_towards_its_p(data_root):
+    pv = pd.DataFrame({"oe": [1e-4, 0.5], "link": [0.5, 1e-4]})
+    merged = [["oe"], ["link"]]
+    even = combine.cct(pv, combine.weights(pv.columns, merged))
+    _attention(data_root, {"oe": 0.9, "link": 0.1})
+    heavy = combine.cct(pv, combine.weights(pv.columns, merged))
+    assert heavy[0] < even[0] and heavy[1] > even[1]
