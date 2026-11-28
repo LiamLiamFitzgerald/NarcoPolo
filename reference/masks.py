@@ -5,7 +5,8 @@ far corner. Rows run south to north like sea_raster: pixel (r, c) has centre (x0
 A north-up GeoTIFF is flipped once, when it is read or written. Thresholds are keyword arguments with the spec's
 defaults until P3's config keys land (#85)."""
 
-from collections.abc import Sequence
+import warnings
+from collections.abc import Iterable
 from functools import cache
 from pathlib import Path
 from typing import NamedTuple
@@ -25,9 +26,9 @@ from core.grid import FINE, _origin
 
 PX = 10  # m per pixel
 _BLOCK = 256  # pixels per side when rasterising: whole blocks inside or outside land skip the per-pixel test
-_MEDIAN_ROWS = (
-    64  # bin rows per median batch: ~64 x 500 bins x 1681 px x 4 B = 215 MB on a full scene
-)
+# bins per median batch, not rows: 32 000 bins x 1681 px x 4 B = 215 MB whatever the region's width (the real region
+# is ~3 900 bins wide, so a fixed 64 rows was 1.7 GB per batch, plus numpy's copies)
+_MEDIAN_BINS = 32_000
 
 
 class Scene(NamedTuple):
@@ -74,7 +75,7 @@ def land_mask_10m(coastline: BaseGeometry, buffer_m: float = 300) -> NDArray[np.
 
 
 def static_mask_10m(
-    scenes: Sequence[Scene],
+    scenes: Iterable[Scene],
     land_mask: NDArray[np.uint8],
     static_db: float = 10,
     share: float = 0.6,
@@ -85,7 +86,9 @@ def static_mask_10m(
     """1 = a fixed bright object. A bin_m bin is fixed if its brightest VV pixel is at least static_db over the median
     of the surrounding window_px x window_px pixels in at least `share` of the passes that fully covered it; fixed
     bins are grown by grow_m. Built from raw radar, not P4's detections. Land pixels are never static. A drop site
-    visited every few days stays under `share`, so it is not masked (spec warning)."""
+    visited every few days stays under `share`, so it is not masked (spec warning).
+    scenes is consumed once, one at a time, in float32: a full-region scene is ~175 M pixels, so the peak memory is
+    a few copies of one scene, never all of them."""
     rows, cols = land_mask.shape
     k = round(bin_m / PX)
     nb_r, nb_c = -(-rows // k), -(-cols // k)
@@ -93,34 +96,43 @@ def static_mask_10m(
     covered = np.zeros((nb_r, nb_c), np.int32)
     half = window_px // 2
     for s in scenes:
-        vv = np.asarray(s.vv_db, float)
+        vv = np.asarray(s.vv_db, np.float32)
         h, w = vv.shape
         land = land_mask[s.row0 : s.row0 + h, s.col0 : s.col0 + w].astype(bool)
         # whole bins only: pad the scene out to bin edges (NaN = not looked), then reduce each k x k block
         pr, pc = s.row0 % k, s.col0 % k
         H, W = -(-(h + pr) // k) * k, -(-(w + pc) // k) * k
-        vv_p = np.full((H, W), np.nan)
-        vv_p[pr : pr + h, pc : pc + w] = np.where(land, np.nan, vv)
+        # the window_px median needs `half` NaN pixels around the scene: allocate the padded array once and fill
+        # its inside (vv_p is a view), so a full-region scene has one float32 copy here, not three
+        padded = np.full((H + 2 * half, W + 2 * half), np.nan, np.float32)
+        vv_p = padded[half : half + H, half : half + W]
+        inner = vv_p[pr : pr + h, pc : pc + w]
+        inner[...] = vv
+        inner[land] = np.nan
         seen_p = np.zeros((H, W), bool)
         seen_p[pr : pr + h, pc : pc + w] = np.isfinite(vv)
         full = seen_p.reshape(H // k, k, W // k, k).all(axis=(1, 3))
-        peak = np.nanmax(
-            np.where(np.isnan(vv_p), -np.inf, vv_p).reshape(H // k, k, W // k, k), axis=(1, 3)
-        )
+        del seen_p
+        # brightest pixel per bin; fmax skips NaN without copying the scene (an all-NaN bin stays NaN, never bright)
+        blocks = vv_p.reshape(H // k, k, W // k, k)
+        peak = np.fmax.reduce(np.fmax.reduce(blocks, axis=3), axis=1)
         # median of the window_px x window_px pixels around each bin's centre (spec), NaN-aware at scene edges
-        padded = np.pad(vv_p.astype(np.float32), half, constant_values=np.nan)
         win = np.lib.stride_tricks.sliding_window_view(padded, (window_px, window_px))
         centres = win[k // 2 :: k, k // 2 :: k][: H // k, : W // k]
         med = np.empty(centres.shape[:2], np.float32)
-        for i in range(0, med.shape[0], _MEDIAN_ROWS):  # bounded memory on full-size scenes
-            flat = centres[i : i + _MEDIAN_ROWS].reshape(-1, window_px * window_px)
+        step = max(1, _MEDIAN_BINS // max(med.shape[1], 1))  # bin rows per batch: bounded memory
+        for i in range(0, med.shape[0], step):
+            flat = centres[i : i + step].reshape(-1, window_px * window_px)
             edge = np.isnan(flat).any(
                 axis=1
             )  # windows touching land or the scene edge: NaN-aware median
             m = np.median(flat, axis=1)
-            with np.errstate(all="ignore"):
+            with np.errstate(all="ignore"), warnings.catch_warnings():
+                warnings.simplefilter(
+                    "ignore", RuntimeWarning
+                )  # all-NaN windows (off-swath): NaN, never bright
                 m[edge] = np.nanmedian(flat[edge], axis=1)
-            med[i : i + _MEDIAN_ROWS] = m.reshape(-1, med.shape[1])
+            med[i : i + step] = m.reshape(-1, med.shape[1])
         any_hit = peak - med >= static_db  # NaN medians (nothing seen) compare False
         br, bc = s.row0 // k, s.col0 // k
         er, ec = min(br + H // k, nb_r), min(bc + W // k, nb_c)

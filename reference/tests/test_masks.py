@@ -136,3 +136,35 @@ def test_static_frac_is_the_masked_share_of_each_cell():
     )
     f = rm.static_frac(cells, mask)
     assert list(f) == [pytest.approx(0.5), 0.0]
+
+
+def test_real_scenes_are_read_lazily_and_nodata_is_not_looked(tmp_path):
+    """P2's real scenes are int16 dB x 100 with nodata -32768 outside the swath (#293). _scenes yields one scene at
+    a time (a full-region scene is ~175 M pixels) and turns nodata into NaN, never a -327 dB pixel that counts as
+    seen."""
+    import types
+
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from core.grid import _origin
+    from reference import _real
+
+    (tmp_path / "s1").mkdir()
+    x0, y0 = _origin()
+    db100 = np.array([[-1500, -32768], [-2000, -1200]], np.int16)  # one off-swath pixel
+    for name in ("a", "b"):
+        with rasterio.open(
+            tmp_path / "s1" / f"{name}.tif", "w", driver="GTiff", height=2, width=2, count=2,
+            dtype="int16", crs="EPSG:32629", nodata=-32768,
+            transform=from_origin(x0 + 100, y0 + 220, rm.PX, rm.PX),
+        ) as dst:  # fmt: skip
+            dst.write(np.stack([db100, db100]))
+    scenes = _real._scenes(tmp_path, None)
+    assert isinstance(scenes, types.GeneratorType)  # lazy: nothing read until the mask asks
+    first = next(scenes)
+    assert first.vv_db.dtype == np.float32
+    # rows south to north: the file's top row is the scene's last row
+    np.testing.assert_allclose(first.vv_db, [[-20.0, -12.0], [-15.0, np.nan]])
+    assert (first.row0, first.col0) == (20, 10)
+    assert len(list(scenes)) == 1
