@@ -142,7 +142,7 @@ def test_pit_coverage_recovers_known_nb_coverage():
     phi, n = 2.0, 200_000
     for mu in (0.05, 5.0):
         c = stats.nbinom(n=mu / (phi - 1), p=1 / phi).rvs(n, random_state=rng)
-        m = np.full(n, mu)
+        m = pd.Series(np.full(n, mu))
         lo, hi = nb_interval(m, phi, LEVEL)
         if mu == 0.05:
             assert ((c >= lo) & (c <= hi)).mean() >= 0.95  # the old measure, fooled by P(0)
