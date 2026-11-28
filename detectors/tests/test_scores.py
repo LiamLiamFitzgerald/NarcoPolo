@@ -201,3 +201,50 @@ def test_cusum_h_is_calibrated_on_a_null_simulator_run(tmp_path, monkeypatch):
     h = _calibrate_h(series, target)
     assert _alarm_rate(series, h) <= target < _alarm_rate(series, h * 0.9)
     assert _alarm_rate(series, PARAMS["cusum_h"]) == pytest.approx(target, rel=0.1)
+
+
+def test_first_calm_after_storm_per_cell_day():
+    from detectors.scores import _first_calm_after_storm
+
+    t = pd.to_datetime(
+        [
+            "2026-01-01 06:00",
+            "2026-01-02 06:00",
+            "2026-01-03 06:00",
+            "2026-01-04 06:00",
+            "2026-01-01 06:00",
+        ],
+        utc=True,
+    )
+    exp = pd.DataFrame(
+        {
+            "cell_id": ["a", "a", "a", "a", "b"],
+            "time_utc": t,
+            "covered_frac": [1.0, 1.0, 1.0, 1.0, 1.0],
+            "calm": [False, True, True, True, True],
+            "post_storm": pd.array([True, True, True, False, None], dtype="boolean"),
+        }
+    )
+    m = pd.DataFrame(
+        {
+            "cell_id": ["a", "a", "a", "a", "b", "b"],
+            "date": pd.to_datetime(
+                ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04", "2026-01-01", "2026-01-05"]
+            ),
+        }
+    )
+    got = _first_calm_after_storm(m, exp)
+    # storm pass (not calm) 0; first calm post-storm pass 1; second one 0; calm, no storm 0; unknown NaN; no pass NaN
+    assert np.array_equal(got, [0, 1, 0, 0, np.nan, np.nan], equal_nan=True)
+
+
+def test_run_cells_reads_post_storm_into_context(sim_data):
+    from detectors.scores import _first_calm_after_storm
+
+    exp = io.read_stage("coverage/exposure")
+    obs = io.read_stage("aggregate/observed")
+    m = obs[(obs["exposure"] > 0) & (obs["event_type"] == "dark_small")]
+    f = _first_calm_after_storm(m, exp)
+    assert np.isfinite(
+        f
+    ).any()  # the simulator writes post_storm, so the fact is known on some days
