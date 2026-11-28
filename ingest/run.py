@@ -1,6 +1,8 @@
 """make fetch: every raw/ file for the region and windows in config; idempotent through the cache.
 
 Order: ERA5 first (it picks the calm passes), then Sentinel-1 list -> select -> fetch, GFW, OSM, static.
+Sentinel-1 scenes are fetched ingest.s1_workers at a time; a failed scene is retried once and never stops
+the run. A rerun after a stop resumes: fetch_scene returns already-cached scenes without downloading.
 Each source runs on its own: a failure is reported on stderr and the rest still run; FetchError at the end.
 The window end (last full UTC day) is pinned in raw/manifest.json["window"] on the first fetch, so a rerun
 on a later day sends the same requests and downloads nothing. Afterwards manifest["latest"] gets each
@@ -10,7 +12,9 @@ feed's latest date as found in the files (never guessed) and, once all four are 
 import json
 import os
 import sys
+import time
 from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -25,6 +29,8 @@ from core.io import raw_root
 from ingest import _stub, era5, gfw, osm, s1, static
 
 _FEEDS = ("radar", "gfw_presence", "gfw_sar", "era5")
+# TODO(P2): config ingest.s1_workers (#292): the openEO account's concurrent batch-job limit
+S1_WORKERS = 2
 
 
 class FetchError(RuntimeError):
@@ -86,10 +92,11 @@ def fetch_all(config: Config) -> None:
             else step("s1.select_passes", lambda: s1.select_passes(passes, weather))
         )
         if chosen is not None:
-            _say(f"s1: {int(chosen['downloaded'].sum())} of {len(chosen)} passes selected")
-            for row in chosen[chosen["downloaded"]].to_dict("records"):
-                scene = {str(k): v for k, v in row.items()}
-                step(f"s1.fetch_scene:{scene['pass_id']}", lambda s=scene: s1.fetch_scene(s))
+            picked = chosen[chosen["downloaded"]].drop_duplicates("pass_id")  # one thread per pass
+            rows = [{str(k): v for k, v in r.items()} for r in picked.to_dict("records")]
+            workers = int(config.get("ingest", {}).get("s1_workers", S1_WORKERS))
+            _say(f"s1: {len(rows)} of {len(chosen)} passes selected, {workers} at a time")
+            _fetch_scenes(raw, rows, workers, tally, failed)
     step("gfw_sar", lambda: gfw.fetch_sar(bbox, ship_start, end))
     step("gfw_presence", lambda: gfw.fetch_presence(bbox, ship_start, end))
     step("osm.fetch_piers", lambda: osm.fetch_piers(bbox))
@@ -107,6 +114,40 @@ def fetch_all(config: Config) -> None:
     _say(f"{tally['downloaded']} downloaded, {tally['cached']} cached, {len(failed)} failed")
     if failed:
         raise FetchError(f"failed: {', '.join(failed)}")
+
+
+def _fetch_scenes(
+    raw: Path, rows: list[dict], workers: int, tally: dict, failed: list[str]
+) -> None:
+    """fetch_scene for every row, `workers` in flight; each failure retried once, then reported."""
+    before = set(_manifest(raw)["files"])  # a scene already here is a cache hit, not a download
+    t0, done, total = time.monotonic(), 0, len(rows)
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+        tries: dict[Future, tuple[dict, int]] = {
+            pool.submit(s1.fetch_scene, r): (r, 1) for r in rows
+        }
+        while tries:
+            finished, _ = wait(tries, return_when=FIRST_COMPLETED)
+            for fut in finished:
+                row, attempt = tries.pop(fut)
+                name = f"s1.fetch_scene:{row['pass_id']}"
+                if (e := fut.exception()) is not None:
+                    why = f"{type(e).__name__}: {str(e)[:300]}"
+                    if attempt == 1:
+                        _say(f"retry {name}: {why}")
+                        tries[pool.submit(s1.fetch_scene, row)] = (row, 2)
+                        continue
+                    failed.append(name)
+                    how = f"FAILED {name}: {why}"
+                else:
+                    rel = _rel(raw, fut.result())
+                    kind = "cached" if rel in before else "downloaded"
+                    tally[kind] += 1
+                    size = (raw / rel).stat().st_size
+                    how = f"{kind} {rel} {size:,} B"
+                done += 1
+                elapsed = timedelta(seconds=round(time.monotonic() - t0))
+                _say(f"s1 {done}/{total} {how}, elapsed {elapsed}")
 
 
 def _today() -> date:

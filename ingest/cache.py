@@ -7,10 +7,14 @@ Manifest shape matches sim/raw.py: {"latest": {...}, "files": {path: {request, s
 import hashlib
 import json
 import os
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
 from core.io import raw_root
+
+# ingest.run fetches scenes on several threads: one manifest read-modify-write at a time
+_LOCK = threading.RLock()
 
 
 def request_key(request: dict) -> str:
@@ -33,7 +37,9 @@ def _load_manifest(raw: Path) -> dict:
 def cached(request: dict) -> Path | None:
     raw = raw_root()
     key = request_key(request)
-    for rel, entry in _load_manifest(raw)["files"].items():
+    with _LOCK:
+        files = _load_manifest(raw)["files"]
+    for rel, entry in files.items():
         path = raw / rel
         if request_key(entry["request"]) == key and path.is_file():
             return path
@@ -48,10 +54,16 @@ def record(request: dict, path: Path, licence: str) -> None:
         raise FileNotFoundError(path)
     raw = raw_root()
     rel = path.resolve().relative_to(raw.resolve()).as_posix()  # ValueError if outside raw/
+    digest = _sha256(path)  # outside the lock: hashing a ~700 MB scene takes seconds
+    with _LOCK:
+        _write(raw, rel, request, digest, licence)
+
+
+def _write(raw: Path, rel: str, request: dict, digest: str, licence: str) -> None:
     manifest = _load_manifest(raw)
     manifest["files"][rel] = {
         "request": request,
-        "sha256": _sha256(path),
+        "sha256": digest,
         "download_time": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "licence": licence,
     }
