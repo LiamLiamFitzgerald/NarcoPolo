@@ -7,7 +7,7 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
-from detect._standin import CFG
+from detect._common import CFG
 
 
 def to_linear(db100: np.ndarray) -> np.ndarray:

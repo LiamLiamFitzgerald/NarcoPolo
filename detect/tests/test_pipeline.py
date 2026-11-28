@@ -5,17 +5,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from detect import _standin
-from detect._standin import Split, make_scene
+from core.split import Split
 from detect.pboat import fit_pboat
-from detect.pipeline import run_all, run_pass
+from detect.pipeline import DETECTIONS_COLUMNS, run_all, run_pass
 from detect.scene import to_linear
-
-
-@pytest.fixture(autouse=True)
-def grid_origin(monkeypatch):
-    monkeypatch.setitem(_standin.CFG, "x0", 490_000.0)
-    monkeypatch.setitem(_standin.CFG, "y0", 5_680_000.0)
+from detect.tests._scene import make_scene
 
 
 def _chip(s):
@@ -60,13 +54,16 @@ def test_injection_recall_and_false_alarms_per_brightness():
     assert all(f <= 4 for _, f in report.values())
 
 
-def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path):
+def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path, monkeypatch):
     rasterio = pytest.importorskip("rasterio")
     from rasterio.transform import from_origin
 
     s = make_scene(9, shape=(500, 500), n_boats=20, land_cols=40, pass_id="p9")
     tr = from_origin(s.meta["x_left"], s.meta["y_top"], 10, 10)
-    for d in ("raw/s1", "reference", "coverage"):
+    monkeypatch.setenv(
+        "NARCO_DATA", str(tmp_path)
+    )  # core.io.raster_path -> tmp_path/reference/*.tif
+    for d in ("raw/s1", "reference"):
         (tmp_path / d).mkdir(parents=True)
 
     def tif(path, bands, dtype):
@@ -89,13 +86,15 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path):
     tif(tmp_path / "reference/land_mask_10m.tif", [s.land], "uint8")
     tif(tmp_path / "reference/static_mask_10m.tif", [s.static], "uint8")
 
-    cands = run_pass("p9", root=tmp_path)
+    cands = run_pass("p9", root=tmp_path / "raw")
+    assert (
+        cands["cell_id"].str.match(r"^2000_-?\d+_-?\d+$").all()
+    )  # core.grid ids, as every stage file
     cells = sorted(cands["cell_id"].unique())
     rough = cells[0]
     exposure = pd.DataFrame(
         {"cell_id": cells, "pass_id": "p9", "calm": [c != rough for c in cells], "wind_ms": 3.0}
     )
-    exposure.to_parquet(tmp_path / "coverage/exposure.parquet")
 
     cut = datetime(2026, 12, 1, tzinfo=UTC)
     rng = np.random.default_rng(0)
@@ -103,11 +102,11 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path):
                         "pol_agree": rng.random(400) < 0.5, "n_px": rng.integers(1, 5, 400), "wind_ms": rng.uniform(0, 8, 400),
                         "ghost": rng.random(400) < 0.1, "time_utc": cut - pd.Timedelta(days=1)})  # fmt: skip
     inj["is_boat"] = rng.random(400) < 1 / (1 + np.exp(-(inj["peak_ratio_vv_db"] - 12)))
-    model = fit_pboat(inj, Split(cut))
+    model = fit_pboat(inj, Split(cut.date()))
 
-    det = pd.read_parquet(run_all(model, root=tmp_path))
+    det = run_all(model, exposure, raw=tmp_path / "raw")
     assert len(det) == (cands["cell_id"] != rough).sum() > 0
-    assert list(det.columns) == _standin.DETECTIONS_COLUMNS
+    assert list(det.columns) == DETECTIONS_COLUMNS
     assert det["p_boat"].between(0, 1).all() and det["p_boat"].notna().all()
 
 
@@ -115,7 +114,7 @@ def test_empty_pass_has_every_column():
     s = make_scene(11, shape=(200, 200))
     c = run_pass("empty", _chip(s), masks=(s.land, s.static))
     assert len(c) == 0
-    assert set(_standin.DETECTIONS_COLUMNS) - {"p_boat"} <= set(c.columns)
+    assert set(DETECTIONS_COLUMNS) - {"p_boat"} <= set(c.columns)
 
 
 def test_one_pol_ratio_next_to_mask_is_never_nan():
