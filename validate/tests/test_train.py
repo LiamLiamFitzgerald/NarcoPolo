@@ -15,6 +15,8 @@ from core.config import load
 from core.split import Split
 from validate import train
 
+pytestmark = pytest.mark.slow  # shared setup >= 12 s (28 Nov); run with `pytest -m slow`
+
 FEATURES = ["oe", "midp", "gi", "cusum"]
 P = train._params(load(io.CONFIG_PATH)[0])
 K = 15

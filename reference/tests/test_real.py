@@ -19,6 +19,8 @@ from core.grid import FINE
 from reference import _real
 from sim.simulate import simulate
 
+pytestmark = pytest.mark.slow  # shared setup >= 12 s (28 Nov); run with `pytest -m slow`
+
 
 @pytest.fixture(scope="module")
 def built(tmp_path_factory):

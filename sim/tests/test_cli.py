@@ -3,9 +3,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.slow
 def test_python_m_sim_writes_the_stage_files(tmp_path):
     env = {**os.environ, "NARCO_DATA": str(tmp_path)}
     subprocess.run(

@@ -27,6 +27,7 @@ def world(tmp_path_factory):
     mp.undo()
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("event_type", ["slowdown", "dark_small"])
 def test_one_row_per_model_with_finite_skill_range(world, event_type):
     t = backtest(event_type)
@@ -38,6 +39,7 @@ def test_one_row_per_model_with_finite_skill_range(world, event_type):
     assert ((t["min"] <= t["mean"]) & (t["mean"] <= t["max"])).all()
 
 
+@pytest.mark.slow
 def test_skill_is_a_real_comparison_not_a_broken_one(world):
     # constant per-cell rates make the flat baseline the true model, so skill > 0 is a real-data criterion only
     skill = backtest("slowdown")["mean"]

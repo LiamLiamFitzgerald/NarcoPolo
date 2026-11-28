@@ -48,6 +48,7 @@ def test_no_coastline_means_no_land():
     assert _one(land(_lines(LineString([(-5, -5), (-1, -1)])), REGION)).is_empty
 
 
+@pytest.mark.slow
 def test_simulator_land_reproduces_the_planted_sea_fractions(tmp_path, monkeypatch):
     """Known answer: build_cells on the land from raw/coastline.gpkg gives the simulator's own sea_frac."""
     monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
