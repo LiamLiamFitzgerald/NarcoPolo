@@ -132,6 +132,7 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | --- | --- | --- |
 | `reference/layers.gpkg` cells layer (P3) | `cell_id` str; `level` int (2000 or 10000); `geometry` polygon; `inshore_frac` `float 0–1, or NaN where no inshore map exists; lane`, `anchorage`, `port_zone`, `exclusion` bool; `dist_coast_m` float; `static_frac` float 0–1; sea\_frac float 0.2–1 | \~1,000 |
 | `reference/layers.gpkg` piers layer (P3) | `pier_id` str; `name` str; `geometry` point; `road_access` bool | tens |
+| `reference/layers.gpkg` land layer (P3, #133) | `id` int; `geometry` (multi)polygon, EPSG:32629: the land P3 closes from the coastline lines (land on the left, as in OSM); read by P7 for the basemap | 1 |
 | `reference/sea_250m.tif` (P3) | uint8: 1 sea, 0 land | about 750 × 380 px (the whole bounding box, land included) |
 | `reference/travel_hours.parquet` (P3) | `cell_id`, `pier_id`, `hours` float | cells × piers, \~50k |
 | `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1, `post_storm` bool (≥ 24 h of hs > 2.5 m in the 72 h before the pass, A9) | \~60 passes × \~940 cells, \~56k |

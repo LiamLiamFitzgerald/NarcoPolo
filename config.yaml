@@ -153,6 +153,7 @@ p6:
 reads:
   reference/cells: [x0, y0, region_bbox, reference]
   reference/piers: [x0, y0, region_bbox, reference]
+  reference/land: [x0, y0, region_bbox, reference]
   reference/travel_hours: [x0, y0, region_bbox, reference]
   coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]
