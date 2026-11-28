@@ -157,7 +157,14 @@ def _ship_key(seed: int, i: int) -> str:
     return hashlib.sha256(f"salt-{seed}-{i}".encode()).hexdigest()[:16]
 
 
-def simulate(config: Config, seed: int) -> None:
+REGIMES = ("fixed", "two_sites", "pass_aware", "displacing", "null")  # docs/learning.md L1
+
+
+def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
+    if regime not in REGIMES:
+        raise ValueError(f"unknown regime {regime!r}; one of {REGIMES}")
+    if regime != "fixed":  # placeholder: only today's single planted site exists so far
+        raise NotImplementedError(f"regime {regime!r} is built in issue #150")
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])
@@ -297,6 +304,14 @@ def simulate(config: Config, seed: int) -> None:
     pw = weather.loc[passes["day"].to_numpy()].reset_index(drop=True)
     calm = ~pw["rough"].to_numpy()
     exposure_small = cov * fine["sea_frac"].to_numpy() * calm[:, None]
+    # A9: >= storm_hours of hs > storm_hs_m in the storm_lookback_h before the pass; the simulator's weather is daily
+    cv = config["coverage"]
+    stormy = weather["hs_m"].to_numpy() > cv["storm_hs_m"]
+    look = int(cv["storm_lookback_h"] // 24)
+    need = int(np.ceil(cv["storm_hours"] / 24))
+    post_storm = np.array(
+        [stormy[max(0, d - look) : d].sum() >= need for d in passes["day"].astype(int)]
+    )
     cell_ids = fine["cell_id"].to_numpy()
     exp_df = pd.DataFrame(
         {
@@ -308,6 +323,7 @@ def simulate(config: Config, seed: int) -> None:
             "hs_m": np.repeat(pw["hs_m"].to_numpy(), n),
             "calm": np.repeat(calm, n),
             "exposure_small": exposure_small.ravel(),
+            "post_storm": np.repeat(post_storm, n),
         }
     )
 
@@ -322,7 +338,9 @@ def simulate(config: Config, seed: int) -> None:
         & (bxc <= passes["b"].to_numpy()[bpass])
     )
     wind_b = weather["wind_ms"].to_numpy()[bday]
-    detected = inside & (
+    # principle 5: small boats are looked for on calm passes only, so a rough pass detects nothing (#90)
+    calm_b = inside & ~weather["rough"].to_numpy()[bday]
+    detected = calm_b & (
         rng.random(len(boats)) < _p_det(config, boats["length_m"].to_numpy(), wind_b)
     )
     boats["detected"], boats["pass"] = detected, np.where(inside, bpass, -1)
@@ -383,6 +401,9 @@ def simulate(config: Config, seed: int) -> None:
         rows,
         columns=["k", "x_m", "y_m", "vv", "pol_agree", "n_px", "size_class", "ghost", "p_boat"],
     )
+    det = det[~pw["rough"].to_numpy()[det["k"].to_numpy(int)]].reset_index(
+        drop=True
+    )  # false alarms and ghosts too
     detections = pd.DataFrame(
         {
             "det_id": [f"det_{i:05d}" for i in range(len(det))],
@@ -542,6 +563,14 @@ def simulate(config: Config, seed: int) -> None:
             "agreement": (u >= 0.9).astype(int),
         }
     )
+    c_seen, mu_seen = fc["count"].to_numpy(), mu[seen]
+    fuse_cells["y"] = (c_seen + 0.5) / (mu_seen + 0.5)
+    week = pd.to_datetime(fuse_cells["date"]).dt.strftime("%G-W%V")
+    g = pd.DataFrame(
+        {"k": fuse_cells["cell_id"] + fuse_cells["event_type"] + week, "c": c_seen, "m": mu_seen}
+    )
+    sums = g.groupby("k")[["c", "m"]].transform("sum")
+    fuse_cells["y_week"] = ((sums["c"] + 0.5) / (sums["m"] + 0.5)).to_numpy()
 
     # fuse/sites: the planted site, with its pick-ups that no pass could have seen
     pk_seen = int(boats[(boats["kind"] == "pickup")]["pass"].ge(0).sum())
@@ -576,6 +605,19 @@ def simulate(config: Config, seed: int) -> None:
         }
     )
 
+    # fuse/piers: P_j = S x exp(-T / 1 h) from the one site; fuse/links: S split into equal links of age 0
+    t_site = travel[travel["cell_id"] == cell_ids[site]].set_index("pier_id")["hours"]
+    fuse_piers = pd.DataFrame(
+        {
+            "pier_id": piers["pier_id"],
+            "P_j": float(npk) * np.exp(-t_site.reindex(piers["pier_id"]).to_numpy()),
+        }
+    )
+    k = int(np.ceil(npk))
+    fuse_links = pd.DataFrame(
+        {"site_id": ["site_0"] * k, "L": [npk / max(k, 1)] * k, "age_days": [0.0] * k}
+    )
+
     for name, frame in {
         "reference/cells": gpd.GeoDataFrame(cells, crs=32629),
         "reference/piers": piers,
@@ -587,6 +629,8 @@ def simulate(config: Config, seed: int) -> None:
         "forecast/expected": expected,
         "fuse/cells": fuse_cells,
         "fuse/sites": sites,
+        "fuse/piers": fuse_piers,
+        "fuse/links": fuse_links,
     }.items():
         io.write_stage(name, frame, "simulated")
 
@@ -616,15 +660,18 @@ def simulate(config: Config, seed: int) -> None:
             "length_m": np.nan,
             "detected": False,
             "pass_index": -1,
+            "site_id": "site_0",  # the planted site's id in fuse/sites
         }
     )
     truth = pd.concat(
         [
-            tb[["kind", "time_utc", "x_m", "y_m", "cell_id", "length_m", "detected", "pass_index"]],
+            tb[
+                ["kind", "time_utc", "x_m", "y_m", "cell_id", "length_m", "detected", "pass_index"]
+            ].assign(site_id=None),
             td,
         ],
         ignore_index=True,
-    )
+    ).assign(regime=regime, active=lambda t: t["kind"] == "drop")
     out = io.truth_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.to_parquet(out, index=False)

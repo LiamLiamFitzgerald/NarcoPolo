@@ -22,13 +22,15 @@ if ! gh api "repos/$repo/branches/integration" >/dev/null 2>&1; then
   echo "  created branch integration"
 fi
 
+# Code-owner review is off on purpose: with required_approving_review_count 0 it never
+# blocks. Flip it to true with a count of 1 if you want a named code owner to gate merges.
 protect() {
   gh api -X PUT "repos/$repo/branches/$1/protection" --input - >/dev/null <<JSON && echo "  protected $1" \
     || echo "  could not protect $1 (private repos on GitHub Free can't use branch protection; make the repo public or rely on CI + convention)"
 {
-  "required_status_checks": {"strict": false, "contexts": ["Path ownership", "Identity scan"]},
+  "required_status_checks": {"strict": false, "contexts": ["Path ownership", "Identity scan", "Lint, types, boundaries, tests"]},
   "enforce_admins": false,
-  "required_pull_request_reviews": {"required_approving_review_count": 0, "require_code_owner_reviews": true},
+  "required_pull_request_reviews": {"required_approving_review_count": 0, "require_code_owner_reviews": false},
   "restrictions": null,
   "allow_force_pushes": false,
   "allow_deletions": false

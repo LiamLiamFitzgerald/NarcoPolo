@@ -66,3 +66,18 @@ def test_json_stage_round_trip_and_staleness(tmp_path, monkeypatch):
         io.read_json_stage("patrol/plan")
     with pytest.raises(ValueError):
         io.write_json_stage("patrol/plan", {"ship": [{**STOP, "dwell_h": -1}]}, "real")
+
+
+def test_bandit_fields_and_state():
+    check_json("patrol/plan", {"ship": [{**STOP, "theta": 0.3, "reason": "explore"}]})
+    check_json("patrol/plan", {"ship": [{**STOP, "day": 3}]})
+    for bad in [
+        {"ship": [{**STOP, "theta": 2}]},
+        {"ship": [{**STOP, "reason": "guess"}]},
+        {"ship": [{**STOP, "day": 7}]},
+    ]:
+        with pytest.raises(ValueError):
+            check_json("patrol/plan", bad)
+    check_json("patrol/bandit_state", {"s1": {"alpha": 1.5, "beta": 4.0, "last_visit_week": None}})
+    with pytest.raises(ValueError):
+        check_json("patrol/bandit_state", {"s1": {"alpha": 0, "beta": 1, "last_visit_week": 3}})

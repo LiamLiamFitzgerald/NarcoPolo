@@ -12,6 +12,43 @@ split:
   n_folds_slowdown: 12
   n_folds_small: 6
 
+# P5 forecast (docs/specs/P5.md, Parameters; ewma_min_se from the EWMA step, issue #69)
+ewma_delta: 0.97    # per day, half-life about 23 days
+ewma_min_se: 3      # fine cell uses its 10 km parent's rate until S_E reaches this
+interval: 0.9       # central interval level for lo90 / hi90
+ship_history_days: 730   # T - 729 .. T, slowdowns (24 months)
+radar_history_days: 90   # T - 89 .. T, dark_small
+
+# P3 (docs/specs/P3.md, Parameters, table and pseudo-codebase; #85)
+reference:
+  lane_pct: 90               # lane = cell in the top 10% of fast-bin presence hours
+  anchorage_share: 0.5       # slowest-bin share of the cell's presence hours
+  anchorage_top_pct: 25      # ... and total hours in the top 25%
+  port_buffer_m: 5000
+  exclusion_grow_cells: 1    # port_zone | anchorage, grown by one cell
+  static_share: 0.6          # bright in >= 60% of covering passes
+  static_db: 10              # >= 10 dB over the local median
+  static_bin_m: 50
+  static_window_px: 41       # 41 x 41 median window
+  static_grow_m: 100
+  coast_buffer_m: 300
+  min_sea_frac: 0.2          # keep a cell if at least 20% of it is sea
+  sea_raster_m: 250
+  boat_speed_kn: 15
+  pier_road_m: 200           # road_access if a road is within 200 m
+coverage:
+  calm_wind_ms: 6            # provisional until the recall curve exists
+  calm_hs_m: 1.5             # provisional
+  storm_hs_m: 2.5            # A9 post_storm: >= storm_hours of hs > storm_hs_m ...
+  storm_hours: 24
+  storm_lookback_h: 72       # ... in the 72 h before the pass
+
+validate:
+  injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
+  injection_brightness_db: [3, 6, 10, 15]  # TODO(P1): not in the spec; spans P4's threshold on the simulator
+  injection_n_per_pass: 10   # TODO(P1): not in the spec
+  injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
+
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
   beta0: -4
@@ -40,13 +77,39 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
 # A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
 # Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
 reads:
-  reference/cells: [x0, y0, region_bbox]
-  reference/piers: [x0, y0, region_bbox]
-  reference/travel_hours: [x0, y0, region_bbox]
-  coverage/exposure: [x0, y0, region_bbox]
+  reference/cells: [x0, y0, region_bbox, reference]
+  reference/piers: [x0, y0, region_bbox, reference]
+  reference/travel_hours: [x0, y0, region_bbox, reference]
+  coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]
   match/events: [x0, y0, region_bbox]
-  aggregate/observed: [x0, y0, region_bbox]
-  forecast/expected: [x0, y0, region_bbox, split]
+  aggregate/observed: [x0, y0, region_bbox, ship_history_days, radar_history_days]
+  forecast/expected: [x0, y0, region_bbox, split, ewma_delta, ewma_min_se, interval]
   fuse/cells: [x0, y0, region_bbox]
   fuse/sites: [x0, y0, region_bbox]
+  fuse/piers: [x0, y0, region_bbox]
+  fuse/links: [x0, y0, region_bbox]
+
+# Learning layer (docs/learning.md). Values not given by a source are TODO(P1): tune on train regimes only.
+learn:
+  regimes: {train: [fixed, two_sites], held_out: [pass_aware, displacing]}
+  n_seeds: 20                 # TODO(P1)
+  displace_km: 6              # TODO(P1)
+  pass_buffer_h: 6            # TODO(P1)
+  find_window_h: 24           # TODO(P1)
+  p_find_ship: 0.8            # TODO(P1)
+  p_find_aircraft: 0.5        # TODO(P1)
+  alert_budget: 15            # = patrol.top_sites
+  merge_kappa: 0.7            # TODO(P1)
+  target_false_alerts: 1.0    # per week, TODO(P1)
+  agents: [oe, midp, gi, cusum, link]  # until L2's merge list replaces it
+  prior_strength: 5           # n0 virtual visits, TODO(P1)
+  discount: 0.9               # per week, TODO(P1)
+  exact_max_nodes: 16         # TODO(P1)
+  attention_tau: 1.0          # TODO(P1): softness of regret-based CCT weights
+  attention_floor: 0.05       # TODO(P1): minimum weight per merged group
+  horizon_weeks: 4            # TODO(P1): season-layer look-ahead
+  day_slots: 7                # days in the week layer
+  min_week_share: 0.5         # TODO(P1): least share of the weekly budget any week gets
+  n_regret_samples: 200       # TODO(P1): posterior draws for expected-regret exploration
+  n_seeds_quick: 3            # make validate; n_seeds only for the final report
