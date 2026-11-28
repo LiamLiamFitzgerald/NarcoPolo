@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-owners = json.loads(Path(".github/owners.json").read_text())
+owners = json.loads(Path(".github/owners.json").read_text(encoding="utf-8"))
 branch, base = sys.argv[1], sys.argv[2]
 
 m = re.match(r"mod/p([1-7])/", branch, re.IGNORECASE)

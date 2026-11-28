@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pandera.pandas as pa
 import pytest
+from pandera.errors import SchemaErrors
 from shapely.geometry import Point, box
 
 from core.schemas import SCHEMAS, check
@@ -38,6 +39,7 @@ VALID = {
         hs_m=1.0,
         calm=True,
         exposure_small=0.5,
+        post_storm=False,
     ),
     "detect/detections": row(
         det_id="d1",
@@ -94,6 +96,8 @@ VALID = {
         cusum_s=0.0,
         context=0.5,
         U=0.9,
+        y=1.4,
+        y_week=1.1,
         agreement=2,
     ),
     "fuse/sites": row(
@@ -110,6 +114,8 @@ VALID = {
         reasons=["recurs"],
         top_piers=["p1"],
     ),
+    "fuse/piers": row(pier_id="p1", P_j=0.3),
+    "fuse/links": row(site_id="s1", L=0.6, age_days=4.0),
 }
 
 
@@ -158,3 +164,15 @@ def test_extra_column_rejected_so_ship_ids_cannot_leak_past_match():
 def test_unobserved_row_with_zero_count_is_fine_and_ints_are_coerced():
     out = check("aggregate/observed", frame("aggregate/observed", count=0, exposure=0))
     assert out["count"].dtype == float
+
+
+def test_learning_columns_are_optional_but_checked():
+    check("fuse/sites", frame("fuse/sites"))  # without them
+    check(
+        "fuse/sites",
+        frame(
+            "fuse/sites", p_comb=0.01, comb_flag=True, agreement_merged=2, p_site=0.4, model_rung=1
+        ),
+    )
+    with pytest.raises(SchemaErrors):
+        check("fuse/sites", frame("fuse/sites", p_site=1.5))

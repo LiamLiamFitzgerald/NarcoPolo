@@ -40,9 +40,20 @@ def calm(wind_ms: pd.Series, hs_m: pd.Series) -> pd.Series:
     return (wind_ms < wind_max) & (hs_m < hs_max)
 
 
+def post_storm(era5: Any, cells: gpd.GeoDataFrame, time: pd.Timestamp) -> pd.Series:
+    """A9: at least storm_hours of hs > storm_hs_m in the storm_lookback_h hours before the pass; unknown hs is not stormy."""
+    c = _cfg()["coverage"]
+    hours = [
+        weather_at(era5, cells, time - pd.Timedelta(hours=h))[1]
+        for h in range(1, int(c["storm_lookback_h"]) + 1)
+    ]
+    stormy = pd.concat(hours, axis=1).gt(c["storm_hs_m"]).sum(axis=1)  # NaN > x is False
+    return stormy >= c["storm_hours"]
+
+
 def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> pd.DataFrame:
     """One row per cell and pass. `passes`: pass_id, time_utc, footprint, downloaded.
-    Not downloaded -> exposure_small 0. post_storm (A9) waits for its schema column (#85)."""
+    Not downloaded -> exposure_small 0; post_storm per A9."""
     fine = cells[cells["level"] == 2000]
     rows = []
     for pass_id, time_utc, footprint, downloaded in zip(
@@ -66,6 +77,7 @@ def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> 
                     "hs_m": hs.to_numpy(),
                     "calm": ok.to_numpy(),
                     "exposure_small": (cov * ok * bool(downloaded)).to_numpy(),
+                    "post_storm": post_storm(era5, fine, time_utc).to_numpy(),
                 }
             )
         )
