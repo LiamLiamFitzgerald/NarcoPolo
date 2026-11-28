@@ -15,6 +15,7 @@ from core.schemas import check_json
 from export import (
     _backdrop,
     _basemap,
+    _daily,
     _legends,
     _provenance,
     _scan,
@@ -357,3 +358,47 @@ def test_snapshot_basemap_has_the_simulated_land(world):
     west, east = min(b[0] for b in boxes), max(b[2] for b in boxes)
     ring = snap["basemap"]["features"][1]["geometry"]["coordinates"][0]
     assert all(west - 0.01 <= lon <= east + 0.01 for lon, _ in ring)
+
+
+def test_daily_series_matches_a_hand_count_and_leaves_unobserved_days_empty():
+    # day 1: one pass covers c1 (calm, small-boat exposure) and c2 (covered but rough); c3, c4 not covered.
+    # fuse/cells: c1 unusual (U 0.95, flagged), c2 not. Day 2: no pass and no rows: every value is None.
+    ex = pd.DataFrame({"cell_id": ["c1", "c2"], "pass_id": ["p1", "p1"], "time_utc": [_t("2026-11-23")] * 2,
+                       "covered_frac": [0.5, 0.3], "exposure_small": [0.5, 0.0]})  # fmt: skip
+    fz = pd.DataFrame({"cell_id": ["c1", "c2"], "date": [date(2026, 11, 23)] * 2, "U": [0.95, 0.5],
+                       "bh_flag": [True, False]})  # fmt: skip
+    d1, d2 = _daily(fz, ex, ["c1", "c2", "c3", "c4"], [date(2026, 11, 23), date(2026, 11, 24)])
+    assert d1 == {"date": "2026-11-23", "passes": 1, "covered_share": 0.5, "calm_share": 0.25,
+                  "unusual_cells": 1, "flagged_cells": 1}  # fmt: skip
+    assert d2 == {"date": "2026-11-24", "passes": 0, "covered_share": None, "calm_share": None,
+                  "unusual_cells": None, "flagged_cells": None}  # fmt: skip
+
+
+def test_snapshot_carries_chart_data_inside_the_existing_keys(world):
+    _, snap = world
+    check_json("export/snapshot", snap)  # still exactly the seven top-level keys
+    fig = snap["meta"]["figures"]
+    assert fig["sites"] == len(snap["sites"]) and fig["flagged"] == sum(
+        s["bh_flag"] for s in snap["sites"]
+    )
+    assert fig["ship_h"] == 4.0 and fig["ship_budget_h"] == 24.0  # the fixture plan: 06:00 to 10:00
+    assert 0 <= fig["observed_share"] <= 1
+    assert [s["at_h"] for s in snap["plan"]["ship"]] == [0.0, 2.0, 4.0]
+    daily = snap["cells"]["daily"]
+    assert daily[0]["date"] == "2026-11-02" and daily[-1]["date"] == "2026-11-27"  # W45 Monday to T
+    assert all(d["covered_share"] is None for d in daily if d["passes"] == 0)  # no pass is not 0
+
+
+def test_site_links_add_up_to_the_score_and_p_site_is_passed_on(world):
+    _, snap = world
+    sites = io.read_stage("fuse/sites")
+    p_site = dict(zip(sites["site_id"], sites["p_site"], strict=True)) if "p_site" in sites else {}
+    for s in snap["sites"]:
+        if s[
+            "links"
+        ]:  # S = sum of L with a 30-day half-life (Measures), so the weights add up to S
+            assert sum(k["weight"] for k in s["links"]) == pytest.approx(s["S"], rel=1e-3, abs=1e-3)
+        want = p_site.get(s["id"])  # optional column: the simulator may not write it
+        assert s["p_site"] == (
+            None if want is None or np.isnan(want) else pytest.approx(want, abs=1e-4)
+        )
