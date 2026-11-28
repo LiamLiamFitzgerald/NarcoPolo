@@ -229,7 +229,7 @@ Routing one week at a time ignores *when* to go and *how* the season's hours are
 
 ### Steps: regret attention (rev 2)
 
-6. **Signal attention:** rerun each train-regime season with one merged group removed; Δregret_g as in L3 step 4a. Write `reports/attention.json` = {"groups": {group: {delta_regret_mean, delta_regret_sd, weight}}, "config_hash", τ, floor, seeds, regimes}; a group's key is its agents joined with "+" in `merged` order (e.g. `oe+midp`). fuse (`combine.weights`) reads only `groups.*.weight` and `config_hash`; a stale hash means equal votes. This is what fuse uses as CCT weights, and the pitch table of "which signals earn their place".
+6. **Signal attention:** rerun each train-regime season with one merged group removed; Δregret_g as in L3 step 4a. Write `reports/attention.json` = {group: {delta_regret_mean, delta_regret_sd, weight}} plus τ, floor, seeds, regimes, config hash. This is what fuse uses as CCT weights, and the pitch table of "which signals earn their place".
 7. **Where regret comes from:** split each policy's regret by week and by cause: *wrong site* (the oracle's site was not visited that week), *wrong day* (visited, but outside the drop's find window), *no hours* (the week's budget ran out before the oracle's site). Report the shares per policy and regime.
 8. Fast mode: `make validate` uses `learn.n_seeds_quick` seeds; the full `learn.n_seeds` only for the final report.
 
