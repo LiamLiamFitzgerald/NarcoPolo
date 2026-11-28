@@ -33,7 +33,7 @@ def test_page_computes_no_scores():
 
 def test_site_list_ranks_by_p_site_then_s():
     # D1 (#176): p_site ranks sites, S breaks ties; sites without p_site follow, by S
-    src = re.search(r"function siteOrder\(.*?\n\}\n", HTML, re.S)
+    src = re.search(r"function siteOrder\(.*?\n\}\n", HTML, re.DOTALL)
     assert src, "siteOrder not found"
     sites = [
         {"id": "a", "p_site": 0.2, "S": 9.0},
@@ -42,7 +42,10 @@ def test_site_list_ranks_by_p_site_then_s():
         {"id": "d", "S": 7.0},
         {"id": "e", "p_site": None, "S": 8.0},
     ]
-    js = src.group(0) + f"console.log(JSON.stringify({json.dumps(sites)}.sort(siteOrder).map(s => s.id)))"
+    js = (
+        src.group(0)
+        + f"console.log(JSON.stringify({json.dumps(sites)}.sort(siteOrder).map(s => s.id)))"
+    )
     # the node binary that ships with basedpyright (dev dependency), so no new tool
     out = subprocess.run(
         [sys.executable, "-m", "nodejs_wheel", "-e", js], capture_output=True, text=True, check=True
