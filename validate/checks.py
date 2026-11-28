@@ -27,7 +27,10 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
     p, z2 = k / n, z * z
     centre = (p + z2 / (2 * n)) / (1 + z2 / n)
     half = z * math.sqrt(p * (1 - p) / n + z2 / (4 * n * n)) / (1 + z2 / n)
-    return max(0.0, centre - half), min(1.0, centre + half)
+    # exact at the ends: rounding left lo = 4e-19 above a recall of 0 once fishing boats joined the 8-12 m bin (#346)
+    return (0.0 if k == 0 else max(0.0, centre - half)), (
+        1.0 if k == n else min(1.0, centre + half)
+    )
 
 
 def _within(truth_xy: np.ndarray, det_xy: np.ndarray, metres: float) -> np.ndarray:
