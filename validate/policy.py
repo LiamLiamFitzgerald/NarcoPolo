@@ -254,7 +254,9 @@ def _real_world(regime: str, seed: int) -> _Season:  # pragma: no cover - runs o
                 else:
                     os.environ[k] = v
     obs, exp, ev = frames["aggregate/observed"], frames["forecast/expected"], frames["match/events"]
-    days = pd.to_datetime(obs["date"])
+    days = pd.to_datetime(
+        obs.loc[obs["event_type"] == "dark_small", "date"]
+    )  # radar season, not ship history (#273)
     weeks = list(pd.date_range(days.min() + pd.Timedelta(days=6), days.max() - WEEK, freq="7D"))
 
     def sites_at(cutoff: pd.Timestamp) -> pd.DataFrame:
