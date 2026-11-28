@@ -134,12 +134,31 @@ for (const mode of ["light", "dark"]) {
   const fish = base.sites.filter(s => s.lens === "fisheries").length;
   check(await page.locator("#top3 .site-card").count() === Math.min(3, fish), "Fisheries lens: only fisheries sites on the cards");
   check(await page.locator("#ov-sites .site-g").count() === Math.min(base.meta.top_sites, fish), "Fisheries lens: only fisheries sites on the map");
+  if (fish) { // #321: a fisheries card has its level and harbours, never the drop-off meter or timeline
+    const fc = page.locator("#top3 .site-card").first();
+    check(await fc.locator(".meter, .evidence-tl, .outcome").count() === 0, "fisheries card: no drop-off evidence meter, timeline or answers");
+    check((await fc.textContent()).includes("the normal number of dark fishing boats"), "fisheries card: level against normal with its range");
+    const closedCards = base.sites.filter(s => s.lens === "fisheries").slice(0, 3).filter(s => s.in_closed_area === true).length;
+    check(await page.locator("#top3 .site-card .tag", { hasText: "inside a closed area" }).count() === closedCards, "fisheries card: closed-area chip where in_closed_area");
+    await show("fisheries");
+    check(await page.locator("#fisheries .site-card").count() === Math.min(base.meta.top_sites, fish), "Fisheries screen shows the fisheries cards");
+    await show("this-week");
+  }
   await page.click('#lens button[data-value="dropoff"]');
   check(await page.locator("#top3 .site-card").count() === Math.min(3, base.sites.filter(s => (s.lens ?? "dropoff") === "dropoff").length), "back to Drop-off watch");
   if (!fish) check((await page.textContent("#fisheries")).includes("not available yet"), "Fisheries screen says it is not available yet");
   check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 2.3 })) === "About 2.3× more small boats than normal this week", "plain ratio wording (more)");
   check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 0.5 })) === "About 2.0× fewer small boats than normal this week", "plain ratio wording (fewer)");
   check(await page.locator("#limitsList li").count() >= 6, "limits list");
+  // #322: closed and protected areas are their own overlay, with a toggle
+  const areas = base.basemap.features.filter(f => f.properties?.kind === "closed_area").length;
+  const drawn = await page.locator("#ov-closed path.closed").count();
+  check(areas ? drawn >= areas : drawn === 0, `closed areas: ${drawn} drawn for ${areas} in the snapshot`);
+  await page.click("#t-closed");
+  check(await page.locator("#ov-closed").evaluate(g => g.style.display) === "none", "closed-areas toggle hides the overlay");
+  await page.click("#t-closed");
+  // #370: a full report (no mode) never says quick
+  check(!(await page.textContent("#validation")).includes("Quick validation"), "full validation is not labelled quick");
   // site card evidence (#314), "we checked" (#317) and the mission mix (#316); placeholders read "not available yet"
   const card = page.locator("#top3 .site-card").first();
   check(await card.locator(".meter li").count() === 3, "site card: three evidence checks");
@@ -151,7 +170,26 @@ for (const mode of ["light", "dark"]) {
   await show("plan");
   check(await page.locator("#plan .mix button[role=radio]").count() === (base.meta.mission_mix?.wanted.length ?? 1), "plan: one mix button per preset");
   check(await page.locator("#plan .mix button:disabled").count() === (base.meta.mission_mix?.wanted ?? [0]).filter(p => !(base.meta.mission_mix?.ready ?? [0]).includes(p)).length, "plan: mixes without a plan are disabled");
+  // #338: each ready mix shows its own plan, as export wrote it; nothing is recomputed
+  for (const m of base.meta.mission_mix?.ready ?? [0]) {
+    const plan = m ? base.meta.mission_mix.plans[String(m)] : base.plan;
+    await page.click(`#plan .mix button:nth-child(${(base.meta.mission_mix?.wanted ?? [0]).indexOf(m) + 1})`);
+    const want = Object.values(plan).filter(st => st.length > 2).reduce((n, st) => n + st.length, 0);
+    check(await page.locator("#plan ol.timeline li").count() === want, `mix ${m} %: the stop list is that mix's plan`);
+    check(await page.locator("#ov-routes polyline.ship").getAttribute("points").catch(() => null) !== null || (plan.ship?.length ?? 0) < 2, `mix ${m} %: ship route drawn`);
+  }
+  if ((base.meta.mission_mix?.ready ?? [0]).length > 1) await page.click("#plan .mix button:nth-child(1)");
   await show("this-week");
+  await page.mouse.move(1, 1); // the clicks above leave the pointer over a figure: close its tooltip before axe
+
+  {
+    const q = await open({ ...base, validation: { ...(base.validation ?? {}), mode: "quick" } });
+    await q.page.evaluate(() => { location.hash = "limits"; });
+    check((await q.page.textContent("#validation")).includes("Quick validation"), "#370: quick validation is labelled on the proof panel");
+    check((await q.page.textContent("#limitsList")).includes("quick run"), "#370: and on the limits screen");
+    check(q.errors.length === 0, `quick validation: console errors ${JSON.stringify(q.errors)}`);
+    await q.page.close();
+  }
 
   // 4c. the Friday briefing prints to one A4 page (#319)
   const pdf = await page.pdf({ format: "A4", printBackground: true });

@@ -65,6 +65,8 @@ Check each line against the product's own public page before the pitch, and cite
 | Ready for the EU AI Act, Article 14 | A human picks every patrol; the tool only ranks places and explains why. `[source: Regulation (EU) 2024/1689, Art. 14]` |
 | Calibrated, not hopeful | Validation panel: chance of seeing a boat by size and sea state, forecast skill, false-alarm rate on pure noise. `[snapshot: validation]` |
 
+If the validation panel says "Quick validation" (`[snapshot: validation.mode]` is "quick", #370), say "a quick run, not the full result" and never quote its numbers as the full validation.
+
 ## Scenario fixes (Daniel's scenarios)
 
 - **The customer is the Joint Task Force.** It tasks the ship; NarcoPolo hands it the weekly plan.
