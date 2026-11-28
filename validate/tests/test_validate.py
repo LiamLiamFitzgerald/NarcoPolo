@@ -80,11 +80,24 @@ def test_simulator_recovery_finds_the_planted_site_and_the_rates(sim_world):
         assert 0.8 <= ratio <= 1.2, event_type
 
 
-def test_run_writes_a_report_with_every_key(sim_world):
+def test_run_writes_a_report_with_every_key(sim_world, monkeypatch):
+    # fuse is real since #184, so the report's null test now runs fuse on shifted data; 2 runs keep this test
+    # quick (make validate keeps the spec's 200; validate/tests/test_null.py tests the null test itself)
+    import functools
+
+    import validate.checks
+    from validate.null import null_test
+
+    monkeypatch.setattr(validate.checks, "null_test", functools.partial(null_test, runs=2))
+    # L6 runs whole simulated seasons through the real pipeline (tens of minutes); validate/tests/test_policy.py
+    # covers it, and this test checks the report's keys and blocks, so the policy block is left out here
+    monkeypatch.setattr(validate.checks, "policy_block", lambda: None)
     path = run()
     rep = json.loads(path.read_text())
     assert {"recall", "injection", "skill", "calibration", "brier", "null"} <= set(rep)
-    assert rep["null"] == {"runs": 0, "share_with_any_flag": None}
+    null = rep["null"]
+    assert null["runs"] == 2 and 0 <= null["share_with_any_flag"] <= 1
+    assert null["lo"] <= null["share_with_any_flag"] <= null["hi"]
     assert rep["recovery"]["planted_site_rank"] == 1 and 0 <= rep["brier"] <= 1
 
 
