@@ -36,6 +36,16 @@ reference:
   sea_raster_m: 250
   boat_speed_kn: 15
   pier_road_m: 200           # road_access if a road is within 200 m
+# P7 patrol (#89): docs/specs/P7.md Parameters. n_boot is left out: D3 removed the bootstrap exploration slot (#176)
+patrol:
+  top_sites: 15
+  ship_kn: 12
+  ship_budget_h: 24
+  ship_dwell_h: 1
+  aircraft_kn: 180           # TODO(P7): spec says "confirm with the team"
+  aircraft_budget_h: 4
+  aircraft_dwell_h: 0.2
+
 coverage:
   calm_wind_ms: 6            # provisional until the recall curve exists
   calm_hs_m: 1.5             # provisional
