@@ -106,7 +106,8 @@ def test_list_passes_recovers_simulated_passes(simraw, raw, catalogue):
     )
     assert shapely.from_wkt(out["footprint"].iloc[0]).buffer(1e-9).contains(fp)  # union of slices
     url, params = catalogue[0]
-    assert url == s1.CATALOGUE_URL and "IW_GRDH_1S" in params["$filter"]
+    assert url == CFG["ingest"]["s1_catalogue_url"]
+    assert CFG["ingest"]["s1_product_type"] in params["$filter"]
     assert "ContentDate/Start lt 2100-01-02T00:00:00.000Z" in params["$filter"]  # end day included
     entry = json.loads((raw / "manifest.json").read_text())["files"]
     assert any(

@@ -127,7 +127,7 @@ def _settings() -> Mapping[str, Any]:
 
 def _client() -> Any:
     token = os.environ["GFW_TOKEN"]  # KeyError names the variable, never a value
-    import gfwapiclient  # lazy: not a project dependency yet (#213)
+    import gfwapiclient  # pyright: ignore[reportMissingImports]  # lazy: not a project dependency yet (#213)
 
     return gfwapiclient.Client(access_token=token)
 

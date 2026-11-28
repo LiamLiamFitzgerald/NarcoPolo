@@ -5,8 +5,8 @@ and caches its answer as returned under raw/s1_catalogue/<key>.json. One pass = 
 same platform and absolute orbit. select_passes picks the calm passes from ERA5 plus a few rough ones and
 writes every pass, downloaded or not, to raw/s1_passes.json (spec, Resolved ambiguities). fetch_scene runs
 one openEO batch job (sigma0-ellipsoid, EPSG:32629 10 m on the region grid) and converts linear sigma0 to
-int16 dB x 100: format conversion only. Names not in the spec are TODO(P2) here until P1 moves them to
-config `ingest:` (question #261).
+int16 dB x 100: format conversion only. Endpoints and product type come from config `ingest:`
+(s1_openeo_url, s1_catalogue_url, s1_product_type), accepted on #261.
 """
 
 import json
@@ -33,9 +33,6 @@ from ingest.cache import cached, record, request_key
 COLLECTION = "SENTINEL1_GRD"  # docs/specs/P2.md pseudo-codebase
 COEFFICIENT = "sigma0-ellipsoid"  # docs/specs/P2.md pseudo-codebase
 BANDS = ["VV", "VH"]
-OPENEO_URL = "https://openeo.dataspace.copernicus.eu"  # TODO(P2): config ingest:, question #261
-CATALOGUE_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"  # TODO(P2): #261
-PRODUCT_TYPE = "IW_GRDH_1S"  # TODO(P2): #261; IW GRD high resolution, dual pol
 LICENCE = (  # TODO(P2): #261
     "Copernicus Sentinel data, free and open (Legal Notice on the use of Copernicus Sentinel Data and "
     "Service Information); attribution 'Contains modified Copernicus Sentinel data <year>'"
@@ -188,9 +185,11 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
     lon0, lat0, lon1, lat1 = (float(v) for v in bbox)
     ring = f"{lon0} {lat0},{lon1} {lat0},{lon1} {lat1},{lon0} {lat1},{lon0} {lat0}"
     stop = end + timedelta(days=1)  # our windows are inclusive
+    ing = _stub.config()["ingest"]
+    catalogue, product_type = ing["s1_catalogue_url"], ing["s1_product_type"]
     flt = (
         "Collection/Name eq 'SENTINEL-1' and Attributes/OData.CSC.StringAttribute/any("
-        f"att:att/Name eq 'productType' and att/OData.CSC.StringAttribute/Value eq '{PRODUCT_TYPE}') "
+        f"att:att/Name eq 'productType' and att/OData.CSC.StringAttribute/Value eq '{product_type}') "
         f"and OData.CSC.Intersects(area=geography'SRID=4326;POLYGON(({ring}))') "
         f"and ContentDate/Start ge {start.isoformat()}T00:00:00.000Z "
         f"and ContentDate/Start lt {stop.isoformat()}T00:00:00.000Z"
@@ -201,10 +200,10 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
         "$top": 1000,
         "$orderby": "ContentDate/Start asc",
     }
-    req = {"source": "s1_catalogue", "url": CATALOGUE_URL, "params": params}
+    req = {"source": "s1_catalogue", "url": catalogue, "params": params}
     if (hit := cached(req)) is not None:
         return json.loads(hit.read_text())
-    products, url, query = [], CATALOGUE_URL, params
+    products, url, query = [], catalogue, params
     while url:
         page = _catalogue(url, query)
         products += page["value"]
@@ -256,7 +255,9 @@ def _connection() -> Any:
         if _conn is None:
             import openeo
 
-            _conn = openeo.connect(OPENEO_URL).authenticate_oidc(store_refresh_token=False)
+            _conn = openeo.connect(_stub.config()["ingest"]["s1_openeo_url"]).authenticate_oidc(
+                store_refresh_token=False
+            )
         return _conn
 
 
