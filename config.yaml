@@ -77,6 +77,7 @@ ingest:
   s1_openeo_url: https://openeo.dataspace.copernicus.eu
   s1_catalogue_url: https://catalogue.dataspace.copernicus.eu/odata/v1/Products
   s1_product_type: IW_GRDH_1S
+  s1_workers: 2   # TODO(P2): the openEO account's concurrent batch-job limit (#292)
 
 # #212 (Liam, 28 Nov): a human fills every value from the GFW 4Wings docs; the real-data run waits for it
 gfw:                         # TODO(P2): https://globalfishingwatch.org/our-apis/documentation#4wings-api
@@ -103,6 +104,7 @@ p4:
   cfar_outer: 41
   cfar_guard: 11
   p_fa: 1.0e-7               # then calibrated on the injection and null tests (CFAR step 4)
+  cfar_calibration_target: null  # TODO(P4) #268: no value until a human decides the target (max false alarms per km2 per pass, or min recall at a named brightness in dB); until then p_fa stays 1e-7 (Liam, 28 Nov)
   enl: 4.4                   # estimate_enl default
   cluster_px: [1, 200]
   size_small_max_px: 4       # size_class: 1-4 small, 5-20 medium, > 20 large
