@@ -29,9 +29,8 @@ from core.io import raw_root
 from ingest import _stub, era5, gfw, osm, s1, static
 
 _FEEDS = ("radar", "gfw_presence", "gfw_sar", "era5")
-S1_WORKERS = (
-    2  # TODO(P2): config ingest.s1_workers = the openEO account's concurrent batch-job limit
-)
+# TODO(P2): config ingest.s1_workers (#292): the openEO account's concurrent batch-job limit
+S1_WORKERS = 2
 
 
 class FetchError(RuntimeError):
