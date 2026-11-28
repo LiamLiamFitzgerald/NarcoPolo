@@ -1,10 +1,10 @@
 import numpy as np
 import pytest
 
-from detect._standin import SIM_META, make_scene
 from detect.cfar import alpha, background, clusters, flag
 from detect.ghost import azimuth_heading, ghost_offset_m, is_ghost
 from detect.scene import to_linear
+from detect.tests._scene import SIM_META, make_scene
 
 
 def test_offset_formula_and_band():

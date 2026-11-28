@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from detect._standin import CFG
+from detect._common import CFG
 
 # TODO(P2): metadata key names are not fixed by the data dictionary; these are the ones P4 reads.
 _PRF, _RANGE, _SPEED = "prf_hz", "slant_range_m", "sat_speed_ms"
