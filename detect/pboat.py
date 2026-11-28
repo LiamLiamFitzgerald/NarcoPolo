@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import statsmodels.api as sm
 
-from detect._standin import Split
+from core.split import Split
 
 FEATURES = ["peak_ratio_vv_db", "peak_ratio_vh_db", "pol_agree", "n_px", "wind_ms", "ghost"]
 
@@ -25,7 +25,7 @@ def fit_pboat(injection_cands: pd.DataFrame, split: Split):
     injection_cands: P1's injection-run candidates with FEATURES, time_utc and is_boat
     (positives at injected boats, negatives > 500 m from any injection or AIS ship).
     """
-    train = split.train(injection_cands)
+    train = split.train(injection_cands.assign(date=injection_cands["time_utc"].dt.date))
     return sm.Logit(
         train["is_boat"].astype(float), sm.add_constant(train[FEATURES].astype(float))
     ).fit(disp=0)

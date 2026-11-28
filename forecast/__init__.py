@@ -6,20 +6,27 @@ cutoff, so look-ahead fails loudly instead of quietly improving the backtest (pr
 """
 
 import gc
-import json
+import warnings
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 import statsmodels.api as sm
 from scipy import stats
 
 from core.config import load
 from core.grid import parent
-from core.io import CONFIG_PATH, ROOT, read_snapshot, read_stage, stage_path, write_stage
+from core.io import (
+    CONFIG_PATH,
+    ROOT,
+    read_cells,
+    read_provenance,
+    read_snapshot,
+    read_stage,
+    write_stage,
+)
 from core.split import Split, folds
 
 _ID = ["cell_id", "date"]
@@ -54,7 +61,7 @@ def ewma(
     region_rate = coarse["s_c"].sum() / coarse["s_e"].sum()
     coarse_rate = _shrink(coarse["s_c"], coarse["s_e"], region_rate, min_se)
 
-    up = target2["cell_id"].map(parent).map(coarse_rate).fillna(region_rate)
+    up = _parents(target2["cell_id"]).map(coarse_rate).fillna(region_rate)
     s_c = target2["cell_id"].map(fine["s_c"]).fillna(0.0)
     s_e = target2["cell_id"].map(fine["s_e"]).fillna(0.0)
     return _shrink(s_c, s_e, up, min_se) * target2["exposure"]
@@ -69,7 +76,8 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
     """Covariates per (cell, date) from reference/layers.gpkg cells (one level at a time).
 
     inshore_frac NaN (no map) gets a missing flag and 0 in the value column, per the spec.
-    Seasonal terms only for slowdowns: 90 days of radar can't estimate a season.
+    Seasonal terms only for slowdowns: 90 days of radar can't estimate a season. static_frac is not a
+    covariate (#156): it separated the data (fully static cells never have events) and the fits did not converge.
     """
     c = cells.assign(
         intercept=1.0,
@@ -84,8 +92,7 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
         "inshore_missing",
         "lane",
         "log_dist_coast",
-        "static_frac",
-    ]
+    ]  # no static_frac (#156): masking already removes static areas from detection, and the term separates
     X = c[["cell_id", *cols]].merge(pd.DataFrame({"date": dates}), how="cross")
     if event_type == "slowdown":
         angle = 2 * np.pi * X["date"].dt.day_of_year / 365
@@ -93,7 +100,16 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
     return X
 
 
+def _parents(cell_ids: pd.Series) -> pd.Series:
+    """10 km parent per row, computing each distinct cell's parent once (hundreds, not 700k)."""
+    unique = pd.unique(cell_ids)
+    return cell_ids.map(dict(zip(unique, map(parent, unique))))
+
+
 def _with_x(rows: pd.DataFrame, X: pd.DataFrame) -> pd.DataFrame:
+    """Rows with their covariates; forecast_all joins them once, so this is then a no-op."""
+    if set(X.columns) <= set(rows.columns):
+        return rows
     return rows.merge(X, on=_ID, how="left")
 
 
@@ -115,6 +131,18 @@ def _fit_rows(
 
 def fit_glm(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> tuple[pd.Series, float]:
     """Quasi-Poisson GLM on 2 km rows with E > 0, offset log E (#58). Returns (beta, phi)."""
+    beta, phi, _ = _fit(split, train2, X2)
+    return beta, phi
+
+
+def _fit(
+    split: Split, train2: pd.DataFrame, X2: pd.DataFrame
+) -> tuple[pd.Series, float, pd.DataFrame]:
+    """fit_glm plus the rows it was fitted on, which empirical Bayes needs again.
+
+    Always a cold start: warm-starting from the previous fold changed mu by up to 21% on the
+    simulator (some fits are sensitive to the starting point), so it was tried and dropped.
+    """
     rows, cols = _fit_rows(split, train2, X2)
     # Each IRLS step leaves ~400 MB of cyclic garbage on ~700k rows; few Python objects are made, so the default
     # collector never runs mid-fit and memory passed 6 GB. Collect every generation often while fitting only.
@@ -122,15 +150,22 @@ def fit_glm(split: Split, train2: pd.DataFrame, X2: pd.DataFrame) -> tuple[pd.Se
     gc.set_threshold(100, 1, 1)
     try:
         res = sm.GLM(
-            rows["count"],
-            rows[cols],
+            rows["count"].to_numpy(),
+            rows[cols].to_numpy(),
             family=sm.families.Poisson(),
-            offset=np.log(rows["exposure"]),
+            offset=np.log(rows["exposure"].to_numpy()),
         ).fit(scale="X2")
-        return res.params, float(res.scale)
     finally:
         gc.set_threshold(*old)
         gc.collect()
+    if not res.converged:
+        # e.g. a covariate whose cells never have events (fully static cells): its coefficient
+        # runs off towards -inf; say so rather than use an unconverged fit silently (#156)
+        warnings.warn(
+            f"GLM did not converge for cutoff {split.cutoff} ({len(rows)} rows, columns {cols})",
+            stacklevel=2,
+        )
+    return pd.Series(res.params, index=cols), float(res.scale), rows
 
 
 def empirical_bayes(O: pd.Series, M: pd.Series) -> pd.Series:
@@ -159,7 +194,7 @@ def predict_glm(beta: pd.Series, theta: pd.Series, rows2: pd.DataFrame) -> pd.Se
 
     A row with a missing covariate gets mu = NaN: unknown, never filled with zero.
     """
-    t = rows2["cell_id"].map(parent).map(theta).fillna(1.0)
+    t = _parents(rows2["cell_id"]).map(theta).fillna(1.0)
     return rows2["exposure"] * np.exp(_xb(beta, rows2)) * t
 
 
@@ -170,12 +205,11 @@ def glm_mu(
     X2: pd.DataFrame,
 ) -> tuple[pd.Series, float]:
     """Fit on 2 km, shrink per 10 km cell, predict the 2 km target rows. Returns (mu, phi)."""
-    beta, phi = fit_glm(split, train2, X2)
-    # same rows as the fit: a row with an unknown covariate has no M, so its O must not count either
-    seen = _with_x(train2[train2["exposure"] > 0], X2).dropna(subset=list(beta.index))
+    # O and M over the fit's own rows: a row with an unknown covariate has no M, so no O either
+    beta, phi, seen = _fit(split, train2, X2)
     seen = seen.assign(m=seen["exposure"] * np.exp(_xb(beta, seen)))
     # O and M per 10 km cell, summed over its 2 km children
-    totals = seen.groupby(seen["cell_id"].map(parent))[["count", "m"]].sum()
+    totals = seen.groupby(_parents(seen["cell_id"]))[["count", "m"]].sum()
     theta = empirical_bayes(totals["count"], totals["m"])
     return predict_glm(beta, theta, _with_x(target2, X2)).set_axis(target2.index), phi
 
@@ -191,6 +225,24 @@ def nb_interval(mu: pd.Series, phi: float, level: float) -> tuple[np.ndarray, np
     lo, hi = dist.ppf(lo_q), dist.ppf(hi_q)
     zero = m == 0
     return np.where(zero, 0.0, lo), np.where(zero, 0.0, hi)
+
+
+def _pit_coverage(count: Any, mu: Any, phi: float, level: float) -> float:
+    """Interval coverage from the nonrandomised PIT (Czado, Gneiting & Held 2009), D7 (#175).
+
+    "count in [lo, hi]" can't drop below P(0) for any interval holding 0, about 0.99 at small mu;
+    this measure is exactly `level` when mu and phi are right, whatever mu is.
+    """
+    lo_q, hi_q = (1 - level) / 2, 1 - (1 - level) / 2
+    c, m = np.asarray(count, dtype=float), np.asarray(mu, dtype=float)
+    if phi > 1:  # same choice as nb_interval
+        dist = stats.nbinom(np.maximum(m, 1e-12) / (phi - 1), 1 / phi)
+    else:
+        dist = stats.poisson(m)
+    # shortcut: soft counts floored by scipy cdf (C=0.75 scores as 0), fine while p is near 0 or 1
+    a, b = dist.cdf(c - 1), dist.cdf(c)
+    inside = np.clip(b, lo_q, hi_q) - np.clip(a, lo_q, hi_q)
+    return float(np.mean(inside / np.maximum(b - a, np.finfo(float).tiny)))
 
 
 def poisson_deviance(C: pd.Series, mu: pd.Series) -> float:
@@ -387,6 +439,7 @@ def forecast_all(
         f2, f10 = f[f["level"] == 2000], f[f["level"] == 10000]
         dates = pd.DatetimeIndex(sorted(f2["date"].unique()))
         X2 = design_matrix(cells[cells["level"] == 2000], dates, event_type)
+        f2 = f2.merge(X2, on=_ID, how="left")  # covariates joined once, not in every fold
         frames = (f2, f10, X2)
         fs = folds(T.date(), k)  # core fixes the 7-day embargo and 7-day test window
 
@@ -406,6 +459,16 @@ def forecast_all(
 
         prod = evaluation_split(T)
         alpha = nb2_alpha(prod, prod.train(f2), X2)
+        # interval coverage of the chosen model's backtest rows with E > 0 (D7, #175)
+        seen = f2.loc[f2["exposure"] > 0, [*_ID, "count"]]
+        hits, n = 0.0, 0
+        for i in range(1, k + 1):  # each fold has its own phi
+            r = fold_rows[(chosen, i)].merge(seen, on=_ID)
+            if r.empty:  # no calm pass that week, as backtest skips
+                continue
+            hits += _pit_coverage(r["count"], r["mu"], r["phi"].iloc[0], params[2]) * len(r)
+            n += len(r)
+        coverage = hits / n if n else np.nan
         for name, table in skills.items():
             report.append(
                 {
@@ -417,14 +480,10 @@ def forecast_all(
                     "skill_max": table["skill"].max(),
                     "phi": window["phi"].iloc[0],
                     "nb2_alpha": alpha,
+                    "coverage": coverage if name == chosen else np.nan,
                 }
             )
     return pd.concat(expected, ignore_index=True), pd.DataFrame(report)
-
-
-def _read_cells() -> pd.DataFrame:
-    """Attributes of the cells layer of reference/layers.gpkg, validated by core.io; P5 needs no geometry."""
-    return pd.DataFrame(read_stage("reference/cells").drop(columns="geometry"))
 
 
 def stage(
@@ -441,17 +500,8 @@ def stage(
     """
     observed = read_stage("aggregate/observed")
     observed["date"] = pd.to_datetime(observed["date"])
-    expected, report = forecast_all(observed, _read_cells(), T, cfg, decisions, when, baseline)
+    expected, report = forecast_all(observed, read_cells(), T, cfg, decisions, when, baseline)
     return write_stage("forecast/expected", expected, provenance), report
-
-
-def _provenance(name: str) -> Literal["simulated", "real"]:
-    """Inherit 'simulated' or 'real' from an input stage file's core.io stamp.
-
-    shortcut: reads core.io's parquet metadata key directly; swap for a core.io helper if P1 adds one.
-    """
-    meta = pq.read_schema(stage_path(name)).metadata or {}
-    return json.loads(meta[b"narco"])["provenance"]
 
 
 def _cfg(cfg: Mapping[str, Any], key: str) -> Any:
@@ -478,7 +528,7 @@ def run() -> None:
     """make all entry point: reads aggregate/observed and the cells layer, writes forecast/expected."""
     cfg, _ = load(CONFIG_PATH)
     when = pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M")
-    provenance = _provenance("aggregate/observed")
+    provenance = read_provenance("aggregate/observed")
     # a choice made on simulated data isn't a team decision, so only real runs are recorded
     decisions = str(ROOT / "DECISIONS.md") if provenance == "real" else None
     stage(pd.Timestamp(read_snapshot()["T"]), cfg, provenance, decisions, when)

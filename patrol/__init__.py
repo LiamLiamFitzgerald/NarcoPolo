@@ -1,5 +1,6 @@
 """Patrol plans (P7): a ship route and an aircraft route over the top drop sites, within a time budget.
-Orienteering by greedy insertion and 2-opt (docs/specs/P7.md). Ships always use sea distances."""
+Orienteering by greedy insertion and 2-opt (docs/specs/P7.md); with a bandit draw and at most learn.exact_max_nodes
+nodes, the exact solver instead (D4, #176: never worse, ship +2.4% on the simulator). Ships always use sea distances."""
 
 import json
 from collections.abc import Mapping
@@ -20,14 +21,17 @@ from core.config import load
 from core.crs import to_utm
 from core.grid import FINE, cell_index
 from core.time import iso_week
+from patrol import bandit
 
 KN_MS = 0.514444  # 1 kn in m/s (docs/shared.md, Units)
-# TODO(P7): these belong in config.yaml (P1 owns it; asked for in issue 89).
-TOP_SITES = 15
-SHIP_KN, AIR_KN = 12, 180  # aircraft_kn: TODO(confirm with the team)
-SHIP_BUDGET_H, SHIP_DWELL_H = 24, 1
-AIR_BUDGET_H, AIR_DWELL_H = 4, 0.2
-N_BOOT = 200
+# docs/specs/P7.md Parameters, overlaid by config.yaml's `patrol:` block (#89); aircraft_kn: TODO(P7) confirm
+_SPEC = {"top_sites": 15, "ship_kn": 12, "ship_budget_h": 24, "ship_dwell_h": 1,
+         "aircraft_kn": 180, "aircraft_budget_h": 4, "aircraft_dwell_h": 0.2}  # fmt: skip
+_P = {**_SPEC, **dict(load(io.CONFIG_PATH)[0].get("patrol", {}))}
+TOP_SITES = int(_P["top_sites"])
+SHIP_KN, AIR_KN = float(_P["ship_kn"]), float(_P["aircraft_kn"])
+SHIP_BUDGET_H, SHIP_DWELL_H = float(_P["ship_budget_h"]), float(_P["ship_dwell_h"])
+AIR_BUDGET_H, AIR_DWELL_H = float(_P["aircraft_budget_h"]), float(_P["aircraft_dwell_h"])
 SEA_RES_M = 250  # the spec's sea_250m.tif resolution
 
 
@@ -140,6 +144,45 @@ def greedy_route(
     return _greedy([0, 0], S, hours, budget_h, dwell_h)
 
 
+def _exact(S: np.ndarray, hours: np.ndarray, budget_h: float, dwell_h: float) -> list[int]:
+    """Exact orienteering by DP over subsets (Held-Karp): the in-budget set of sites with the highest
+    total S, in its shortest order. Ties go to the shorter trip. Node 0 is the base; S[0] is unused.
+    Cost is 2^m * m^2 for m sites, so the caller keeps m below learn.exact_max_nodes."""
+    m = len(S) - 1
+    if m == 0:
+        return [0, 0]
+    bits = 1 << np.arange(m)
+    leg = hours[1:, 1:] + dwell_h  # site j -> site k, plus the dwell at k
+    dp = np.full((1 << m, m), np.inf)  # dp[mask, k]: hours from the base through mask, ending at k
+    par = np.full((1 << m, m), -1)
+    dp[bits, np.arange(m)] = hours[0, 1:] + dwell_h
+    pop = np.bitwise_count(np.arange(1 << m))
+    for c in range(2, m + 1):
+        masks = np.flatnonzero(pop == c)
+        prev = masks[:, None] ^ bits[None, :]  # (masks, k): the mask before k was added
+        val = dp[prev] + leg.T[None, :, :]  # [mask, k, j] = dp[prev, j] + leg[j, k]
+        val[(masks[:, None] & bits[None, :]) == 0] = np.inf  # k must be in mask
+        j = val.argmin(axis=2)
+        best = np.take_along_axis(val, j[..., None], axis=2)[..., 0]
+        best[best > budget_h] = (
+            np.inf
+        )  # legs never shrink, so an over-budget partial trip stays over
+        dp[masks], par[masks] = best, j
+    back = dp + hours[1:, 0][None, :]
+    total = back.min(axis=1)
+    ok = total <= budget_h
+    if not ok.any():
+        return [0, 0]
+    value = ((np.arange(1 << m)[:, None] & bits[None, :]) > 0).astype(float) @ S[1:]
+    cand = np.flatnonzero(ok)
+    mask = int(cand[np.lexsort((total[cand], -value[cand]))[0]])
+    k, route = int(back[mask].argmin()), []
+    while mask:
+        route.append(k + 1)
+        mask, k = mask ^ (1 << k), int(par[mask, k])
+    return [0, *route[::-1], 0]
+
+
 def two_opt(route: list[int], hours: np.ndarray) -> list[int]:
     """Reverse any segment that shortens the route, until none does. The ends (the base) stay put."""
     route = list(route)
@@ -155,16 +198,11 @@ def two_opt(route: list[int], hours: np.ndarray) -> list[int]:
     return route
 
 
-def exploration_pick(sites_4_to_15: list[str], n_boot: int = N_BOOT, seed: int = 0) -> str:
-    """One site id to visit so the system does not only confirm itself. Seeded (seed = global seed + ISO
-    week), so the plan never changes between runs.
-    shortcut: a uniform seeded draw. The spec bootstraps each site's link scores L (n_boot resamples) and
-    takes the highest Thompson draw, but no stage file holds L (contract issue 98)."""
-    return sites_4_to_15[int(np.random.default_rng(seed).integers(len(sites_4_to_15)))]
-
-
 def _greedy_inputs(sites: pd.DataFrame) -> pd.DataFrame:
-    """The top 15 candidates: flagged sites by S, filled with unflagged ones by S when fewer."""
+    """The top 15 candidates: by p_site once the site model writes it (learning L5), else flagged sites
+    by S, filled with unflagged ones by S when fewer."""
+    if "p_site" in sites:
+        return sites.sort_values("p_site", ascending=False, kind="stable").head(TOP_SITES)
     ranked = sites.sort_values(["bh_flag", "S"], ascending=[False, False], kind="stable")
     return ranked.head(TOP_SITES)
 
@@ -177,24 +215,36 @@ def _plan_asset(
     budget_h: float,
     dwell_h: float,
     start: pd.Timestamp,
-    explore_seed: int | None = None,
     stand_in: bool = False,
+    theta: pd.Series | None = None,
+    exploit: pd.Series | None = None,
+    exact_max_nodes: int = 0,
 ) -> list[dict]:
+    """theta (by site_id) replaces S as node weights (bandit, learning L5): the Thompson draw is the one
+    exploration method (D3, #176). A stop is 'exploit' if it is also on the route planned with the `exploit`
+    weights (posterior means), else 'explore', which is marked `exploration` for the snapshot and dashboard.
+    Without theta (no bandit state), the route is the greedy fill on S."""
     cand = _greedy_inputs(sites).reset_index(drop=True)
     nodes = [
         {"x_m": base[0], "y_m": base[1]},
         *({"x_m": r.x_m, "y_m": r.y_m} for r in cand.itertuples()),
     ]
-    S = np.array([0.0, *cand["S"]])
     hours = hours_fn(nodes)
 
-    route, explore = [0, 0], None
-    if explore_seed is not None and len(cand) >= 4:  # fewer than 4 sites: skip the slot
-        pick = exploration_pick(list(cand["site_id"].iloc[3:TOP_SITES]), N_BOOT, explore_seed)
-        j = 1 + int(cand.index[cand["site_id"] == pick][0])
-        if 2 * hours[0, j] + dwell_h <= budget_h:  # reserve the visit before the greedy fill
-            route, explore = [0, j, 0], j
-    route = two_opt(_greedy(route, S, hours, budget_h, dwell_h), hours)
+    if theta is not None:
+        exact = len(nodes) <= exact_max_nodes
+
+        def solve(w: pd.Series) -> list[int]:
+            S = np.array([0.0, *w.loc[cand["site_id"]]])
+            if exact:
+                return _exact(S, hours, budget_h, dwell_h)
+            return two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours)
+
+        route = solve(theta)
+        on_mean = set(solve(exploit if exploit is not None else theta))
+    else:
+        S = np.array([0.0, *cand["S"]])
+        route, on_mean = two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours), set()
 
     stops, t = [], start
     for k, i in enumerate(route):
@@ -213,8 +263,11 @@ def _plan_asset(
             )
         if i and not cand["bh_flag"][i - 1]:
             stop["not_significant"] = True
-        if i == explore:
-            stop["exploration"] = True
+        if i and theta is not None:
+            stop["theta"] = float(theta[stop["id"]])
+            stop["reason"] = "exploit" if i in on_mean else "explore"
+            if stop["reason"] == "explore":
+                stop["exploration"] = True
         stops.append(stop)
     return stops
 
@@ -267,28 +320,48 @@ def _write(asset: str, stops: list[dict]) -> dict:
     return plan
 
 
+def _bandit(cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int) -> dict[str, Any]:
+    """Learning L5: the saved posterior, with new top sites warm-started from their prior (sites that
+    leave the top keep their state), one seeded Thompson draw, and the state written back."""
+    try:
+        state = io.read_json_stage("patrol/bandit_state")
+    except ValueError:  # no state yet, or one made with an older config: start from the priors
+        state = {}
+    learn = cfg["learn"]
+    state = {**bandit.prior(_greedy_inputs(sites), learn["prior_strength"]), **state}
+    io.write_json_stage("patrol/bandit_state", state, _provenance("fuse/sites"))
+    return {
+        "theta": bandit.sample(state, seed),
+        "exploit": bandit._mean(state),
+        "exact_max_nodes": int(learn["exact_max_nodes"]),
+    }
+
+
 def ship_plan() -> dict:
-    """Ship route over the top sites, with one exploration visit; merged into patrol/plan.json."""
+    """Ship route over the top sites, weighted by the bandit's Thompson draw; merged into patrol/plan.json."""
     cfg, _ = load(io.CONFIG_PATH)
     sea = _sea_from_cells(io.read_stage("reference/cells"))
     (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
     seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    sites = io.read_stage("fuse/sites")
     stops = _plan_asset(
-        io.read_stage("fuse/sites"), base, lambda n: sea_hours(n, sea, SHIP_KN),
-        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=start, explore_seed=seed,
-        stand_in=base_stand_in or start_stand_in,
+        sites, base, lambda n: sea_hours(n, sea, SHIP_KN),
+        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=start,
+        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
     )  # fmt: skip
     return _write("ship", stops)
 
 
 def aircraft_plan() -> dict:
-    """The same planner with straight-line distances and no exploration slot."""
+    """The same planner and the same draw (same seed) with straight-line distances."""
     cfg, _ = load(io.CONFIG_PATH)
     (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
+    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
+    sites = io.read_stage("fuse/sites")
     stops = _plan_asset(
-        io.read_stage("fuse/sites"), base, lambda n: air_hours(n, AIR_KN),
+        sites, base, lambda n: air_hours(n, AIR_KN),
         budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=start,
-        stand_in=base_stand_in or start_stand_in,
+        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
     )  # fmt: skip
     return _write("aircraft", stops)
 

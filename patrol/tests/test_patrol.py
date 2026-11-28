@@ -10,6 +10,7 @@ from core import io
 from core.config import load
 from core.crs import to_utm
 from core.schemas import check_json
+from core.time import iso_week
 from export import build_snapshot
 from patrol import (
     KN_MS,
@@ -21,12 +22,13 @@ from patrol import (
     _start,
     air_hours,
     aircraft_plan,
-    exploration_pick,
+    bandit,
     greedy_route,
     sea_hours,
     ship_plan,
     two_opt,
 )
+from sim import patrol_outcome
 from sim.simulate import simulate
 
 RES = 250.0
@@ -109,13 +111,6 @@ def test_two_opt_untangles_a_crossed_route_and_keeps_the_ends():
     assert two_opt([0, 1, 2, 3, 0], d) == [0, 1, 2, 3, 0]  # already optimal: unchanged
 
 
-def test_exploration_pick_is_seeded():
-    ids = [f"S{i:02d}" for i in range(4, 16)]
-    assert exploration_pick(ids, seed=7) == exploration_pick(ids, seed=7)
-    assert {exploration_pick(ids, seed=s) for s in range(40)} > {exploration_pick(ids, seed=7)}
-    assert exploration_pick(["only"], seed=1) == "only"
-
-
 def _sites(n, flagged):
     """n sites on a line at x = 1 km, 2 km, ... with scores n, n-1, ... (rank 1 = best)."""
     return pd.DataFrame(
@@ -136,27 +131,31 @@ def _open_sea(nodes):
 START = pd.Timestamp("2026-11-28", tz="UTC")
 
 
-def test_plan_labels_unflagged_fill_sites_and_one_exploration_visit():
+def test_plan_labels_unflagged_fill_sites_and_has_no_fixed_exploration_slot():
+    # D3 (#176): without a Thompson draw there is no exploration visit; the route is the greedy fill on S
     sites = _sites(20, flagged=5)
-    stops = _plan_asset(
-        sites, (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START, explore_seed=3
-    )
+    stops = _plan_asset(sites, (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START)
     ids = [s["id"] for s in stops]
-    assert ids[0] == ids[-1] == "base"
-    assert sum(s.get("exploration", False) for s in stops) == 1
-    explored = next(s["id"] for s in stops if s.get("exploration"))
-    assert explored in set(sites["site_id"].iloc[3:15])  # ranks 4 to 15
+    assert ids[0] == ids[-1] == "base" and not any(s.get("exploration") for s in stops)
     flagged = dict(zip(sites["site_id"], sites["bh_flag"], strict=True))
     for s in stops[1:-1]:  # unflagged sites are labelled "not significant"
         assert s.get("not_significant", False) == (not flagged[s["id"]])
     assert [s["arrival_utc"] for s in stops] == sorted(s["arrival_utc"] for s in stops)
 
 
-def test_plan_skips_the_exploration_slot_with_fewer_than_four_sites():
+def test_thompson_explore_stops_are_the_exploration_visits():
+    # D3: the bandit's draw is the one exploration method; a stop off the posterior-mean route is "explore"
+    sites = _sites(20, flagged=5)
+    mean = pd.Series(sites["S"].to_numpy(), index=sites["site_id"])
+    theta = mean.copy()
+    theta["s12"] = 100.0  # the draw favours a low-ranked site the mean route would skip
     stops = _plan_asset(
-        _sites(3, 3), (0.0, 0.0), _open_sea, budget_h=24, dwell_h=1, start=START, explore_seed=3
+        sites, (0.0, 0.0), _open_sea, budget_h=6, dwell_h=1, start=START, theta=theta, exploit=mean
     )
-    assert not any(s.get("exploration") for s in stops) and len(stops) == 5
+    explore = [s["id"] for s in stops if s.get("exploration")]
+    assert "s12" in explore
+    assert all(s["reason"] == "explore" for s in stops if s.get("exploration"))
+    assert all(s.get("exploration", False) == (s["reason"] == "explore") for s in stops[1:-1])
 
 
 def test_greedy_inputs_put_flagged_sites_first_then_fill_by_score():
@@ -235,3 +234,51 @@ def test_plans_with_stand_ins_say_so_and_pass_the_contract(world):
     _, plan = world
     assert all(s.get("stand_in") for a in plan.values() for s in (a[0], a[-1]))
     check_json("patrol/plan", io.read_json_stage("patrol/plan"))
+
+
+def test_simulator_plans_carry_bandit_fields_and_save_the_state(world):
+    _, plan = world
+    for stops in plan.values():
+        assert all(
+            s["reason"] in ("exploit", "explore") and 0 <= s["theta"] <= 1 for s in stops[1:-1]
+        )
+    state = io.read_json_stage("patrol/bandit_state")  # checked against the contract on read
+    assert {s["id"] for a in plan.values() for s in a[1:-1]} <= set(state)
+
+
+def test_simulated_patrol_outcomes_update_only_visited_sites(world):
+    """End to end: plan -> sim.patrol_outcome on the simulator truth -> bandit.update."""
+    _, plan = world
+    state = io.read_json_stage("patrol/bandit_state")
+    week = iso_week(io.read_snapshot()["T"])[1]
+    out = patrol_outcome(pd.read_parquet(io.truth_path()), plan, week)
+    new = bandit.update(state, out, discount=0.9, week=week)
+    visits = out[out["site_id"].isin(state)].groupby("site_id")["found"].agg(["sum", "count"])
+    for site, st in state.items():
+        found, n = (
+            (visits.loc[site, "sum"], visits.loc[site, "count"]) if site in visits.index else (0, 0)
+        )
+        assert new[site]["alpha"] == pytest.approx(0.9 * st["alpha"] + found)
+        assert new[site]["beta"] == pytest.approx(0.9 * st["beta"] + n - found)
+        assert (new[site]["last_visit_week"] == week) == bool(
+            n
+        )  # n is a count, so nonzero means visited
+    check_json("patrol/bandit_state", new)
+
+
+def test_patrol_parameters_are_the_spec_values_overlaid_by_config():
+    # #89: docs/specs/P7.md Parameters, and config.yaml's `patrol:` block wins once P1 adds it
+    import patrol
+    from core import io
+    from core.config import load
+
+    cfg = dict(load(io.CONFIG_PATH)[0].get("patrol", {}))
+    want = {**patrol._SPEC, **cfg}
+    assert patrol.TOP_SITES == want["top_sites"] and patrol.SHIP_KN == want["ship_kn"]
+    assert (patrol.SHIP_BUDGET_H, patrol.SHIP_DWELL_H) == (
+        want["ship_budget_h"],
+        want["ship_dwell_h"],
+    )
+    assert (patrol.AIR_KN, patrol.AIR_BUDGET_H, patrol.AIR_DWELL_H) == (
+        want["aircraft_kn"], want["aircraft_budget_h"], want["aircraft_dwell_h"],
+    )  # fmt: skip

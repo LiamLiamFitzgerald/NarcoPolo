@@ -46,10 +46,11 @@ def bh(p, q=PARAMS["fdr_q"]) -> np.ndarray:
     return multipletests(p, alpha=q, method="fdr_bh")[0] if len(p) else np.zeros(0, bool)
 
 
-def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"], perm=PARAMS["gi_perm"], seed=None):
-    """Getis-Ord Gi* z of y = (C + 0.5) / (mu + 0.5) for one week's observed cells; binary DistanceBand weights,
-    self included. This is esda.G_Local(star=True).Zs, the analytic z: `perm` and `seed` only drive esda's
-    permutation p-value, which we don't keep, so the z is deterministic."""
+def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"]) -> np.ndarray:
+    """Getis-Ord Gi* z (Ord & Getis 1995) of y = (C + 0.5) / (mu + 0.5) for one week's observed cells; binary
+    DistanceBand weights, self included. Our own code, not esda (not a dependency): the same analytic z as
+    esda.G_Local(star=True).Zs, which is unchanged by row-standardising the weights. We keep the z, not a
+    permutation p, so there is no permutation count or seed (D6)."""
     y = (np.asarray(C_week, float) + 0.5) / (np.asarray(mu_week, float) + 0.5)
     cells = list(cells)
     n = len(cells)
@@ -65,7 +66,9 @@ def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"], perm=PARAMS["gi_
 
 def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarray:
     """Poisson likelihood-ratio CUSUM over one cell's days in date order (A1). NaN C = unobserved day: S stays
-    as it was. Returns S each day before any reset; S restarts at 0 after it exceeds h."""
+    as it was. Returns S each day before any reset; S restarts at 0 after it exceeds h. The increment is divided
+    by max(phi, 1) because A1 writes it so (D2): a quasi-likelihood ratio, so overdispersed counts climb slower,
+    and underdispersed ones (phi < 1) are never made more alarming. h is calibrated on null runs (_calibrate_h)."""
     C, mu, phi = (np.asarray(a, float) for a in (C, mu, phi))
     inc = (C * np.log(rho) - (rho - 1) * mu) / np.maximum(phi, 1)
     out, S = np.empty(len(C)), 0.0
@@ -76,6 +79,37 @@ def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarra
         if S > h:
             S = 0.0
     return out
+
+
+def _alarm_rate(series, h, rho=PARAMS["cusum_rho"]) -> float:
+    """CUSUM alarms per observed cell-quarter (91 days) over `series`, a list of one cell's (C, mu, phi) in date
+    order, NaN C = unobserved day."""
+    alarms = days = 0
+    for C, mu, phi in series:
+        alarms += int((cusum(C, mu, phi, rho, h) > h).sum())
+        days += int(np.isfinite(np.asarray(C, float)).sum())
+    return alarms / days * 91 if days else 0.0
+
+
+def _calibrate_h(
+    series, target=PARAMS["cusum_alarms_per_quarter"], rho=PARAMS["cusum_rho"]
+) -> float:
+    """Smallest h whose alarm rate on null-regime series is <= `target` alarms per cell-quarter (D2), the CUSUM
+    analogue of fuse.combine.calibrate. Candidates are the S values the series reach without resets; the rate
+    falls with h (not strictly, because of resets), so this is a bisection over them."""
+    S = [cusum(C, mu, phi, rho, np.inf) for C, mu, phi in series]
+    cand = np.unique(np.concatenate([s[s > 0] for s in S] + [np.zeros(1)]))
+    lo, hi = (
+        0,
+        len(cand) - 1,
+    )  # the largest S never alarms (alarm = S > h), so hi always meets the target
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _alarm_rate(series, cand[mid], rho) <= target:
+            hi = mid
+        else:
+            lo = mid + 1
+    return float(cand[lo])
 
 
 def _fact(known, yes) -> np.ndarray:
@@ -146,6 +180,22 @@ def _slow_hours(m: pd.DataFrame, events: pd.DataFrame) -> np.ndarray:
     return keys.merge(hours, how="left")["hours"].to_numpy(float)
 
 
+def _first_calm_after_storm(m: pd.DataFrame, exposure: pd.DataFrame) -> np.ndarray:
+    """Per row of m (cell_id, date): 1 if that day has the cell's first calm covered pass after a storm (A9
+    post_storm on the pass, and the cell's previous pass was not already one), 0 if not, NaN if no pass that day
+    has a known post_storm."""
+    e = exposure.sort_values("time_utc")
+    e = e[e["covered_frac"] > 0]
+    hit = (e["calm"] & e["post_storm"]).astype("boolean")  # NA where post_storm is unknown
+    prev = hit.groupby(e["cell_id"]).shift(1, fill_value=False)
+    first = (hit & ~prev).astype("Float64")
+    day = e["time_utc"].dt.date  # time_utc is UTC (schema)
+    per_day = first.groupby([e["cell_id"], day]).max().rename("f").reset_index()
+    per_day.columns = ["cell_id", "date", "f"]
+    keys = m[["cell_id"]].assign(date=pd.to_datetime(m["date"]).dt.date)
+    return keys.merge(per_day, how="left")["f"].to_numpy(float, na_value=np.nan)
+
+
 def _weekly_gi(m: pd.DataFrame) -> np.ndarray:
     """Each row gets the gi_z of its cell's ISO week, per event type (observed rows only)."""
     week = pd.to_datetime(m["date"]).dt.to_period("W-SUN")
@@ -175,28 +225,29 @@ def _weekly_y(m: pd.DataFrame) -> np.ndarray:
     return ((sums["count"] + 0.5) / (sums["mu"] + 0.5)).to_numpy()
 
 
-def run_cells() -> None:
-    """aggregate/observed + forecast/expected -> fuse/cells.parquet, observed rows (E > 0) in the evaluation
-    window only. CUSUM runs over all observed history so a build-up before the window still counts."""
-    obs = Observed(io.read_stage("aggregate/observed")).observed_rows()
-    exp = io.read_stage("forecast/expected")
-    # Live forecast only (fold 0, #74 item 6; the simulator's truth rows have fold NA). Backtest folds would
-    # duplicate cell-days.
-    exp = exp[exp["fold"].fillna(0) == 0]
+def score_cells(observed, expected, layers, events, T, exposure=None) -> pd.DataFrame:
+    """Pure: the fuse/cells frame from input frames, no file I/O (validate.null_test calls it on shifted frames).
+    observed rows (E > 0) in the evaluation window only; CUSUM runs over all observed history so a build-up before
+    the window still counts. exposure (coverage/exposure) gives post_storm; without it that fact is unknown."""
+    obs = Observed(observed).observed_rows()
+    # Live forecast only (fold 0, #74 item 6; the simulator writes 0 too, #172). Backtest folds would duplicate
+    # cell-days.
+    exp = expected[expected["fold"] == 0]
     m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
-    T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
     m = m[pd.to_datetime(m["date"]).between(pd.Timestamp(start), pd.Timestamp(T))].reset_index(
         drop=True
     )
-    layers = io.read_stage("reference/cells")[["cell_id", "inshore_frac", "lane", "dist_coast_m"]]
-    m = m.merge(layers, on="cell_id", how="left")
-    # TODO(P6): post_storm is not in coverage/exposure yet (P3 contract #85); unknown until it is.
-    post_storm = np.full(len(m), np.nan)
-    hours = _slow_hours(m, io.read_stage("match/events"))
+    m = m.merge(
+        layers[["cell_id", "inshore_frac", "lane", "dist_coast_m"]], on="cell_id", how="left"
+    )
+    post_storm = (
+        _first_calm_after_storm(m, exposure) if exposure is not None else np.full(len(m), np.nan)
+    )
+    hours = _slow_hours(m, events)
     small = (m["event_type"] == "dark_small").to_numpy()
     p_mid = tail_pmid(m["count"], m["mu"], m["phi"])
     scores = m[_KEY].assign(
@@ -209,4 +260,17 @@ def run_cells() -> None:
         y_week=_weekly_y(m),
     )
     scores["U"], scores["agreement"] = fuse(scores)
+    return scores
+
+
+def run_cells() -> None:
+    """aggregate/observed + forecast/expected -> fuse/cells.parquet (stage-file wrapper around score_cells)."""
+    scores = score_cells(
+        io.read_stage("aggregate/observed"),
+        io.read_stage("forecast/expected"),
+        io.read_stage("reference/cells"),
+        io.read_stage("match/events"),
+        io.read_snapshot()["T"],
+        exposure=io.read_stage("coverage/exposure"),
+    )
     io.write_stage("fuse/cells", scores, _provenance("aggregate/observed"))  # type: ignore[arg-type]

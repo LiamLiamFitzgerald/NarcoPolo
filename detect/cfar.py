@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from scipy import ndimage, optimize, stats
 
-from detect._standin import CFG
+from detect._common import CFG
 
 
 def estimate_enl(img: np.ndarray, patch: tuple[slice, slice]) -> float:

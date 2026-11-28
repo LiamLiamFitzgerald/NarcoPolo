@@ -15,6 +15,7 @@ from core.config import load
 from validate.backtest import backtest
 from validate.injection import injection_test
 from validate.null import null_test
+from validate.policy import _block as policy_block
 
 LENGTH_BINS = [("<8", 0, 8), ("8-12", 8, 12), ("12-15", 12, 15), ("15-24", 15, 24)]
 KEYS = ("recall", "injection", "skill", "calibration", "brier", "null")
@@ -40,7 +41,7 @@ def _within(truth_xy: np.ndarray, det_xy: np.ndarray, metres: float) -> np.ndarr
 
 
 def recall_curve(
-    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[str, bool]
+    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
 ) -> pd.DataFrame:
     """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
     boats = truth[
@@ -134,14 +135,34 @@ def calibration(
     return table, float(np.mean((pred - outcome) ** 2)) if len(pred) else float("nan")
 
 
-def interval_coverage(expected: pd.DataFrame, observed: pd.DataFrame) -> float:
-    """Share of observed rows (exposure > 0) whose count is inside [lo90, hi90]; the target is about 0.9 (A14)."""
-    m = observed[observed["exposure"] > 0].merge(expected, on=["cell_id", "date", "event_type"])
-    return (
-        float(((m["count"] >= m["lo90"]) & (m["count"] <= m["hi90"])).mean())
-        if len(m)
-        else float("nan")
-    )
+def _cdf(c: np.ndarray, mu: np.ndarray, phi: np.ndarray) -> np.ndarray:
+    """P(X <= c), X negative binomial with mean mu and variance phi * mu (n = mu / (phi - 1), p = 1 / phi) when
+    phi > 1, else Poisson(mu), the same choice as forecast's intervals. scipy floors a soft count (accepted, #226)."""
+    from scipy import stats
+
+    nb = phi > 1
+    out = stats.poisson.cdf(c, mu)
+    out[nb] = stats.nbinom.cdf(c[nb], mu[nb] / (phi[nb] - 1), 1 / phi[nb])
+    return out
+
+
+def interval_coverage(
+    expected: pd.DataFrame, observed: pd.DataFrame, level: float | None = None
+) -> float:
+    """Central-interval coverage by the nonrandomised PIT (Czado, Gneiting & Held 2009), target `level` (config
+    `interval`, 0.9). Each observed row (exposure > 0) scores the share of its PIT interval [F(c - 1), F(c)] inside
+    [(1 - level) / 2, (1 + level) / 2]. Counting "c in [lo90, hi90]" has a floor far above 0.9 when mu is tiny
+    (P(0) > 0.95 covers everything), so it said nothing about calibration (#226). Live forecast rows only (fold 0)."""
+    level = float(load(io.CONFIG_PATH)[0]["interval"]) if level is None else level
+    exp = expected[expected["fold"].fillna(0) == 0] if "fold" in expected else expected
+    m = observed[observed["exposure"] > 0].merge(exp, on=["cell_id", "date", "event_type"])
+    if not len(m):
+        return float("nan")
+    c, mu, phi = (m[k].to_numpy(float) for k in ("count", "mu", "phi"))
+    a, b = _cdf(c - 1, mu, phi), _cdf(c, mu, phi)
+    lo_q, hi_q = (1 - level) / 2, (1 + level) / 2
+    inside = np.clip(b, lo_q, hi_q) - np.clip(a, lo_q, hi_q)
+    return float(np.mean(inside / np.maximum(b - a, np.finfo(float).tiny)))
 
 
 def simulator_recovery() -> dict[str, Any]:
@@ -237,5 +258,6 @@ def run() -> Path:
             "injection": _injection(),
             "null": null_test(),
             "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
+            "policy": policy_block(),  # L6; None until #150, #151 and #152 land
         }
     )

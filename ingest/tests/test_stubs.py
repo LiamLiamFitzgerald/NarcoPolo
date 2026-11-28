@@ -1,4 +1,4 @@
-"""Every offline stub writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
+"""Every offline stub (era5, osm are real; static is real once its URLs are configured: tests/test_*.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
 
 import json
 import socket
@@ -6,31 +6,15 @@ import struct
 from datetime import date
 
 import pandas as pd
-import pyarrow.parquet as pq
 import pyogrio
 import pytest
-from scipy.io import netcdf_file
 
-import sim.simulate
-from core import io
-from core.config import load
-from ingest import era5, fetch_all, gfw, osm, probe, s1, static
+from ingest import era5, fetch_all, osm, s1, static
+from ingest.tests.conftest import CFG, FakeCDS
 
-SEED = 20261127
-CFG = load(io.CONFIG_PATH)[0]
 B = CFG["region_bbox"]
 BBOX = (B["lon_min"], B["lat_min"], B["lon_max"], B["lat_max"])
 START, END = date(2026, 11, 1), date(2026, 11, 3)
-
-
-@pytest.fixture(scope="module")
-def simraw(tmp_path_factory):
-    root = tmp_path_factory.mktemp("sim")
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("NARCO_DATA", str(root / "data"))
-        mp.setenv("NARCO_RAW", str(root / "raw"))
-        sim.simulate.simulate(CFG, SEED)
-    return root / "raw"
 
 
 @pytest.fixture(autouse=True)
@@ -80,11 +64,6 @@ def _same_gpkg_shape(stub, simulated, layer):
     assert list(a["fields"]) == list(s["fields"]) and a["features"] == 0
 
 
-def test_probe_reports_no_go_without_network():
-    s1_ok, gfw_ok, notes = probe.probe()
-    assert (s1_ok, gfw_ok) == (False, False) and "stub" in notes
-
-
 def test_list_passes_columns():
     passes = s1.list_passes(BBOX, START, END)
     assert list(passes.columns) == ["pass_id", "time", "orbit_dir", "rel_orbit", "footprint"]
@@ -120,46 +99,6 @@ def test_fetch_scene_matches_simulator(simraw, raw):
     assert s1.fetch_scene(row) == tif  # cache hit
 
 
-@pytest.mark.parametrize(
-    "fn, name", [(gfw.fetch_sar, "gfw_sar"), (gfw.fetch_presence, "gfw_presence")]
-)
-def test_gfw_matches_simulator_schema(simraw, raw, fn, name):
-    path = fn(BBOX, START, END)
-    assert path == raw / f"{name}.parquet"
-    sim_schema = pq.read_schema(simraw / f"{name}.parquet").remove_metadata()
-    assert pq.read_schema(path).remove_metadata().equals(sim_schema)
-    assert pq.read_metadata(path).num_rows == 0  # nothing downloaded, never a fake zero
-    _recorded(raw, path)
-
-
-def test_era5_matches_simulator_grid(simraw, raw):
-    path = era5.fetch_era5(BBOX, START, END)
-    with netcdf_file(path, mmap=False) as a, netcdf_file(simraw / "era5.nc", mmap=False) as s:
-        assert set(a.variables) == set(s.variables)
-        for v in ("u10", "v10", "swh"):
-            assert a.variables[v].dimensions == s.variables[v].dimensions
-            assert a.variables[v].units == s.variables[v].units
-        assert list(a.variables["latitude"][:]) == list(s.variables["latitude"][:])
-        assert list(a.variables["longitude"][:]) == list(s.variables["longitude"][:])
-        t = a.variables["time"][:]
-        assert len(t) == 3 * 24 and t[1] - t[0] == 1
-        assert pd.isna(a.variables["u10"][:]).all()
-    _recorded(raw, path)
-
-
-def test_fetch_piers_is_feature_collection(simraw, raw):
-    path = osm.fetch_piers(BBOX)
-    sim_type = json.loads((simraw / "osm_piers.geojson").read_text())["type"]
-    assert json.loads(path.read_text()) == {"type": sim_type, "features": []}
-    _recorded(raw, path)
-
-
-def test_fetch_coastline_matches_simulator(simraw, raw):
-    path = osm.fetch_coastline(BBOX)
-    _same_gpkg_shape(path, simraw / "coastline.gpkg", "coastline")
-    _recorded(raw, path)
-
-
 def test_fetch_inshore_matches_simulator(simraw, raw):
     paths = static.fetch_inshore()
     assert {p.relative_to(raw).as_posix() for p in paths} == {
@@ -176,7 +115,9 @@ def test_fetch_bathy_matches_simulator(simraw, raw):
     _recorded(raw, path)
 
 
-def test_fetch_all_records_everything_and_is_idempotent(raw):
+def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch, fake_gfw):
+    monkeypatch.setattr(era5, "_client", lambda: FakeCDS(simraw / "era5.nc"))
+    monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
     fetch_all(CFG)
     on_disk = {p.relative_to(raw).as_posix() for p in raw.rglob("*") if p.is_file()} - {
         "manifest.json"
