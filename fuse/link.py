@@ -1,5 +1,4 @@
-"""Lag link (issue 56), drop sites, significance and recurrence (issue 57), piers and reasons. The pier and reason
-steps are still STUBS (issue 24, real in #59) returning neutral, schema-valid placeholders."""
+"""Lag link (issue 56), drop sites, significance and recurrence (issue 57), pier scores and reasons (issue 59)."""
 
 import math
 from typing import NamedTuple
@@ -279,28 +278,101 @@ def recurrence(L_site, median_L) -> int:
     return int(np.sum(np.isfinite(L) & (L > median_L)))
 
 
-def _site_agreement(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -> pd.Series:
-    """Per site: agreement of the dark_small cell-day that gave its highest L (P6 Resolved ambiguities)."""
-    out = {}
-    for cid, g in slow[slow["L"].notna()].groupby("cell_id"):
+def _strongest(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -> pd.DataFrame:
+    """Per site (index site_id): the dark_small cell-day that gave its highest L, with its agreement (P6 Resolved
+    ambiguities), the lag in days after that slowdown and the slowdown's own row (for the reasons)."""
+    rows = {}
+    for cid, g in slow[slow["L"] > 0].groupby("cell_id"):
         s = g.loc[g["L"].idxmax()]
         m, d0 = _window(s, u_small, nbrs, PARAMS["link_days"])
         if not m.any():
             continue
         lag = (pd.DatetimeIndex(u_small.index.get_level_values(1)[m]) - d0).days.to_numpy()
         k = int(np.argmax(u_small[m].to_numpy() * np.exp(-lag / PARAMS["tau_days"])))
-        out[str(cid)] = int(agree.reindex(u_small.index[m][[k]]).fillna(0).iloc[0])
-    return pd.Series(out, dtype=int)
+        key = u_small.index[m][k]
+        rows[str(cid)] = {
+            "agreement": int(agree.reindex([key]).fillna(0).iloc[0]),
+            "small_cell": key[0], "small_date": pd.Timestamp(key[1]), "lag_days": int(lag[k]),
+            "event_id": s["event_id"],
+        }  # fmt: skip
+    return pd.DataFrame.from_dict(rows, orient="index")
+
+
+_NO_PIER = "no road-access pier within reach"
+
+
+def _scored(sites: pd.DataFrame) -> pd.DataFrame:
+    """Sites that feed pier scores: the flagged ones, else the top 5 unflagged by S (shown as "not significant")."""
+    flagged = sites[sites["bh_flag"]]
+    return flagged if len(flagged) else sites.sort_values("S", ascending=False).head(5)
 
 
 def pier_scores(
     sites, travel_hours, tau_h=PARAMS["pier_tau_h"]
 ) -> tuple[pd.Series, dict[str, list[str]]]:
-    return pd.Series(dtype=float), {}  # stub, issue 24
+    """P_j = sum over scored sites of S x exp(-T / tau_h), T = sea-only travel hours (site_id = cell_id, A2), and
+    each scored site's top 3 piers by that weight. travel_hours must already be road-access piers only; a pier
+    with no travel row is unreachable by sea and gets nothing. Scored = flagged, else the top 5 unflagged."""
+    scored = _scored(sites)[["site_id", "S"]]
+    t = travel_hours.merge(scored, left_on="cell_id", right_on="site_id")
+    t = t.assign(w=t["S"] * np.exp(-t["hours"] / tau_h))
+    P = t.groupby("pier_id")["w"].sum().rename("P_j")
+    top = {
+        str(sid): g.sort_values(["w", "pier_id"], ascending=[False, True])["pier_id"]
+        .head(3)
+        .tolist()
+        for sid, g in t[t["w"] > 0].groupby("site_id")
+    }
+    return P, top
 
 
-def reasons(site, inputs) -> list[str]:  # stub, issue 24: template, identity-free
-    return ["not scored yet (placeholder)"]
+def _fmt(x: float) -> str:
+    return f"{x:.1f}" if x < 10 else f"{x:.0f}"
+
+
+def reasons(site, inputs) -> list[str]:
+    """Plain-language evidence for one site, filled from its numbers. Identity-free: no vessel or person, only
+    the cell, counts and times as day offsets. Language rule: "unusual", "worth checking", never a verdict.
+    inputs: mapping with optional keys strongest (row of _strongest), C and mu (small-boat count and expected
+    count on that cell-day), dist_coast_m, lane, inshore_frac, n_tested, significant (bool)."""
+    out = [f"{int(site['n_slowdowns'])} ship slowdown(s) in this 2 km cell."]
+    st = inputs.get("strongest")
+    if st is not None:
+        line = f"{int(st['lag_days'])} day(s) after the strongest one: unusual small-boat activity nearby"
+        if inputs.get("C") is not None and inputs.get("mu") is not None:
+            line += f", {_fmt(inputs['C'])} small unmatched detection(s) where {_fmt(inputs['mu'])} were expected"
+        out.append(line + ".")
+        out.append(
+            f"{int(st['agreement'])} of 4 detector angles agree on that follow-up (angles, not votes)."
+        )
+    else:
+        out.append("No small-boat activity seen after these slowdowns.")
+    if int(site["recurrence"]) > 1:
+        out.append(
+            f"Reused: {int(site['recurrence'])} slowdowns with a stronger-than-median follow-up."
+        )
+    if int(site["followup_unobserved"]) > 0:
+        out.append(
+            f"{int(site['followup_unobserved'])} slowdown(s) had no calm radar pass within "
+            f"{PARAMS['link_days']} days: follow-up unobserved, not 'nothing came'."
+        )
+    d = inputs.get("dist_coast_m")
+    if d is not None and np.isfinite(d):
+        out.append(
+            f"{d / 1000:.0f} km from the coast"
+            + (", in a shipping lane." if inputs.get("lane") else ", outside lanes.")
+        )
+    f = inputs.get("inshore_frac")
+    if f is not None and np.isfinite(f) and f < 0.1:
+        out.append("Outside inshore fishing grounds.")
+    if inputs.get("significant"):
+        out.append(
+            f"Worth checking: busy traffic alone rarely scores this high (p = {site['p_perm']:.3g}, "
+            f"still unusual after correcting for {inputs.get('n_tested', 0)} sites)."
+        )
+    else:
+        out.append("Not significant: busy traffic alone could explain this score.")
+    return out
 
 
 def run(observed=None, expected=None, layers=None, travel=None, events=None):
@@ -313,11 +385,12 @@ def run(observed=None, expected=None, layers=None, travel=None, events=None):
 
 def _scored_sites(
     cells: pd.DataFrame, observed: pd.DataFrame, events: pd.DataFrame, T
-) -> pd.DataFrame:
-    """Sites with S, p_perm (permutation through the link table), bh_flag (BH once over the tested sites),
-    recurrence, followup_unobserved and agreement, ranked by S and suppressed to the top list."""
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """(sites, slowdowns, strongest): sites with S, p_perm (permutation through the link table), bh_flag (BH once
+    over the tested sites), recurrence, followup_unobserved and agreement, ranked by S and suppressed to the top
+    list; the linked slowdowns; and each site's strongest follow-up cell-day."""
     if events is None or not (events["event_type"] == "slowdown").any():
-        return _empty_sites()
+        return _empty_sites(), pd.DataFrame(), pd.DataFrame()
     slow = _link_slowdowns(cells, observed, events, T)
     out = sites(slow)
     fine = observed.loc[observed["level"] == FINE, "cell_id"]
@@ -333,15 +406,69 @@ def _scored_sites(
     ]
     out["bh_flag"] = flag
     agree = _small_rows(cells).set_index(["cell_id", "date"])["agreement"]
-    out["agreement"] = (
-        _site_agreement(slow, u_small, agree, nbrs)
-        .reindex(out["site_id"])
-        .fillna(0)
-        .astype(int)
-        .to_numpy()
-    )
+    strongest = _strongest(slow, u_small, agree, nbrs)
+    a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
+    out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
     ranked = out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable")
-    return suppress(ranked).reset_index(drop=True)
+    return suppress(ranked).reset_index(drop=True), slow, strongest
+
+
+def _road_travel(travel: pd.DataFrame | None, piers: pd.DataFrame | None) -> pd.DataFrame:
+    """Travel rows to road-access piers only; without a piers layer (pure path) every pier counts."""
+    if travel is None:
+        return pd.DataFrame(columns=["cell_id", "pier_id", "hours"])
+    if piers is None:
+        return travel
+    return travel[travel["pier_id"].isin(piers.loc[piers["road_access"].astype(bool), "pier_id"])]
+
+
+def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
+    """Fill reasons and top_piers; build fuse/piers (one row per road-access pier) and fuse/links."""
+    road = _road_travel(travel, piers)
+    P, top = pier_scores(sites_, road)
+    scored = set(_scored(sites_)["site_id"]) if len(sites_) else set()
+    small = _small_rows(observed).set_index(["cell_id", "date"])["count"] if len(observed) else None
+    mu = None
+    if expected is not None and len(expected):
+        e = expected[expected["fold"].fillna(0) == 0] if "fold" in expected else expected
+        mu = _small_rows(e).set_index(["cell_id", "date"])["mu"]
+    lay = layers.set_index("cell_id") if layers is not None and len(layers) else None
+    n_tested = int((sites_["S"] > 0).sum()) if len(sites_) else 0
+    rs, tp = [], []
+    for _, site in sites_.iterrows():
+        sid = site["site_id"]
+        inputs: dict = {"n_tested": n_tested, "significant": bool(site["bh_flag"])}
+        if sid in strongest.index:
+            st = strongest.loc[sid]
+            inputs["strongest"] = st
+            key = (st["small_cell"], st["small_date"])
+            for name, series in (("C", small), ("mu", mu)):
+                if series is not None and key in series.index:
+                    inputs[name] = float(np.asarray(series.loc[key]).ravel()[0])
+        if lay is not None and sid in lay.index:
+            for c in ("dist_coast_m", "lane", "inshore_frac"):
+                if c in lay.columns:
+                    inputs[c] = lay.at[sid, c]
+        r = reasons(site, inputs)
+        piers_ = top.get(sid, [])
+        if sid in scored and not piers_:
+            r.append(_NO_PIER.capitalize() + ".")
+        rs.append(r)
+        tp.append(piers_)
+    sites_ = sites_.assign(reasons=rs, top_piers=tp)
+    all_piers = pd.Index(sorted(set(road["pier_id"])), name="pier_id")
+    piers_out = P.reindex(all_piers).fillna(0.0).reset_index()
+    links = pd.DataFrame(columns=["site_id", "L", "age_days"])
+    if len(slow):
+        lk = slow[slow["L"].notna() & slow["cell_id"].isin(sites_["site_id"])]
+        links = pd.DataFrame(
+            {
+                "site_id": lk["cell_id"].astype(str),
+                "L": lk["L"].astype(float),
+                "age_days": lk["age_days"].astype(float),
+            }
+        ).reset_index(drop=True)
+    return sites_, piers_out, links
 
 
 def _run(
@@ -352,13 +479,19 @@ def _run(
     no slowdown gets a link score and no site is flagged. T defaults to the last observed date."""
     if cells is None:
         cells = pd.DataFrame({c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()})
+    return cells, _all(observed, expected, layers, travel, events, cells, T)[0]
+
+
+def _all(observed, expected, layers, travel, events, cells, T, piers=None):
+    """(sites, piers, links) from frames; no file I/O."""
     if T is None:
         T = pd.Timestamp(max(observed["date"])).date() if len(observed) else None
-    return cells, _scored_sites(cells, observed, events, T)
+    s, slow, strongest = _scored_sites(cells, observed, events, T)
+    return _finish(s, slow, strongest, observed, expected, layers, travel, piers)
 
 
 def run_sites() -> None:
-    """Stage files -> fuse/sites.parquet."""
+    """Stage files -> fuse/sites, fuse/piers and fuse/links."""
     names = [
         "aggregate/observed",
         "forecast/expected",
@@ -367,5 +500,11 @@ def run_sites() -> None:
         "match/events",
     ]
     cells = io.read_stage("fuse/cells")  # written by detectors.run_cells, which make all runs first
-    _, out = _run(*(io.read_stage(n) for n in names), cells=cells, T=io.read_snapshot()["T"])
-    io.write_stage("fuse/sites", out, _provenance("aggregate/observed"))  # type: ignore[arg-type]
+    frames = [io.read_stage(n) for n in names]
+    sites_, piers, links = _all(
+        *frames, cells=cells, T=io.read_snapshot()["T"], piers=io.read_stage("reference/piers")
+    )
+    prov = _provenance("aggregate/observed")
+    io.write_stage("fuse/sites", sites_, prov)  # type: ignore[arg-type]
+    io.write_stage("fuse/piers", piers, prov)  # type: ignore[arg-type]
+    io.write_stage("fuse/links", links, prov)  # type: ignore[arg-type]
