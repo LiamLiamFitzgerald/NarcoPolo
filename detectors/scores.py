@@ -180,6 +180,22 @@ def _slow_hours(m: pd.DataFrame, events: pd.DataFrame) -> np.ndarray:
     return keys.merge(hours, how="left")["hours"].to_numpy(float)
 
 
+def _first_calm_after_storm(m: pd.DataFrame, exposure: pd.DataFrame) -> np.ndarray:
+    """Per row of m (cell_id, date): 1 if that day has the cell's first calm covered pass after a storm (A9
+    post_storm on the pass, and the cell's previous pass was not already one), 0 if not, NaN if no pass that day
+    has a known post_storm."""
+    e = exposure.sort_values("time_utc")
+    e = e[e["covered_frac"] > 0]
+    hit = (e["calm"] & e["post_storm"]).astype("boolean")  # NA where post_storm is unknown
+    prev = hit.groupby(e["cell_id"]).shift(1, fill_value=False)
+    first = (hit & ~prev).astype("Float64")
+    day = e["time_utc"].dt.date  # time_utc is UTC (schema)
+    per_day = first.groupby([e["cell_id"], day]).max().rename("f").reset_index()
+    per_day.columns = ["cell_id", "date", "f"]
+    keys = m[["cell_id"]].assign(date=pd.to_datetime(m["date"]).dt.date)
+    return keys.merge(per_day, how="left")["f"].to_numpy(float, na_value=np.nan)
+
+
 def _weekly_gi(m: pd.DataFrame) -> np.ndarray:
     """Each row gets the gi_z of its cell's ISO week, per event type (observed rows only)."""
     week = pd.to_datetime(m["date"]).dt.to_period("W-SUN")
@@ -228,8 +244,7 @@ def run_cells() -> None:
     )
     layers = io.read_stage("reference/cells")[["cell_id", "inshore_frac", "lane", "dist_coast_m"]]
     m = m.merge(layers, on="cell_id", how="left")
-    # TODO(P6): post_storm is not in coverage/exposure yet (P3 contract #85); unknown until it is.
-    post_storm = np.full(len(m), np.nan)
+    post_storm = _first_calm_after_storm(m, io.read_stage("coverage/exposure"))
     hours = _slow_hours(m, io.read_stage("match/events"))
     small = (m["event_type"] == "dark_small").to_numpy()
     p_mid = tail_pmid(m["count"], m["mu"], m["phi"])
