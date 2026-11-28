@@ -145,7 +145,7 @@ def world(tmp_path_factory):
     stop = lambda i, t, x, y: {"id": i, "arrival_utc": t, "dwell_h": 1.0, "x_m": x, "y_m": y}
     plan = {  # what patrol writes
         "ship": [stop("base", "2026-11-27T06:00:00Z", s.x_m - 9000, s.y_m),
-                 {**stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m), "exploration": True},
+                 {**stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m), "exploration": True, "reason": "explore"},
                  stop("base", "2026-11-27T10:00:00Z", s.x_m - 9000, s.y_m)],
         "aircraft": [],
     }  # fmt: skip
@@ -211,6 +211,8 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
     assert all(inside(p) for p in snap["piers"])
     assert all(inside(s) for s in snap["plan"]["ship"])
     assert [s.get("exploration", False) for s in snap["plan"]["ship"]] == [False, True, False]
+    # the bandit marks its exploration visits with reason "explore" (D3); the dashboard needs it
+    assert [s.get("reason") for s in snap["plan"]["ship"]] == [None, "explore", None]
     pj = io.read_stage("fuse/piers").set_index("pier_id")["P_j"]
     assert snap["piers"] and all(
         p["P_j"] == pytest.approx(pj[p["id"]], abs=1e-4) for p in snap["piers"]
