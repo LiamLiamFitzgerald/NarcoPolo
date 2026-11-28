@@ -235,7 +235,7 @@ def test_score_without_null_samples_is_left_out(data_root):
 
 def _attention(root, weights, config_hash=None):
     (root / "reports").mkdir(exist_ok=True)
-    body = {"groups": {g: {"weight": w} for g, w in weights.items()}}
+    body: dict[str, object] = {"groups": {g: {"weight": w} for g, w in weights.items()}}
     body["config_hash"] = config_hash or load(io.CONFIG_PATH)[1]
     (root / "reports" / "attention.json").write_text(json.dumps(body))
 

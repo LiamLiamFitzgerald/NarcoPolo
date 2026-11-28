@@ -54,3 +54,19 @@ def test_site_features_ignore_weeks_after_T(season):
         if first.empty
         else f.iloc[0]["oe"] == pytest.approx(first["oe"].iloc[-1])
     )
+
+
+def test_weekly_scores_use_the_live_forecast_only(season):
+    """#172/#198: only fold == 0 is the live forecast. A backtest fold or a row with no fold must not add a
+    second mu for the same cell-day (it would double the weekly expected count)."""
+    obs, exp, _ = season
+    live = exp[exp["fold"] == 0]
+    extra = pd.concat(
+        [
+            live.assign(fold=pd.array([1] * len(live), dtype="Int64"), mu=live["mu"] * 50),
+            live.assign(fold=pd.array([None] * len(live), dtype="Int64"), mu=live["mu"] * 50),
+        ]
+    )
+    base = weekly_scores(obs, live)
+    noisy = weekly_scores(obs, pd.concat([live, extra], ignore_index=True))
+    pd.testing.assert_frame_equal(base.reset_index(drop=True), noisy.reset_index(drop=True))

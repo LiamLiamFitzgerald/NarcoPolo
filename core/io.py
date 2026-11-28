@@ -19,7 +19,11 @@ from core.schemas import JSON_CHECKS, SCHEMAS, check, check_json
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.yaml"
-_GPKG = {"reference/cells": "cells", "reference/piers": "piers"}  # layers of reference/layers.gpkg
+_GPKG = {
+    "reference/cells": "cells",
+    "reference/piers": "piers",
+    "reference/land": "land",
+}  # layers of reference/layers.gpkg
 _STAMP = b"narco"
 
 
@@ -145,6 +149,23 @@ def _stale(cfg: Config, name: str, stamp: dict[str, Any]) -> None:
         )
 
 
+def _typed_empty(name: str, table: pa.Table) -> pa.Table:
+    """A 0-row frame gives Arrow type `null` to untyped columns; give them the type a non-empty file has (#171):
+    list<string> for the list-of-str columns, string for the rest."""
+    lists = {
+        c
+        for c, col in SCHEMAS[name].columns.items()
+        if any(getattr(ch, "error", None) == "not a list of str" for ch in col.checks)
+    }
+    fields = [
+        f.with_type(pa.list_(pa.string()) if f.name in lists else pa.string())
+        if pa.types.is_null(f.type)
+        else f
+        for f in table.schema
+    ]
+    return table.cast(pa.schema(fields, metadata=table.schema.metadata))
+
+
 def write_stage(name: str, frame: pd.DataFrame, provenance: Literal["simulated", "real"]) -> Path:
     frame = check(name, frame)  # refuse to write a broken file
     _check_cells_exist(name, frame)
@@ -156,7 +177,9 @@ def write_stage(name: str, frame: pd.DataFrame, provenance: Literal["simulated",
         gpd.GeoDataFrame(frame, crs=32629).to_file(path, layer=_GPKG[name], driver="GPKG")
         _sidecar(name).write_text(json.dumps(stamp))
         return path
-    table = pa.Table.from_pandas(frame, preserve_index=False)
+    if "date" in frame.columns:  # one stored type, timestamp[ns], whatever the writer passed (#171)
+        frame = frame.assign(date=pd.to_datetime(frame["date"]).astype("datetime64[ns]"))
+    table = _typed_empty(name, pa.Table.from_pandas(frame, preserve_index=False))
     table = table.replace_schema_metadata(
         {**(table.schema.metadata or {}), _STAMP: json.dumps(stamp).encode()}
     )

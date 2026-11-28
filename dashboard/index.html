@@ -222,8 +222,14 @@ function drawOverlays() {
   }
 }
 
-// The sites the patrol planner chose from (meta.top_sites, highest score first); the map and the list draw these, not every site.
-const candidates = () => [...snap.sites].sort((a, b) => b.S - a.S).slice(0, snap.meta.top_sites);
+// D1 (#176): p_site ranks sites (highest first), S breaks ties; sites without p_site come after, by S
+function siteOrder(a, b) {
+  const pa = a.p_site ?? null, pb = b.p_site ?? null;
+  if (pa !== pb) return pa === null ? 1 : pb === null ? -1 : pb - pa;
+  return b.S - a.S;
+}
+// The sites the patrol planner chose from (meta.top_sites, in siteOrder); the map and the list draw these, not every site.
+const candidates = () => [...snap.sites].sort(siteOrder).slice(0, snap.meta.top_sites);
 
 function drawSiteList() {
   const ol = document.getElementById("sites");
