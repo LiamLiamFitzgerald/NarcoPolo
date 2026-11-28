@@ -149,6 +149,7 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | `fuse/links.parquet` (P6) | `site_id` str (in fuse/sites), `L` 0–1, `age_days` float ≥ 0; per site, Σ L × 0.5^(age\_days ÷ 30) = S | one row per slowdown with a link score |
 | `fuse/sites.parquet` learning columns (P6, optional until the learning layer lands; docs/learning.md) | `p_comb` 0–1, `comb_flag` bool, `agreement_merged` int ≥ 0, `p_site` 0–1, `model_rung` 0–3 | same rows as fuse/sites |
 | `patrol/bandit_state.json` (P7) | `{site_id: {alpha > 0, beta > 0, last_visit_week int or null}}`; plan stops may carry `theta` 0–1 and `reason` exploit/explore | one entry per site ever ranked |
+| `patrol/outcomes.parquet` (P7 writes from the dashboard, P7 `patrol` reads; #329) | `site_id` str (a fuse/sites id), `iso_week` str (`YYYY-Www`), `outcome` {found\_something, found\_nothing, not\_visited}, `entered_at` UTC timestamp. Append-only; a later row for the same site and week replaces the earlier one when read. No free text, vessel, crew or person fields. Missing file = no outcomes yet. `not_visited` gives no learning update (never a zero). `patrol` uses only rows with `iso_week` before the plan week (training cut-off) | one row per recorded visit |
 | `patrol/plan.json` (P7) | per asset: ordered stops (site or pier id, arrival time, dwell) | small |
 | `export/snapshot.json` (P7) | see P7 | < 5 MB |
 

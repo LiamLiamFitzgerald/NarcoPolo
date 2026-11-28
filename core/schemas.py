@@ -147,6 +147,16 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
         },
         _unique("cell_id", "date"),
     ),
+    "patrol/outcomes": _schema(  # #329: what a patrol found at a site in a week; P7 writes and reads it
+        {
+            "site_id": _id(),  # a fuse/sites id: a place, never a vessel or person
+            "iso_week": pa.Column(
+                str, pa.Check.str_matches(r"^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$"), nullable=False
+            ),
+            "outcome": _in("found_something", "found_nothing", "not_visited"),
+            "entered_at": _utc(),  # when the crew recorded it; no free text, crew or vessel fields
+        }
+    ),
     "validate/pboat_training": _schema(  # #209: labelled injection-run candidates; P4's fit_pboat trains on them
         {
             "pass_id": _id(),

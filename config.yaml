@@ -193,6 +193,7 @@ reads:
   reference/presence_2km: [x0, y0, region_bbox, reference]
   coverage/weather_daily: [x0, y0, region_bbox, coverage]
   validate/pboat_training: [x0, y0, region_bbox, validate, p4]
+  patrol/outcomes: []  # #329: entered by crews, not computed from config, so a config change never makes it stale
   coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]
   match/events: [x0, y0, region_bbox]
