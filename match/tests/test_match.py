@@ -47,3 +47,17 @@ def test_dark_small_events_keep_unmatched_small_and_medium():
         and (ev["event_type"] == "dark_small").all()
         and not ev["matched"].any()
     )
+
+
+def test_dark_medium_is_every_unmatched_medium_and_it_stays_in_dark_small():  # #344
+    from match.events import _dark_medium_events
+
+    d = _dets().assign(
+        matched=[False, False, False, False, False],
+        size_class=["large", "medium", "small", "medium", "medium"],
+    )
+    d.loc[4, "matched"] = True
+    ev = _dark_medium_events(d)
+    assert list(ev["event_id"]) == ["dark_medium-b", "dark_medium-d"]  # e is matched: no event
+    assert (ev["event_type"] == "dark_medium").all() and list(ev["p"]) == [0.8, 0.3]
+    assert {"dark_small-b", "dark_small-d"} <= set(dark_small_events(d)["event_id"])
