@@ -14,9 +14,15 @@ import re
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+from narco_module import current_module  # noqa: E402
+
 ROOT = Path(os.environ.get("CLAUDE_PROJECT_DIR", ".")).resolve()
 OWNERS = json.loads((ROOT / ".github" / "owners.json").read_text())
-MODULE = os.environ.get("NARCO_MODULE", "").upper()
+ENV_MODULE = os.environ.get("NARCO_MODULE", "").strip().upper()
+BRANCH_MODULE = current_module(ROOT)
+# The branch decides, as in CI; NARCO_MODULE is optional and must agree with it (#182).
+MODULE = BRANCH_MODULE or ENV_MODULE
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 DOC_HOSTS = ("readthedocs", "docs.", "pysal.org", "github.com", "pypi.org", "python.org",
@@ -99,9 +105,11 @@ def main() -> None:
         target = inp.get("file_path") or inp.get("notebook_path") or ""
         if rel(target) is None and scratch(target):
             return
+        if ENV_MODULE and BRANCH_MODULE and ENV_MODULE != BRANCH_MODULE:
+            block(f"NARCO_MODULE={ENV_MODULE} but this worktree's branch belongs to "
+                  f"{BRANCH_MODULE}. Unset NARCO_MODULE or use the right worktree.")
         if MODULE not in OWNERS["modules"]:
-            block("set NARCO_MODULE=P1..P7 before starting Claude Code (see AGENTS.md).")
-        target = inp.get("file_path") or inp.get("notebook_path") or ""
+            block("work in a mod/p<n>/<issue> worktree (scripts/new_task.sh, see AGENTS.md).")
         r = rel(target)
         if r is None:
             block(f"{target} is outside the repository.")
@@ -137,4 +145,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception as e:  # fail closed: a broken guard must not let edits through (#182)
+        block(f"guard error ({type(e).__name__}: {e}).")
