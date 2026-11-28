@@ -147,6 +147,21 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
         },
         _unique("cell_id", "date"),
     ),
+    "validate/pboat_training": _schema(  # #209: labelled injection-run candidates; P4's fit_pboat trains on them
+        {
+            "pass_id": _id(),
+            "cell_id": pa.Column(
+                str, nullable=False
+            ),  # with pass_id, P4 joins wind_ms from coverage/exposure
+            "date": _date(),  # the chip's UTC date: core.Split drops rows after the cut-off
+            "peak_ratio_vv_db": _num(),
+            "peak_ratio_vh_db": _num(),
+            "pol_agree": _flag(),
+            "n_px": _num(int, ge=1),
+            "ghost": _flag(),
+            "label": _flag(),  # True at an injected boat; False > pboat_negative_m from any injection or AIS ship
+        }
+    ),
     "coverage/exposure": _schema(
         {
             "cell_id": pa.Column(str, nullable=False),

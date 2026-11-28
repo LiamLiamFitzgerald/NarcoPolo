@@ -74,6 +74,7 @@ def heatmap_values(
     """Per cell for one ISO week: the four heat-map values and `observed` (small-boat exposure > 0).
 
     normal    mean over observed days of mu / E for dark_small     (forecast/expected, coverage)
+    ratio     the week's y_week itself, for plain-language phrasing (#315)
     obs_vs_exp  log2 of the week's y_week = (sum C + 0.5) / (sum mu + 0.5) for dark_small (fuse/cells, #87)
     unusual   weekly max of U over both event types                (fuse/cells)
     agreement the 0-4 badge of the row that gave that maximum      (fuse/cells)
@@ -113,6 +114,8 @@ def heatmap_values(
             "observed": bool(e > 0),
             "normal": _num(normal.get(cid)) if e > 0 else None,
             "obs_vs_exp": _num(np.log2(y_week[cid])) if cid in y_week.index else None,
+            # the same value as a plain ratio, for "about 2x more small boats than normal" (#315)
+            "ratio": _num(y_week[cid]) if cid in y_week.index else None,
             "unusual": _num(top["U"].get(cid)),
             "agreement": None if cid not in top.index else int(top.at[cid, "agreement"]),
             "exposure": _num(e),
@@ -248,6 +251,62 @@ def _links(df: pd.DataFrame) -> dict[str, list[dict]]:
     return out
 
 
+# The briefing card's three evidence checks (#314). PLACEHOLDER (#320): P6 has not written these yet, so
+# the column names below are our guess at the contract and every check reads None ("not available yet")
+# until fuse/sites carries them. The browser never derives a check.
+_CHECKS = (
+    (
+        "rare_slowdown",
+        "check_rare_slowdown",
+    ),  # TODO(P7) #320: a ship slowed where ships rarely slow
+    ("boats_after", "check_boats_after"),  # TODO(P7) #320: small boats seen afterwards nearby
+    ("outside_fishing", "check_outside_fishing"),  # TODO(P7) #320: outside normal fishing activity
+)
+
+
+def _flag_or_none(v: Any) -> bool | None:
+    return None if v is None or (isinstance(v, float) and pd.isna(v)) else bool(v)
+
+
+def _timeline(
+    links: pd.DataFrame, exposure: pd.DataFrame, t: date, start: date, link_days: int
+) -> dict[str, list[dict]]:
+    """Per site, each ship slowdown since `start` (oldest first) with the radar passes over the site's
+    2 km cell in the `link_days` after it. A pass is "calm" (small boats visible) or "rough" (small boats
+    unobserved). Whether a small boat was seen on a pass needs detect events (#320), so `seen` is None:
+    never False, because nobody has looked it up (Design principle 4)."""
+    ages = links.assign(day=[t - timedelta(days=int(a)) for a in links["age_days"]])
+    ages = ages[ages["day"] >= start]
+    ex = exposure[exposure["cell_id"].isin(set(ages["site_id"])) & (exposure["covered_frac"] > 0)]
+    ex = ex.assign(day=ex["time_utc"].dt.date).sort_values("time_utc")
+    by_cell = {c: g for c, g in ex.groupby("cell_id")}
+    out: dict[str, list[dict]] = {}
+    for r in ages.sort_values("day").to_dict("records"):
+        g = by_cell.get(r["site_id"])
+        after = (
+            g[(g["day"] >= r["day"]) & (g["day"] <= r["day"] + timedelta(days=link_days))]
+            if g is not None
+            else g
+        )
+        out.setdefault(str(r["site_id"]), []).append(
+            {
+                "date": r["day"].isoformat(),
+                "L": _num(r["L"]),
+                "passes": []
+                if after is None
+                else [
+                    {
+                        "date": p["day"].isoformat(),
+                        "state": "calm" if p["exposure_small"] > 0 else "rough",
+                        "seen": None,  # PLACEHOLDER (#320): needs detect events per pass
+                    }
+                    for p in after.to_dict("records")
+                ],
+            }
+        )
+    return out
+
+
 def _daily(
     cells: pd.DataFrame, exposure: pd.DataFrame, fine_ids: list[str], days: list[date]
 ) -> list[dict]:
@@ -305,8 +364,12 @@ def _figures(sites: list[dict], week_rows: list[dict], plan: dict, cfg: Any) -> 
     }
 
 
-def _sites(df: pd.DataFrame, links: dict[str, list[dict]] | None = None) -> list[dict]:
-    links = links or {}
+def _sites(
+    df: pd.DataFrame,
+    links: dict[str, list[dict]] | None = None,
+    timeline: dict[str, list[dict]] | None = None,
+) -> list[dict]:
+    links, timeline = links or {}, timeline or {}
     return [
         {
             "id": r["site_id"],
@@ -324,8 +387,17 @@ def _sites(df: pd.DataFrame, links: dict[str, list[dict]] | None = None) -> list
             # D1 (#176): the dashboard ranks sites by p_site; None where the site model gave none
             "p_site": _num(r.get("p_site")),
             "links": links.get(str(r["site_id"]), []),
+            # the briefing lens that put the site here (#313): every site P6 writes today is a drop-off
+            # site; a `lens` column from P6 (fisheries, #321) takes over when it exists
+            "lens": str(r["lens"]) if "lens" in r and isinstance(r["lens"], str) else "dropoff",
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],
+            # PLACEHOLDER (#320): sea travel minutes to each top pier, from P6; None until it exists
+            "top_pier_minutes": [_num(x) for x in r["top_pier_minutes"]][:3]
+            if isinstance(r.get("top_pier_minutes"), list | tuple | np.ndarray)
+            else [None] * min(3, len(r["top_piers"])),
+            "checks": {k: _flag_or_none(r.get(col)) for k, col in _CHECKS},
+            "timeline": timeline.get(str(r["site_id"]), []),
         }
         for r in df.sort_values("S", ascending=False).to_dict("records")
     ]
@@ -345,9 +417,19 @@ def _piers(df: pd.DataFrame, scores: pd.DataFrame) -> list[dict]:
     ]
 
 
-def _plan(plan: dict) -> dict:
+def _mission_mix(cfg: Any) -> dict:
+    """The mission-mix slider (#316). PLACEHOLDER: only the 0 % fisheries plan exists, because fisheries
+    candidates (#321) and the `patrol.mission_mixes` presets (TODO(P7), P1 to add to config.yaml) do not.
+    `wanted` lists the presets the slider will offer; `ready` the mixes with a plan in `plan` today."""
+    wanted = cfg.get("patrol", {}).get("mission_mixes")
+    return {"wanted": [int(m) for m in wanted] if wanted else [0], "ready": [0]}
+
+
+def _plan(plan: dict, lens: dict[str, str] | None = None) -> dict:
     """Stops get WGS 84 positions for the map (x_m and y_m stay in patrol/plan.json) and `at_h`, hours
-    from the asset's first stop, so the schedule chart needs no date arithmetic in the browser."""
+    from the asset's first stop, so the schedule chart needs no date arithmetic in the browser. A stop at
+    a site also gets the lens that put the site on the shortlist (#316); the base gets none."""
+    lens = lens or {}
     t0 = {a: pd.Timestamp(st[0]["arrival_utc"]) for a, st in plan.items() if st}
     return {
         asset: [
@@ -357,6 +439,7 @@ def _plan(plan: dict) -> dict:
                 "at_h": _num((pd.Timestamp(s["arrival_utc"]) - t0[asset]).total_seconds() / 3600),
                 "dwell_h": s["dwell_h"],
                 **_lonlat(s["x_m"], s["y_m"]),
+                **({"lens": lens[s["id"]]} if s["id"] in lens else {}),
                 **{
                     k: s[k]
                     for k in ("exploration", "not_significant", "stand_in", "reason")
@@ -394,8 +477,12 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
 
     year, wk = weeks[0].split("-W")
     first = date.fromisocalendar(int(year), int(wk), 1)
-    plan = _plan(io.read_json_stage("patrol/plan"))
-    sites = _sites(f["fuse/sites"], _links(f["fuse/links"]))
+    sites = _sites(
+        f["fuse/sites"],
+        _links(f["fuse/links"]),
+        _timeline(f["fuse/links"], f["coverage/exposure"], t, first, int(cfg["p6"]["link_days"])),
+    )
+    plan = _plan(io.read_json_stage("patrol/plan"), {s["id"]: s["lens"] for s in sites})
     cell_weeks = {
         w: heatmap_values(f["forecast/expected"], f["fuse/cells"], f["coverage/exposure"], w)
         for w in weeks
@@ -408,6 +495,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "T": t.isoformat(),
             "top_sites": int(cfg.get("patrol", {}).get("top_sites", 15)),  # the spec's default
             "figures": _figures(sites, cell_weeks[weeks[-1]], plan, cfg),
+            "mission_mix": _mission_mix(cfg),
             "week": weeks[-1],
             "weeks": weeks,
             "config_hash": cfg_hash,

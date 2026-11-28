@@ -141,6 +141,7 @@ def _slow_cells(cells, k=0, U=0.8):
     )
 
 
+@pytest.mark.slow
 def test_table_lookup_equals_direct_link_score_for_every_simulator_slowdown(sim):
     cells, obs, ev, T = sim["fuse/cells"], sim["aggregate/observed"], sim["match/events"], sim["T"]
     links = _link_slowdowns(cells, obs, ev, T)

@@ -126,6 +126,17 @@ VALID = {
     "patrol/outcomes": row(
         site_id="s1", iso_week="2026-W48", outcome="found_nothing", entered_at=T
     ),
+    "validate/pboat_training": row(
+        pass_id="pass_000",
+        cell_id="2000_0_0",
+        date="2026-11-27",
+        peak_ratio_vv_db=9.0,
+        peak_ratio_vh_db=6.5,
+        pol_agree=True,
+        n_px=3,
+        ghost=False,
+        label=True,
+    ),
 }
 
 
@@ -169,6 +180,8 @@ def test_every_schema_has_a_valid_example():
         ("patrol/outcomes", {"iso_week": "2026-11-27"}),
         ("patrol/outcomes", {"site_id": 7}),
         ("patrol/outcomes", {"entered_at": pd.Timestamp("2026-11-27T12:00:00")}),  # naive time
+        ("validate/pboat_training", {"n_px": 0}),
+        ("validate/pboat_training", {"label": None}),
     ],
 )
 def test_broken_rule_is_rejected(name, bad):

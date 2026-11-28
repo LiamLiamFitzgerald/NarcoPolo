@@ -3,6 +3,7 @@ import shutil
 import types
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from core import io
@@ -66,3 +67,23 @@ def test_recall_rises_with_brightness_and_is_deterministic(pass_ids):
     assert (t["false_alarms_per_km2"] >= 0).all()
     print(t.to_string())
     assert injection_test(pass_ids, levels, 10, 7).equals(t)
+
+
+def test_injection_writes_labelled_training_candidates(pass_ids, monkeypatch):  # #209
+    pipeline = importlib.import_module("detect.pipeline")
+    real = pipeline.run_pass
+
+    def plus_far_candidate(
+        *a, **kw
+    ):  # the simulated chips have no clutter false alarms: add one 10 km away
+        c = real(*a, **kw)
+        return pd.concat([c, c.iloc[[0]].assign(row=-1000, col=-1000)], ignore_index=True)
+
+    monkeypatch.setattr(pipeline, "run_pass", plus_far_candidate)
+    t = injection_test(pass_ids, [15.0], 10, 7)
+    tr = io.read_stage("validate/pboat_training")
+    assert set(tr["pass_id"]) <= set(pass_ids)
+    assert (~tr["label"]).sum() == len(pass_ids)  # exactly the far candidates are negatives
+    assert tr["label"].sum() >= round(
+        t["recall"].iloc[0] * 10 * len(pass_ids)
+    )  # every recovered spot

@@ -34,7 +34,7 @@ async function open(snap, opts = {}) {
   page.on("request", r => { if (!r.url().startsWith("file:") && !r.url().startsWith("data:")) requests.push(r.url()); });
   await page.addInitScript(s => { window.pywebview = { api: { get_snapshot: async () => s } }; }, snap);
   await page.goto(page_url);
-  await page.waitForSelector("#sites li:not(.skeleton)");
+  await page.waitForSelector("#sites li:not(.skeleton)", { state: "attached" });
   return { page, errors, requests };
 }
 
@@ -68,9 +68,11 @@ for (const mode of ["light", "dark"]) {
   }
 }
 
-// 2. charts, table views, figures (#276, #279)
+// 2. charts, table views, figures (#276, #279); charts live on their screens (#318)
 {
   const { page, errors } = await open(base);
+  const show = async name => { await page.evaluate(n => { location.hash = n; }, name); await page.waitForFunction(n => !document.querySelector(`.screen[data-screen="${n}"]`).hidden, name); };
+  await show("limits");
   if (base.cells.daily?.length) {
     check(await page.locator("#trends .chart-card").count() === 2, "trends: two chart cards");
     const card = page.locator("#trends .chart-card").first();
@@ -88,6 +90,7 @@ for (const mode of ["light", "dark"]) {
   if (base.validation?.recall?.length) check(await page.locator("#validation svg.chart").count() >= 1, "validation: recall chart drawn");
 
   // 3. zoom, reset, scale bar (#280)
+  await show("this-week");
   const vbw = () => page.evaluate(() => Number(document.getElementById("svg").getAttribute("viewBox").split(" ")[2]));
   const full = await vbw();
   await page.click("#zin");
@@ -104,15 +107,57 @@ for (const mode of ["light", "dark"]) {
   const truePxPerKm = scale.mapPx / haversineKm, barPxPerKm = scale.px / scale.km;
   check(Math.abs(barPxPerKm / truePxPerKm - 1) < 0.02, `scale bar within 2%: bar ${barPxPerKm.toFixed(3)} px/km, true ${truePxPerKm.toFixed(3)}`);
 
-  // 4. selection: list to map and map to list (#280)
-  await page.locator("#sites li").first().getByRole("button", { name: "Map" }).click();
+  // 4. selection: list to map and map to list (#280); the list is on Drop-off watch, the map on This week
+  await show("dropoff");
   const firstId = await page.getAttribute("#sites li >> nth=0", "data-id");
+  await page.locator("#sites li").first().getByRole("button", { name: "Map" }).click();
+  await page.waitForFunction(() => !document.querySelector('.screen[data-screen="this-week"]').hidden);
   check(await vbw() < full, "list 'Map' button zooms to the site");
   check(await page.locator(`.site-g.selected[data-id="${firstId}"]`).count() === 1, "selected site is highlighted on the map");
   await page.click("#zreset");
   const lastSite = page.locator("#ov-sites .site-g").last(), lastId = await lastSite.getAttribute("data-id");
   await lastSite.dispatchEvent("click");
   check(await page.locator(`#sites li.selected[data-id="${lastId}"] details[open]`).count() === 1, "clicking a site on the map selects and opens it in the list");
+
+  check(await page.locator(`#top3 .site-card.selected[data-id="${lastId}"]`).count() <= 1, "top-3 card follows the selection");
+
+  // 4b. screens, lens, wording, limits (#313, #315, #318)
+  for (const name of ["this-week", "dropoff", "fisheries", "plan", "limits"]) {
+    await show(name);
+    const visible = await page.evaluate(() => [...document.querySelectorAll(".screen")].filter(s => !s.hidden).map(s => s.dataset.screen));
+    check(visible.length === 1 && visible[0] === name, `screen ${name}: only it is visible (${visible})`);
+    check(await page.getAttribute(`#nav a[data-screen="${name}"]`, "aria-current") === "page", `screen ${name}: nav marks it current`);
+  }
+  await show("this-week");
+  check(await page.locator("#top3 .site-card").count() === Math.min(3, base.sites.length), "This week: three site cards");
+  await page.click('#lens button[data-value="fisheries"]');
+  const fish = base.sites.filter(s => s.lens === "fisheries").length;
+  check(await page.locator("#top3 .site-card").count() === Math.min(3, fish), "Fisheries lens: only fisheries sites on the cards");
+  check(await page.locator("#ov-sites .site-g").count() === Math.min(base.meta.top_sites, fish), "Fisheries lens: only fisheries sites on the map");
+  await page.click('#lens button[data-value="dropoff"]');
+  check(await page.locator("#top3 .site-card").count() === Math.min(3, base.sites.filter(s => (s.lens ?? "dropoff") === "dropoff").length), "back to Drop-off watch");
+  if (!fish) check((await page.textContent("#fisheries")).includes("not available yet"), "Fisheries screen says it is not available yet");
+  check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 2.3 })) === "About 2.3× more small boats than normal this week", "plain ratio wording (more)");
+  check(await page.evaluate(() => cellTip("obs_vs_exp", { ratio: 0.5 })) === "About 2.0× fewer small boats than normal this week", "plain ratio wording (fewer)");
+  check(await page.locator("#limitsList li").count() >= 6, "limits list");
+  // site card evidence (#314), "we checked" (#317) and the mission mix (#316); placeholders read "not available yet"
+  const card = page.locator("#top3 .site-card").first();
+  check(await card.locator(".meter li").count() === 3, "site card: three evidence checks");
+  if (base.sites.every(s => Object.values(s.checks ?? {}).every(v => v === null)))
+    check(await card.locator(".meter li.na").count() === 3, "site card: placeholder checks say not available yet");
+  check(await card.locator(".outcome button").count() === 3, "site card: three 'we checked' answers");
+  await card.locator(".outcome button").nth(1).click();
+  check((await card.locator(".outcome-note").textContent()).startsWith("Not saved"), "opened as a file, an answer is not claimed as saved");
+  await show("plan");
+  check(await page.locator("#plan .mix button[role=radio]").count() === (base.meta.mission_mix?.wanted.length ?? 1), "plan: one mix button per preset");
+  check(await page.locator("#plan .mix button:disabled").count() === (base.meta.mission_mix?.wanted ?? [0]).filter(p => !(base.meta.mission_mix?.ready ?? [0]).includes(p)).length, "plan: mixes without a plan are disabled");
+  await show("this-week");
+
+  // 4c. the Friday briefing prints to one A4 page (#319)
+  const pdf = await page.pdf({ format: "A4", printBackground: true });
+  const pages = (pdf.toString("latin1").match(/\/Type\s*\/Page[^s]/g) ?? []).length;
+  notes.push(`briefing PDF: ${pages} page(s), ${(pdf.length / 1024).toFixed(0)} KB`);
+  check(pages === 1, `briefing prints to one A4 page, not ${pages}`);
 
   // 5. reduced motion: nothing animates
   check(await page.evaluate(() => document.getAnimations().length) === 0, "reduced motion: no running animations");
@@ -140,7 +185,7 @@ for (const mode of ["light", "dark"]) {
   }, base);
   const t0 = Date.now();
   await page.goto(page_url);
-  await page.waitForSelector("#sites li:not(.skeleton)");
+  await page.waitForSelector("#sites li:not(.skeleton)", { state: "attached" });
   const loaded = Date.now() - t0;
   await page.click('#map button[data-value="unusual"]');
   await page.waitForTimeout(400);

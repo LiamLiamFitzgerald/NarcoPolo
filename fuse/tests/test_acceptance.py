@@ -15,6 +15,8 @@ from core.grid import FINE
 from fuse._common import PARAMS
 from sim.simulate import simulate
 
+pytestmark = pytest.mark.slow  # shared setup >= 12 s (28 Nov); run with `pytest -m slow`
+
 SEEN, UNSEEN = (1, 3), (2,)
 _NAMES = (
     "aggregate/observed",
@@ -202,3 +204,48 @@ def test_null_test_flags_noise_rarely(runs):
 
 def test_one_fuse_run_fits_the_a13_budget(runs):
     assert max(r["secs"] for r in runs.values()) < 30  # A13: over 30 s means fewer null runs
+
+
+@pytest.fixture(scope="module")
+def evidence(runs):
+    """#320: fuse/sites before the schema gate (the evidence columns are written once P1 declares them)."""
+    return {seed: _rerun(runs[seed]) for seed in SEEN}
+
+
+_CHECKS = ["check_rare_slowdown", "check_followup_seen", "check_outside_fishing"]
+
+
+def _all_yes(row) -> bool:
+    """All three checks True; an unknown (NA) check is not a yes."""
+    return all(row[c] is not pd.NA and bool(row[c]) for c in _CHECKS)
+
+
+@pytest.mark.parametrize("seed", SEEN)
+def test_planted_site_with_a_seen_pickup_has_all_three_checks(runs, evidence, seed):
+    row = evidence[seed].loc[runs[seed]["site"]]
+    assert _all_yes(row)
+
+
+@pytest.mark.parametrize("seed", SEEN)
+def test_busiest_anchorage_site_does_not_have_all_three_checks(runs, evidence, seed):
+    s = evidence[seed]
+    busiest = s[s.index != runs[seed]["site"]].sort_values("n_slowdowns", ascending=False).iloc[0]
+    assert not _all_yes(busiest)
+
+
+@pytest.mark.parametrize("seed", SEEN)
+def test_top_piers_hours_are_the_sea_travel_hours_in_order(runs, evidence, seed):
+    t = runs[seed]["frames"]["reference/travel_hours"].set_index(["cell_id", "pier_id"])["hours"]
+    for sid, row in evidence[seed].iterrows():
+        assert row["top_piers_hours"] == [float(t[(sid, p)]) for p in row["top_piers"]]
+
+
+@pytest.mark.parametrize("seed", SEEN + UNSEEN)
+def test_written_sites_carry_evidence_only_when_the_schema_declares_it(runs, seed):
+    from core.schemas import SCHEMAS, check
+    from fuse.link import _EVIDENCE
+
+    s = _sites(runs[seed])
+    check("fuse/sites", s)
+    declared = set(SCHEMAS["fuse/sites"].columns)
+    assert {c for c in _EVIDENCE if c in s.columns} <= declared

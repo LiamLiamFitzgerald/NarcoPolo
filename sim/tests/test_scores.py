@@ -43,6 +43,7 @@ def test_gi_star_is_highest_at_a_hot_cell_and_zero_when_flat():
     assert (gi_star(cells, kind, week, np.zeros(n), np.full(n, 0.1), 2900) == 0).all()
 
 
+@pytest.mark.slow
 def test_simulated_cells_carry_gi_and_cusum_signal_at_the_planted_site(tmp_path, monkeypatch):
     """CUSUM alarms once per planted drop at the site and ranks it in the top 5% of cells by alarms; its Gi* peaks
     above 1.96. (Gi* smooths over the 8 neighbours, so a one-cell site need not rank first.)"""
@@ -61,6 +62,7 @@ def test_simulated_cells_carry_gi_and_cusum_signal_at_the_planted_site(tmp_path,
     assert slow.loc[slow["cell_id"] == site, "gi_z"].max() > 1.96
 
 
+@pytest.mark.slow
 def test_simulated_links_are_dated_at_their_slowdowns(tmp_path, monkeypatch):
     """#167: one link per planted slowdown, aged from its day to T; L = 1 where a pick-up followed it."""
     monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
@@ -78,6 +80,7 @@ def test_simulated_links_are_dated_at_their_slowdowns(tmp_path, monkeypatch):
     assert links["L"].sum() == sites["recurrence"].sum()  # every pick-up follows one slowdown
 
 
+@pytest.mark.slow
 def test_stand_in_sites_give_patrol_16_sites_with_the_planted_one_first(tmp_path, monkeypatch):
     """#104: 16+ fuse/sites rows, planted first and highest on S, at least site_gap_m apart, flags mixed."""
     monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
