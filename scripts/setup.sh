@@ -39,4 +39,4 @@ echo "Optional token saver — Serena (symbol-level code lookups for Claude Code
 echo "  claude mcp add serena -- uvx --from git+https://github.com/oraios/serena serena start-mcp-server --context ide-assistant --project \"\$(pwd)\""
 echo "  (if the flags have changed, follow the Serena README)"
 echo
-echo "Every session: NARCO_MODULE=P<n> claude    (inside a worktree from scripts/new_task.sh)"
+echo "Every session: cd into a worktree from scripts/new_task.sh, then run claude (the branch sets the module)"

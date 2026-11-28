@@ -11,7 +11,11 @@ import numpy as np
 from detect._common import CFG
 
 # TODO(P2): metadata key names are not fixed by the data dictionary; these are the ones P4 reads.
-_PRF, _RANGE, _SPEED = "prf_hz", "slant_range_m", "sat_speed_ms"
+_PRF, _RANGE, _SPEED = (
+    "prf_hz",
+    "slant_range_m",
+    "satellite_speed_ms",
+)  # as ingest/s1 and sim write (#291)
 
 
 def ghost_offset_m(meta: dict[str, Any]) -> float | tuple[float, float]:

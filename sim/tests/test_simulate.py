@@ -34,6 +34,7 @@ def test_detection_probability_matches_spec():
     assert abs(_p_det(cfg, 15, 2) - 0.73) < 0.01
 
 
+@pytest.mark.slow
 def test_same_seed_same_files(world, tmp_path_factory):
     data, mp = world
     first = {
@@ -46,7 +47,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 13  # 12 stage files + truth
+    assert first == second and len(first) == 14  # 13 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -121,6 +122,7 @@ def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
     assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
 
 
+@pytest.mark.slow
 def test_pickups_use_pickup_length_m_and_only_pickups_change(tmp_path):
     """#266: validate's visible world sets sim.pickup_length_m; the default equals small_boat_length_m."""
     cfg, _ = load("config.yaml")
@@ -158,3 +160,49 @@ def test_weather_daily_covers_every_cell_day_with_the_day_weather(world):  # #20
     assert len(on_pass) == len(ex)  # every pass's cell-day has weather
     assert (on_pass["wind_max_ms"] - on_pass["wind_ms"]).abs().max() < 1e-5
     assert (on_pass["hs_max_m"] - on_pass["hs_m"]).abs().max() < 1e-5
+
+
+def test_dist_coast_is_measured_to_the_shoreline():
+    """#245: the shoreline sits SHORE_FRAC into the shore row; the shore row's centre is 200 m from it, not 1000."""
+    from sim.simulate import FINE, NY, SHORE_FRAC, _make_map
+
+    fine = _make_map(load("config.yaml")[0])["fine"]
+    shore = fine.loc[fine["iy"] == NY - 1, "dist_coast_m"]
+    assert shore.eq(SHORE_FRAC * FINE - FINE / 2).all()
+    assert (
+        fine.loc[fine["iy"] == NY - 1, "inshore_frac"].eq(1).all()
+    )  # the inshore band did not move
+
+
+def test_pboat_training_is_labelled_by_truth(world):  # #209
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    t = io.read_stage("validate/pboat_training")
+    det = io.read_stage("detect/detections")
+    assert len(t) == len(det) and t["label"].any() and (~t["label"]).any()
+    assert not t.loc[t["label"], "ghost"].any()  # a ghost is never a boat
+    vv = t.groupby("label")["peak_ratio_vv_db"].mean()
+    assert vv[True] > vv[False]  # boats are brighter than false alarms
+
+
+def test_slowdowns_cover_the_whole_ship_history(world):  # #273
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    cfg, _ = load(io.CONFIG_PATH)
+    h, days = cfg["ship_history_days"], cfg["sim"]["days"]
+    start = pd.Timestamp(cfg["sim"]["start_date"])
+    first, last = start + pd.Timedelta(days=days - h), start + pd.Timedelta(days=days - 1)
+    obs = io.read_stage("aggregate/observed")
+    sl = obs[(obs["event_type"] == "slowdown") & (obs["level"] == 2000)]
+    dates = pd.to_datetime(sl["date"])
+    assert dates.min() == first and dates.max() == last and dates.nunique() == h
+    # slowdowns per day are about the same before the radar starts as after it
+    per_day = sl.groupby(dates)["count"].sum()
+    before, after = per_day[per_day.index < start], per_day[per_day.index >= start]
+    assert abs(before.mean() / after.mean() - 1) < 0.1
+    # radar rows still span sim.days only
+    small = pd.to_datetime(obs.loc[obs["event_type"] == "dark_small", "date"])
+    assert small.min() == start and small.nunique() == days
+    t = io.read_stage("match/events").query("event_type == 'slowdown'")["time_utc"]
+    assert t.min() >= pd.Timestamp(first, tz="UTC")
+    assert t.max() < pd.Timestamp(last, tz="UTC") + pd.Timedelta(days=1)

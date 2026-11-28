@@ -40,10 +40,8 @@ def _within(truth_xy: np.ndarray, det_xy: np.ndarray, metres: float) -> np.ndarr
     return (d <= metres).any(axis=1)
 
 
-def recall_curve(
-    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
-) -> pd.DataFrame:
-    """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
+def _boat_hits(detections: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    """True boats under 24 m inside a pass footprint, with pass_id and hit = a non-ghost detection of that pass within 300 m."""
     boats = truth[
         (truth["kind"] != "drop") & (truth["pass_index"] >= 0) & (truth["length_m"] < 24)
     ].copy()
@@ -55,6 +53,14 @@ def recall_curve(
         boats.loc[grp.index, "hit"] = _within(
             grp[["x_m", "y_m"]].to_numpy(), d[["x_m", "y_m"]].to_numpy(), 300.0
         )
+    return boats
+
+
+def recall_curve(
+    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
+) -> pd.DataFrame:
+    """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
+    boats = _boat_hits(detections, truth)
     boats["sea_state"] = ["calm" if calm_by_pass[p] else "rough" for p in boats["pass_id"]]
     rows = []
     for label, lo, hi in LENGTH_BINS:
@@ -273,8 +279,11 @@ def write_report(results: Mapping[str, Any]) -> Path:
     return path
 
 
-def run() -> Path:
-    """make validate on the simulator: recall, p_boat calibration, interval coverage and recovery."""
+def run(quick: bool = False) -> Path:
+    """make validate on the simulator: recall, p_boat calibration, interval coverage and recovery. quick (#343)
+    takes the reduced counts in config validate.quick and stamps mode "quick", so the report is never read as the
+    full result."""
+    q = load(io.CONFIG_PATH)[0]["validate"]["quick"] if quick else None
     det = io.read_stage("detect/detections")
     truth = pd.read_parquet(io.truth_path())
     exposure = io.read_stage("coverage/exposure")
@@ -301,10 +310,21 @@ def run() -> Path:
             "brier": brier,
             "interval_coverage": coverage,
             "recovery": simulator_recovery(),
-            "recovery_visible_pickups": visible_recovery(),  # #266
+            "recovery_visible_pickups": visible_recovery()
+            if q is None or q["visible_worlds"] > 0
+            else None,  # #266
             "injection": _injection(),
-            "null": null_test(),
-            "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
-            "policy": policy_block(),  # L6; None until #150, #151 and #152 land
+            "null": null_test() if q is None else null_test(runs=q["null_runs"]),
+            "skill": pd.concat(
+                [
+                    backtest("slowdown", n_folds=q and q["n_folds_slowdown"]),
+                    backtest("dark_small", n_folds=q and q["n_folds_small"]),
+                ],
+                ignore_index=True,
+            ),
+            "policy": policy_block()
+            if q is None
+            else policy_block(n_seeds=q["policy_seeds"]),  # L6; None until #150, #151 and #152 land
+            "mode": "full" if q is None else "quick",
         }
     )

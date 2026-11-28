@@ -1,6 +1,7 @@
 """reference.run on raw/ files (P2's downloads, or the simulator's copies of them): cells, piers, sea travel times
 and the three rasters, built only from the P3 functions in this folder. Private: run() writes what build() returns."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -27,6 +28,9 @@ class Reference(NamedTuple):
     land: gpd.GeoDataFrame  # reference/land: one (multi)polygon row, id 0 (#133, P7's basemap)
     piers: gpd.GeoDataFrame
     travel: pd.DataFrame
+    presence: (
+        pd.DataFrame
+    )  # reference/presence_2km (#208): regrid_presence on the 2 km cells of the cells layer
     rasters: dict[
         str, tuple[NDArray[np.uint8], int]
     ]  # name to (array, pixel_m); rows south to north
@@ -51,20 +55,26 @@ def _inshore(raw: Path, cells: gpd.GeoDataFrame) -> pd.Series:
     return rc.inshore_frac(cells, gpd.read_file(grounds).to_crs(32629), ext)
 
 
-def _scenes(raw: Path, limit: int | None) -> list[masks.Scene]:
-    """raw/s1 VV in dB on the mask grid (row 0 = south), for the static-object mask."""
+def _scenes(raw: Path, limit: int | None) -> Iterator[masks.Scene]:
+    """raw/s1 VV in dB on the mask grid (row 0 = south), for the static-object mask, read one scene at a time.
+
+    A full-region scene is about 175 M pixels, so the scenes are read lazily as the mask consumes them, never all at
+    once. The file's nodata (-32768, outside the swath) becomes NaN = not looked, never a -327 dB "seen" pixel."""
     import rasterio
 
     x0, y0 = _origin()
-    out = []
     for tif in sorted((raw / "s1").glob("*.tif"))[:limit]:
         with rasterio.open(tif) as src:
-            vv = src.read(1).astype(float) / 100.0  # int16 dB x 100
+            raw_vv = src.read(1)
+            nodata = src.nodata
             xmin, ymax = src.transform.c, src.transform.f
+        vv = raw_vv.astype(np.float32) / 100.0  # int16 dB x 100
+        if nodata is not None:
+            vv[raw_vv == nodata] = np.nan
+        del raw_vv
         h = vv.shape[0]
         row0, col0 = round((ymax - h * masks.PX - y0) / masks.PX), round((xmin - x0) / masks.PX)
-        out.append(masks.Scene(row0, col0, vv[::-1]))
-    return out
+        yield masks.Scene(row0, col0, vv[::-1])
 
 
 def _piers(raw: Path) -> gpd.GeoDataFrame:
@@ -117,7 +127,11 @@ def build(
         "reference/static_mask_10m": (static10, masks.PX),
         "reference/sea_250m": (sea, int(cfg["sea_raster_m"])),
     }
-    return Reference(cells, land_gdf, piers, travel, rasters)
+    # P4 reads the regridded presence (#208); hours on 2 km cells outside the cells layer (all land, or beyond the
+    # region) have no row there, as no other stage file has
+    fine = set(cells.loc[cells["level"] == 2000, "cell_id"])
+    presence = p2[p2["cell_id"].isin(fine)].reset_index(drop=True)
+    return Reference(cells, land_gdf, piers, travel, presence, rasters)
 
 
 def write_raster(name: str, array: NDArray[np.uint8], pixel_m: int) -> Path:

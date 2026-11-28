@@ -3,9 +3,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.mark.slow
 def test_python_m_sim_writes_the_stage_files(tmp_path):
     env = {**os.environ, "NARCO_DATA": str(tmp_path)}
     subprocess.run(
@@ -33,3 +36,20 @@ def test_make_all_names_the_first_module_without_run(monkeypatch):
     with pytest.raises(SystemExit, match="'fake_missing' has no run()"):
         main(["fake_ready", "fake_missing", "fake_after"])
     assert calls == ["fake_ready"]
+
+
+@pytest.mark.parametrize("present", [True, False])
+def test_make_demo_reuses_the_report_and_never_validates(tmp_path, monkeypatch, capsys, present):
+    import validate.checks
+    from scripts import demo
+
+    monkeypatch.setenv("NARCO_REPORTS", str(tmp_path))
+    if present:
+        (tmp_path / "validation.json").write_text('{"mode": "full"}')
+    monkeypatch.setattr(validate.checks, "run", lambda *a, **k: pytest.fail("demo ran validate"))
+    calls = []
+    demo.main(run=lambda: calls.append("all"))
+    out = capsys.readouterr().out
+    assert calls == ["all"]  # make all, which ends with export
+    assert (demo.MISSING not in out) if present else (demo.MISSING in out)
+    assert (tmp_path / "validation.json").exists() == present  # left as it was

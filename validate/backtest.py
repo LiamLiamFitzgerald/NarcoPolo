@@ -13,12 +13,16 @@ from core.config import load
 COLUMNS = ["event_type", "model", "mean", "min", "max"]
 
 
-def backtest(event_type: str) -> pd.DataFrame:
+def backtest(event_type: str, *, n_folds: int | None = None) -> pd.DataFrame:
+    """n_folds overrides this event type's split.n_folds_* (validate.quick, #343)."""
     try:
         from forecast import forecast_all
     except ImportError:  # P5's forecast not on integration yet
         return pd.DataFrame(columns=COLUMNS)
     cfg, _ = load(io.CONFIG_PATH)
+    if n_folds is not None:
+        key = "n_folds_slowdown" if event_type == "slowdown" else "n_folds_small"
+        cfg = {**cfg, "split": {**cfg["split"], key: n_folds}}
     cells = pd.DataFrame(io.read_stage("reference/cells").drop(columns="geometry"))
     T = pd.Timestamp(io.read_snapshot()["T"])
     keep = {

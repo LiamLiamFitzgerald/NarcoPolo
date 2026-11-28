@@ -185,15 +185,15 @@ def _summary(frame: pd.DataFrame) -> list[dict[str, Any]]:
     ]
 
 
-def _block(deps: _Deps | None = None) -> dict[str, Any] | None:
+def _block(deps: _Deps | None = None, n_seeds: int | None = None) -> dict[str, Any] | None:
     """The `policy` block of reports/validation.json, train and held-out regimes kept apart.
-    None while a dependency (#150, #151, #152) is missing."""
+    None while a dependency (#150, #151, #152) is missing. n_seeds overrides learn.n_seeds_quick (#343)."""
     deps = deps or _real_deps()
     if deps is None:
         return None
     learn = load(io.CONFIG_PATH)[0]["learn"]
     seeds = range(
-        int(learn["n_seeds_quick"])
+        int(learn["n_seeds_quick"]) if n_seeds is None else n_seeds
     )  # R5: make validate; the final report uses learn.n_seeds
     return {
         split: _summary(
@@ -254,7 +254,9 @@ def _real_world(regime: str, seed: int) -> _Season:  # pragma: no cover - runs o
                 else:
                     os.environ[k] = v
     obs, exp, ev = frames["aggregate/observed"], frames["forecast/expected"], frames["match/events"]
-    days = pd.to_datetime(obs["date"])
+    days = pd.to_datetime(
+        obs.loc[obs["event_type"] == "dark_small", "date"]
+    )  # radar season, not ship history (#273)
     weeks = list(pd.date_range(days.min() + pd.Timedelta(days=6), days.max() - WEEK, freq="7D"))
 
     def sites_at(cutoff: pd.Timestamp) -> pd.DataFrame:

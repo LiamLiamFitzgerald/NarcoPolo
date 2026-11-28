@@ -58,9 +58,12 @@ def _make_map(cfg: Config) -> dict:
     x0, y0 = _origin()
     ix, iy = np.meshgrid(np.arange(NX), np.arange(NY), indexing="ij")
     ix, iy = ix.ravel(), iy.ravel()
-    dist = (NY - 1 - iy) * FINE + FINE / 2  # centre of the cell to the shore line
+    edge = (
+        NY - 1 - iy
+    ) * FINE + FINE / 2  # cell centre to the grid's top edge: sets the inshore band (unchanged)
+    dist = edge - (1 - SHORE_FRAC) * FINE  # cell centre to the shoreline (#245), as P3 measures it
     inshore = np.clip(
-        (5000 - (dist - FINE / 2)) / FINE, 0, 1
+        (5000 - (edge - FINE / 2)) / FINE, 0, 1
     )  # inshore grounds: within 5 km of the shore
     lane = np.isin(iy, (3, 4))
     anchorage = (ix >= 30) & (ix <= 33) & (iy >= 6) & (iy <= 8)
@@ -170,6 +173,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])
+    # #273: ships (and so slowdowns) cover the whole ship history, as the real GFW fetch does; radar stays at `days`.
+    # Day numbers before the radar start are negative: h0 = days - ship_history_days.
+    h0 = min(0, days - int(config["ship_history_days"]))
     x0, y0 = _origin()
     m = _make_map(config)
     fine, cells, piers = m["fine"], m["cells"], m["piers"]
@@ -208,9 +214,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     ship_rate = np.where(hot, s["slowdown_rate_hot"], s["slowdown_rate_cold"])
     # rates are per full sea cell (docs/specs/P3.md), and slowdown exposure is sea_frac, so a 60%-sea shore cell gets
     # 60% of the slowdowns; otherwise its expected count is 0.6 of its true one
-    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days, n)))
+    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days - h0, n)))
     sd, sci = np.nonzero(sc)
-    sd, sci = np.repeat(sd, sc[sd, sci]), np.repeat(sci, sc[sd, sci])
+    sd, sci = np.repeat(sd, sc[sd, sci]) + h0, np.repeat(sci, sc[sd, sci])
     ns = len(sd)
     ships = pd.DataFrame(
         {
@@ -379,6 +385,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
                 float(np.clip(0.75 + rng.normal(0, 0.1), 0.05, 0.99)),
             )
         )
+    n_true = len(rows)  # rows so far are detected boats; false alarms and ghosts follow
     depth_km = (NY - 1 + SHORE_FRAC) * FINE / 1000
     for k, pr in enumerate(passes.itertuples()):
         for _ in range(
@@ -400,7 +407,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     for sh in ships[
         ~ships["planted"]
     ].itertuples():  # a bright ship leaves a ghost at the ambiguity offset
-        k = pass_of_day.get(int(sh.day), -1)
+        k = pass_of_day.get(int(np.floor(sh.day)), -1)
         if k >= 0 and passes["a"][k] <= (sh.x_m - x0) / FINE <= passes["b"][k]:
             rows.append(
                 (
@@ -419,6 +426,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         rows,
         columns=["k", "x_m", "y_m", "vv", "pol_agree", "n_px", "size_class", "ghost", "p_boat"],
     )
+    det["label"] = np.arange(len(det)) < n_true
     det = det[~pw["rough"].to_numpy()[det["k"].to_numpy(int)]].reset_index(
         drop=True
     )  # false alarms and ghosts too
@@ -444,6 +452,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         i = np.clip(np.floor((np.asarray(x) - x0) / FINE), 0, NX - 1).astype(int)
         j = np.clip(np.floor((np.asarray(y) - y0) / FINE), 0, NY - 1).astype(int)
         return _ids(i, j)
+
+    det_cells = cid(
+        detections["x_m"].to_numpy(), detections["y_m"].to_numpy()
+    )  # for validate/pboat_training
 
     dk = detections[~detections["ghost"]]
     dark = pd.DataFrame(
@@ -480,7 +492,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     events["day"] = (
         (events["time_utc"] - pd.Timestamp(start, tz="UTC")).dt.total_seconds() // 86400
     ).astype(int)
-    dates = [start + timedelta(days=int(i)) for i in range(days)]
+    dates = {i: start + timedelta(days=i) for i in range(h0, days)}
     ex_day = (
         pd.DataFrame(
             {
@@ -492,9 +504,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         .groupby(["cell_id", "day"])["e"]
         .sum()
     )
-    full = pd.MultiIndex.from_product([cell_ids, range(days)], names=["cell_id", "day"])
     parts = []
     for et in ("dark_small", "slowdown"):
+        span = range(days) if et == "dark_small" else range(h0, days)  # radar vs ship history
+        full = pd.MultiIndex.from_product([cell_ids, span], names=["cell_id", "day"])
         c = (
             events[events["event_type"] == et]
             .groupby(["cell_id", "day"])["p"]
@@ -505,7 +518,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             ex_day.reindex(full, fill_value=0.0)
             if et == "dark_small"
             else pd.Series(
-                np.tile(fine["sea_frac"].to_numpy()[:, None], (1, days)).ravel(), index=full
+                np.tile(fine["sea_frac"].to_numpy()[:, None], (1, len(span))).ravel(), index=full
             )
         )
         parts.append(pd.DataFrame({"count": c, "exposure": e, "event_type": et}).reset_index())
@@ -538,9 +551,8 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     small_rate = (
         lam * (0.75 * pdet_day)[:, None] + s["false_alarm_per_km2_pass"] * (FINE / 1000) ** 2 * 0.15
     )
-    rate = np.where(
-        f["event_type"] == "dark_small", small_rate[f["day"].to_numpy(), ci_], ship_rate[ci_]
-    )
+    is_small = (f["event_type"] == "dark_small").to_numpy()
+    rate = np.where(is_small, small_rate[np.where(is_small, f["day"], 0), ci_], ship_rate[ci_])
     mu = f["exposure"].to_numpy() * rate
     expected = pd.DataFrame(
         {
@@ -710,6 +722,16 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         else pd.DataFrame({"site_id": pd.Series([], dtype=object), "L": [], "age_days": []})
     )
 
+    # validate/pboat_training (#209): the simulator's own detections, labelled by truth (a detected boat is a
+    # positive, a false alarm or ghost a negative), standing in for injection runs on simulated chips
+    pboat_training = detections[
+        ["pass_id", "peak_ratio_vv_db", "peak_ratio_vh_db", "pol_agree", "n_px", "ghost"]
+    ].assign(
+        cell_id=det_cells,
+        date=pd.to_datetime(detections["time_utc"]).dt.date,
+        label=det["label"].to_numpy(bool),
+    )
+
     # coverage/weather_daily (#208): the weather is uniform and constant through each day, so the daily max is the
     # day's value in every cell; float32 as sim/raw.py stores it in era5.nc
     weather_daily = pd.DataFrame(
@@ -732,6 +754,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         "reference/travel_hours": travel,
         "coverage/exposure": exp_df,
         "coverage/weather_daily": weather_daily,
+        "validate/pboat_training": pboat_training,
         "detect/detections": detections,
         "match/events": events.drop(columns="day"),
         "aggregate/observed": observed,
@@ -748,7 +771,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         {"latest": {"radar": last, "gfw_presence": last, "gfw_sar": last, "era5": last}}
     )
 
-    world = SimWorld(config, seed, start, days, fine, weather, passes, boats, ships, detections)
+    world = SimWorld(
+        config, seed, start, days, fine, weather, passes, boats, ships, detections, history_start=h0
+    )
     write_scenes(world)
     write_static(world)
     write_raw(world)  # last: the manifest lists every file the others wrote
