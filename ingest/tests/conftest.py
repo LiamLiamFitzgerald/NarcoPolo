@@ -76,6 +76,7 @@ class FakeCDS:
         else:
             files[0].rename(target)
 
+
 # Placeholders, not real GFW filter syntax (that is open in #212): the tests only check pass-through.
 SETTINGS = {
     "chunk_days": 2,
