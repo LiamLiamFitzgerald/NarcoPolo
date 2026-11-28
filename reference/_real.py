@@ -1,6 +1,7 @@
 """reference.run on raw/ files (P2's downloads, or the simulator's copies of them): cells, piers, sea travel times
 and the three rasters, built only from the P3 functions in this folder. Private: run() writes what build() returns."""
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
@@ -54,20 +55,26 @@ def _inshore(raw: Path, cells: gpd.GeoDataFrame) -> pd.Series:
     return rc.inshore_frac(cells, gpd.read_file(grounds).to_crs(32629), ext)
 
 
-def _scenes(raw: Path, limit: int | None) -> list[masks.Scene]:
-    """raw/s1 VV in dB on the mask grid (row 0 = south), for the static-object mask."""
+def _scenes(raw: Path, limit: int | None) -> Iterator[masks.Scene]:
+    """raw/s1 VV in dB on the mask grid (row 0 = south), for the static-object mask, read one scene at a time.
+
+    A full-region scene is about 175 M pixels, so the scenes are read lazily as the mask consumes them, never all at
+    once. The file's nodata (-32768, outside the swath) becomes NaN = not looked, never a -327 dB "seen" pixel."""
     import rasterio
 
     x0, y0 = _origin()
-    out = []
     for tif in sorted((raw / "s1").glob("*.tif"))[:limit]:
         with rasterio.open(tif) as src:
-            vv = src.read(1).astype(float) / 100.0  # int16 dB x 100
+            raw_vv = src.read(1)
+            nodata = src.nodata
             xmin, ymax = src.transform.c, src.transform.f
+        vv = raw_vv.astype(np.float32) / 100.0  # int16 dB x 100
+        if nodata is not None:
+            vv[raw_vv == nodata] = np.nan
+        del raw_vv
         h = vv.shape[0]
         row0, col0 = round((ymax - h * masks.PX - y0) / masks.PX), round((xmin - x0) / masks.PX)
-        out.append(masks.Scene(row0, col0, vv[::-1]))
-    return out
+        yield masks.Scene(row0, col0, vv[::-1])
 
 
 def _piers(raw: Path) -> gpd.GeoDataFrame:

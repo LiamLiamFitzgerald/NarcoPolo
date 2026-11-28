@@ -160,3 +160,36 @@ def test_every_screen_has_a_nav_link_and_a_question():
             rf'<section class="screen" data-screen="{name}"[^>]*>\s*<h2 class="screen-title"[^>]*>[^<]+\?</h2>',
             HTML,
         ), name
+
+
+# "We checked" outcomes (#317, placeholder draft file until contract #329)
+def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path):
+    api = Api(tmp_path / "snapshot.json", tmp_path / "o" / "outcomes.json")
+    assert api.get_outcomes() == []
+    api.record_outcome("2000_1_2", "2026-W48", "found_nothing")
+    rows = api.record_outcome("2000_1_2", "2026-W48", "found_something")  # a correction replaces
+    assert [(r["site_id"], r["iso_week"], r["outcome"]) for r in rows] == [
+        ("2000_1_2", "2026-W48", "found_something")
+    ]
+    assert set(rows[0]) == {"site_id", "iso_week", "outcome", "entered_at"}  # places only, no text
+    for bad in (("2000_1_2", "2026-W48", "a boat called X"), ("a b", "2026-W48", "not_visited"),
+                ("2000_1_2", "week 48", "not_visited")):  # fmt: skip
+        try:
+            api.record_outcome(*bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert len(api.get_outcomes()) == 1
+
+
+def test_fallback_server_records_an_outcome(tmp_path):
+    snap, out = tmp_path / "snapshot.json", tmp_path / "outcomes.json"
+    snap.write_text("{}")
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap, out)) as srv:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/outcomes.json"
+        body = json.dumps({"site_id": "s1", "iso_week": "2026-W48", "outcome": "not_visited"})
+        req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+        assert json.load(urllib.request.urlopen(req))[0]["outcome"] == "not_visited"
+        assert json.load(urllib.request.urlopen(url))[0]["site_id"] == "s1"
+        srv.shutdown()

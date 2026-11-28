@@ -66,16 +66,19 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
 
 
 def _outside_exclusion_and_calm(
-    ev: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame
+    ev: pd.DataFrame, cells: pd.DataFrame, weather: pd.DataFrame
 ) -> pd.DataFrame:
     """Keep events in known, non-exclusion cells whose daily max wave height is below storm_hs_m.
 
-    Cell-days with no wave data are dropped: without it a weather stop can't be ruled out.
+    weather: coverage/weather_daily (cell_id, date, hs_max_m). Cell-days with no wave data are dropped:
+    without it a weather stop can't be ruled out.
     """
-    hs = era5.groupby(["cell_id", "date"], as_index=False)["hs_m"].max()
+    hs = weather.assign(date=pd.to_datetime(weather["date"]))
+    hs = hs.groupby(["cell_id", "date"], as_index=False)["hs_max_m"].max()
+    ev = ev.assign(date=pd.to_datetime(ev["date"]))
     ev = ev.merge(cells.loc[~cells["exclusion"].astype(bool), ["cell_id"]], on="cell_id")
     ev = ev.merge(hs, on=["cell_id", "date"])
-    return ev[ev["hs_m"] < CFG["storm_hs_m"]]
+    return ev[ev["hs_max_m"] < CFG["storm_hs_m"]]
 
 
 def _events(ev: pd.DataFrame) -> pd.DataFrame:
@@ -87,15 +90,15 @@ def _events(ev: pd.DataFrame) -> pd.DataFrame:
 def slowdowns_from_presence(
     presence2km: pd.DataFrame, cells: pd.DataFrame, era5: pd.DataFrame
 ) -> pd.DataFrame:
-    """One slowdown per cell-day with cargo or tanker presence-hours in the slowest GFW bin (issue 3).
+    """One slowdown per cell-day with slow cargo presence-hours (issue 3; #239), outside exclusion, calm sea.
 
-    TODO(P3): assumed columns. presence2km: cell_id, date, vessel_type ("cargo" | "tanker"),
-    speed_max_kn (upper edge of the speed bin), hours. cells: cell_id, exclusion, x_m, y_m
-    (centre). era5: cell_id, date, hs_m (any number of rows per day; the daily max is used).
-    time = slowdown_hour_utc on the date; duration_min = hours x 60; no ship_key.
+    presence2km: reference/presence_2km (cell_id, date, vessel_type, speed_bin, hours); kept are
+    presence_vessel_types in the presence_slow_bins. cells: cell_id, exclusion, x_m, y_m (centre).
+    era5: coverage/weather_daily (cell_id, date, hs_max_m).
+    time = slowdown_hour_utc on the date; duration_min = hours x 60 (#131); no ship_key.
     """
-    slow = presence2km[presence2km["vessel_type"].isin(["cargo", "tanker"])
-                       & (presence2km["speed_max_kn"] <= CFG["presence_slow_kn"])]  # fmt: skip
+    slow = presence2km[presence2km["vessel_type"].isin(CFG["presence_vessel_types"])
+                       & presence2km["speed_bin"].isin(CFG["presence_slow_bins"])]  # fmt: skip
     ev = slow.groupby(["cell_id", "date"], as_index=False)["hours"].sum()
     ev = _outside_exclusion_and_calm(ev[ev["hours"] > 0], cells, era5)
     ev = ev.merge(cells[["cell_id", "x_m", "y_m"]], on="cell_id")
@@ -143,6 +146,7 @@ def slowdowns_from_tracks(
 ) -> pd.DataFrame:
     """Per-ship slowdowns, only if a track source turns up. Never interpolates a slowdown into existence.
 
+    era5: coverage/weather_daily, as for slowdowns_from_presence.
     TODO(P2): assumed ais columns: ship_id, time_utc, x_m, y_m, sog_kn, ship_type. Raw ids are
     hashed to ship_key here and never leave this function.
     """
@@ -157,7 +161,7 @@ def slowdowns_from_tracks(
     ]
     ev = pd.DataFrame(rows, columns=["time_utc", "x_m", "y_m", "duration_min", "ship_key"])
     ev["cell_id"] = cell_ids(ev["x_m"], ev["y_m"]) if len(ev) else []
-    ev["date"] = ev["time_utc"].dt.strftime("%Y-%m-%d") if len(ev) else []
+    ev["date"] = ev["time_utc"].dt.tz_convert(None).dt.normalize() if len(ev) else []
     ev = _outside_exclusion_and_calm(ev, cells, era5)
     ev["event_id"] = [
         "slowdown-" + k[:12] + "-" + t.strftime("%Y%m%dT%H%M")
