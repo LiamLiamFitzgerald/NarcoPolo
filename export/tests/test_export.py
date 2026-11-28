@@ -12,7 +12,7 @@ from shapely.geometry import Polygon
 from core import io
 from core.config import load
 from core.crs import to_utm
-from core.schemas import check_json
+from core.schemas import SCHEMAS, check_json
 from export import (
     _backdrop,
     _basemap,
@@ -259,13 +259,17 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
     )
 
 
+def _dropoff(snap):
+    return [s for s in snap["sites"] if s["lens"] == "dropoff"]
+
+
 def test_snapshot_sites_match_the_stage_file(world):
     _, snap = world
     sites = io.read_stage("fuse/sites")
     score = dict(zip(sites["site_id"], sites["S"], strict=True))
-    assert [s["id"] for s in snap["sites"]] == sorted(score, key=lambda i: -score[i])
+    assert [s["id"] for s in _dropoff(snap)] == sorted(score, key=lambda i: -score[i])
     assert all(len(s["top_piers"]) <= 3 and isinstance(s["reasons"], list) for s in snap["sites"])
-    assert np.isfinite([s["S"] for s in snap["sites"]]).all()
+    assert np.isfinite([s["S"] for s in _dropoff(snap)]).all()
     assert datetime.fromisoformat(snap["meta"]["generated_utc"])
     # D1 (#176): the merged agreement the dashboard shows comes from fuse/sites (None where it has none)
     merged = sites.set_index("site_id").get("agreement_merged")
@@ -385,9 +389,10 @@ def test_snapshot_carries_chart_data_inside_the_existing_keys(world):
     _, snap = world
     check_json("export/snapshot", snap)  # still exactly the seven top-level keys
     fig = snap["meta"]["figures"]
-    assert fig["sites"] == len(snap["sites"]) and fig["flagged"] == sum(
-        s["bh_flag"] for s in snap["sites"]
+    assert fig["sites"] == len(_dropoff(snap)) and fig["flagged"] == sum(
+        s["bh_flag"] for s in _dropoff(snap)
     )
+    assert fig["fisheries"] == len(snap["sites"]) - len(_dropoff(snap))
     assert fig["ship_h"] == 4.0 and fig["ship_budget_h"] == 24.0  # the fixture plan: 06:00 to 10:00
     assert 0 <= fig["observed_share"] <= 1
     assert [s["at_h"] for s in snap["plan"]["ship"]] == [0.0, 2.0, 4.0]
@@ -419,7 +424,24 @@ def test_cells_carry_a_plain_ratio_and_sites_a_lens(world):
     for c in with_ratio[:50]:  # obs_vs_exp is log2 of the same ratio (both rounded to 4 places)
         assert 2 ** c["obs_vs_exp"] == pytest.approx(c["ratio"], rel=2e-3, abs=2e-4)
     assert all(c["ratio"] is None for c in rows if c["obs_vs_exp"] is None)  # unobserved stays None
-    assert {s["lens"] for s in snap["sites"]} == {"dropoff"}  # fisheries sites arrive with #321
+    lenses = {s["lens"] for s in snap["sites"]}
+    has_fish = "fuse/fisheries" in SCHEMAS and io.stage_path("fuse/fisheries").exists()
+    assert lenses == ({"dropoff", "fisheries"} if has_fish else {"dropoff"})  # fisheries with #321
+
+
+def test_simulator_fisheries_cards_recover_the_planted_closure(world):
+    # #346: the simulator plants illegal fishing in a closure; with #360 merged the lens must show it
+    _, snap = world
+    if "fuse/fisheries" not in SCHEMAS or not io.stage_path("fuse/fisheries").exists():
+        pytest.skip("fuse/fisheries (#360) not merged yet")
+    fish = [s for s in snap["sites"] if s["lens"] == "fisheries"]
+    top = load(io.CONFIG_PATH)[0]["patrol"]["top_sites"]
+    assert 0 < len(fish) <= top and len({s["week"] for s in fish}) == 1
+    assert fish[0]["flag"] and fish[0]["in_closed_area"] is True  # the planted closure ranks first
+    assert all(s["y_fish_lo"] <= s["y_fish_hi"] and s["S"] is None for s in fish)
+    kinds = {f["properties"].get("type") for f in snap["basemap"]["features"]
+             if f["properties"]["kind"] == "closed_area"}  # fmt: skip
+    assert kinds == {"closure", "protected_area"}
 
 
 def test_timeline_lists_each_slowdown_with_the_passes_after_it():
