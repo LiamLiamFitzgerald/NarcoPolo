@@ -154,3 +154,18 @@ def test_to_coarse_rules():
     assert c["inshore_frac"] == pytest.approx(0.3)  # NaN children ignored
     assert c["dist_coast_m"] == pytest.approx(3000)
     assert c["lane"]  # schema keeps lane bool: any lane child
+
+
+def test_dist_coast_is_the_distance_from_cell_centre_to_the_shore(truth):
+    """Known answer on the simulator's cells: its shore is a straight line along +y, at sea_frac of the shore row."""
+    shore = truth[truth["sea_frac"] < 1]
+    shore_y = shore.geometry.bounds["miny"].min() + float(shore["sea_frac"].iloc[0]) * FINE
+    x0, _ = _origin()
+    land = box(x0 - 10 * FINE, shore_y, x0 + 200 * FINE, shore_y + 20 * FINE)
+    d = rc.dist_coast(truth, land)
+    want = shore_y - truth.geometry.centroid.y
+    assert d.notna().all() and (d >= 0).all()
+    assert np.allclose(d, want, atol=1e-6)
+    # the shore row's centre sits 200 m off a shore at 60% of the cell; the simulator's own dist_coast_m
+    # measures to the top edge of the grid instead, 800 m further (reported to P1)
+    assert d[shore.index].min() == pytest.approx(0.6 * FINE - FINE / 2)  # 200 m

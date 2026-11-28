@@ -97,6 +97,25 @@ def test_exact_skips_unreachable_and_returns_home_when_nothing_fits():
     assert _exact(np.array([0, 1.0, 1.0, 9.0]), line, 7, 1) == [0, 3, 0]
 
 
+# D4 (#176), known answer by hand: base 0, site A 1 h one way, site B 5 h the other, dwell 1 h, budget 11 h.
+# Hours: base-A 1, base-B 5, A-B 6. Trips: base-A-base 3 h, base-B-base 11 h, base-A-B-base 14 h (over).
+TRAP = np.array([[0, 1, 5], [1, 0, 6], [5, 6, 0]], float)
+
+
+def test_exact_beats_greedy_on_a_hand_solved_ratio_trap():
+    # S_A = 3: A's ratio 3/3 = 1 beats B's 9/11, so greedy takes A and B no longer fits: value 3.
+    # The best in-budget set is {B} alone: value 9. 2-opt only reorders, so it cannot recover B.
+    S = np.array([0, 3.0, 9.0])
+    assert two_opt(_greedy([0, 0], S, TRAP, 11, 1), TRAP) == [0, 1, 0]
+    assert _exact(S, TRAP, 11, 1) == [0, 2, 0]
+
+
+def test_exact_and_greedy_agree_when_the_best_ratio_is_the_best_set():
+    # S_A = 1: ratio 1/3 < 9/11, so greedy takes B first (11 h, budget full): the optimum {B}
+    S = np.array([0, 1.0, 9.0])
+    assert two_opt(_greedy([0, 0], S, TRAP, 11, 1), TRAP) == _exact(S, TRAP, 11, 1) == [0, 2, 0]
+
+
 def _bandit_plan(sites, state, seed, exact_max_nodes=16):
     return _plan_asset(
         sites, (0.0, 0.0), _open_sea, budget_h=6, dwell_h=1, start=START,

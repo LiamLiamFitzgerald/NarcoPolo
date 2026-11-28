@@ -1,6 +1,7 @@
 import http.server
 import json
 import re
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -28,6 +29,28 @@ def test_page_loads_nothing_from_the_internet():
 def test_page_computes_no_scores():
     # the browser may sort and format; it must not derive any statistic (docs/specs/P7.md)
     assert not re.search(r"Math\.(log|exp|sqrt|pow)\b|\.reduce\(", HTML)
+
+
+def test_site_list_ranks_by_p_site_then_s():
+    # D1 (#176): p_site ranks sites, S breaks ties; sites without p_site follow, by S
+    src = re.search(r"function siteOrder\(.*?\n\}\n", HTML, re.DOTALL)
+    assert src, "siteOrder not found"
+    sites = [
+        {"id": "a", "p_site": 0.2, "S": 9.0},
+        {"id": "b", "p_site": 0.8, "S": 1.0},
+        {"id": "c", "p_site": 0.8, "S": 5.0},
+        {"id": "d", "S": 7.0},
+        {"id": "e", "p_site": None, "S": 8.0},
+    ]
+    js = (
+        src.group(0)
+        + f"console.log(JSON.stringify({json.dumps(sites)}.sort(siteOrder).map(s => s.id)))"
+    )
+    # the node binary that ships with basedpyright (dev dependency), so no new tool
+    out = subprocess.run(
+        [sys.executable, "-m", "nodejs_wheel", "-e", js], capture_output=True, text=True, check=True
+    ).stdout
+    assert json.loads(out) == ["c", "b", "a", "e", "d"]
 
 
 def test_main_falls_back_to_the_browser_without_pywebview(monkeypatch):
@@ -61,3 +84,51 @@ def test_fallback_server_serves_the_page_and_the_snapshot(tmp_path):
         )
         assert b"drawBanner" in urllib.request.urlopen(f"{base}/index.html").read()
         srv.shutdown()
+
+
+# The Material Design theme (#249) must not break the demo rules: one offline file, colours only in
+# the token block, every theme defines every token, and the data label always has its own style.
+SIZE_BUDGET = 100_000  # bytes for index.html with no data; about 43 KB when the theme landed (#257)
+# 3-character hex needs a letter, so issue references such as #176 are not colours
+HEX = re.compile(r"#[0-9a-fA-F]{6}\b|#(?=[0-9]*[a-fA-F])[0-9a-fA-F]{3}\b")
+
+
+def _token_block() -> tuple[str, str]:
+    start, end = HTML.index("/* tokens:start"), HTML.index("/* tokens:end */")
+    return HTML[start:end], HTML[:start] + HTML[end:]
+
+
+def test_page_stays_small_and_loads_nothing_external():
+    assert len(HTML.encode()) < SIZE_BUDGET
+    assert not re.search(r"<link\b|@import|url\(\s*['\"]?https?:|<script[^>]+src=", HTML)
+
+
+def test_every_colour_lives_in_the_token_block():
+    tokens, rest = _token_block()
+    assert HEX.search(tokens)
+    assert not HEX.findall(rest), "use a token (var(--...)) instead of a colour literal"
+    assert not re.search(r"\brgba?\(|\bhsla?\(", rest)
+
+
+def test_light_and_dark_define_the_same_tokens():
+    tokens, _ = _token_block()
+    light, dark = tokens.split(':root[data-mode="dark"]')
+    names = lambda block: set(re.findall(r"(--[\w-]+)\s*:", block))
+    assert names(light) == names(dark) and len(names(light)) > 40
+
+
+def test_each_data_label_has_its_own_fixed_style():
+    for label in ("simulated", "real", "mixed"):
+        assert f'#banner[data-label="{label}"]' in HTML
+    tokens, _ = _token_block()
+    light, dark = tokens.split(':root[data-mode="dark"]')
+    for label in ("simulated", "real", "mixed"):  # the label colours are the same in both themes
+        colour = [re.findall(rf"--label-{label}:\s*(#\w+)", block) for block in (light, dark)]
+        assert colour[0] == colour[1] and len(colour[0]) == 1
+
+
+def test_motion_and_hatching_rules_are_kept():
+    assert "prefers-reduced-motion: reduce" in HTML
+    assert (
+        ".cell.hatched { fill: url(#hatch); }" in HTML
+    )  # unobserved is a pattern, never a scale step
