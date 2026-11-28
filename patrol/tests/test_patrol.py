@@ -264,3 +264,21 @@ def test_simulated_patrol_outcomes_update_only_visited_sites(world):
             n
         )  # n is a count, so nonzero means visited
     check_json("patrol/bandit_state", new)
+
+
+def test_patrol_parameters_are_the_spec_values_overlaid_by_config():
+    # #89: docs/specs/P7.md Parameters, and config.yaml's `patrol:` block wins once P1 adds it
+    import patrol
+    from core import io
+    from core.config import load
+
+    cfg = dict(load(io.CONFIG_PATH)[0].get("patrol", {}))
+    want = {**patrol._SPEC, **cfg}
+    assert patrol.TOP_SITES == want["top_sites"] and patrol.SHIP_KN == want["ship_kn"]
+    assert (patrol.SHIP_BUDGET_H, patrol.SHIP_DWELL_H) == (
+        want["ship_budget_h"],
+        want["ship_dwell_h"],
+    )
+    assert (patrol.AIR_KN, patrol.AIR_BUDGET_H, patrol.AIR_DWELL_H) == (
+        want["aircraft_kn"], want["aircraft_budget_h"], want["aircraft_dwell_h"],
+    )  # fmt: skip
