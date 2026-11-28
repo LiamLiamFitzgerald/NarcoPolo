@@ -35,6 +35,6 @@ addopts = "--import-mode=importlib"  # test files in different modules may share
 typeCheckingMode = "standard"
 # every module but ingest (#185), detectors and fuse (#224) and patrol (#225); each joins once clean
 include = [
-    "core", "sim", "validate", "reference", "coverage", "detect", "match", "aggregate", "forecast",
+    "core", "sim", "validate", "reference", "exposure", "detect", "match", "aggregate", "forecast",
     "export", "dashboard",
 ]

@@ -27,7 +27,7 @@ path = "reference"
 depends_on = ["core"]
 
 [[modules]]
-path = "coverage"
+path = "exposure"
 depends_on = ["core"]
 
 [[modules]]
