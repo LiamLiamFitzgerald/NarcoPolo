@@ -90,7 +90,7 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 1. `validate.signals.backtest_agent(name, regime, seeds) -> DataFrame` walks forward week by week with `core.split.folds`; at each cutoff it ranks sites by the agent alone and records: precision@k (k = `learn.alert_budget`), recall of planted sites, weeks to detection, false alerts per week (from `null` runs).
 2. `validate.signals.overlap(seeds) -> DataFrame`: pairwise Cohen's κ between agents' top-k flags and Spearman ρ between their scores, on simulator output.
 3. **Merge rule:** agents with κ ≥ `learn.merge_kappa` are merged into one agent (keep the one with better held-out precision@k). Expect `oe`, `midp` and `cusum` to merge: all three are driven by the same C and μ.
-4. Output: `reports/signals.json` with one block per agent (the metrics above) plus the κ matrix and the merged agent list.
+4. Output: `reports/signals.json` with one block per agent (the metrics above), the κ matrix, the merged agent list, and **`null`: {agent: sorted site-level scores from `null`-regime runs}** (at most 10,000 per agent). fuse turns any agent score into a site-level p as (1 + #null ≥ score) ÷ (1 + n). Today only `link` (= `p_perm`) has a site-level p.
 
 ### Tests
 
@@ -145,7 +145,12 @@ signals (P5, P6)  →  per-signal agents, each backtested (P1)  →  combined p 
 3. Effective sample size n_eff = min(n, 5 × n_positive). If n_eff < 500, stop at rung 1 (Phillips et al. super-learner guidance).
 4. **Promotion rule:** a rung replaces the one below only if, on the **held-out regimes**, mean precision@k improves by more than 2 × its standard error across seeds **and** calibration (Brier) does not get worse. Record the result in `DECISIONS.md`.
 5. **Ablation:** refit the winning rung with each agent removed; if removing one agent changes nothing, say so in the report (the model may be re-learning Gi* or CUSUM).
-6. Output: `models/site_model.json`: rung, coefficients or weights, feature list, training seeds and regimes, config hash, metrics. Neural rungs also write `models/site_model.pt` (state dict only).
+6. Output: `<data root>/models/site_model.json` (agreed with P6, #160):
+   - `rung` (0–3), `features` (agent names; each feature's value is −log10 of that agent's site-level p), `weights` (all ≥ 0 for rung 1), `intercept`
+   - `config_hash` = `core.config.load(CONFIG_PATH)[1]` (SHA-256 of the whole config.yaml)
+   - `metrics`, `seeds`, `regimes`
+   - optional `p_comb_threshold`: computed here with `fuse.combine.calibrate()` on `null`-regime runs (L1); until it exists, `comb_flag` is plain BH
+   - neural rungs also write `site_model.pt` (state dict only). **fuse applies rungs 0 and 1 only;** if a higher rung is promoted, open a module:P6 issue to load and run it.
 
 ### Steps: applying (P6, `fuse/learn.py`)
 
