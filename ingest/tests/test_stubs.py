@@ -6,11 +6,10 @@ import struct
 from datetime import date
 
 import pandas as pd
-import pyarrow.parquet as pq
 import pyogrio
 import pytest
 
-from ingest import era5, fetch_all, gfw, osm, probe, s1, static
+from ingest import era5, fetch_all, osm, s1, static
 from ingest.tests.conftest import CFG, FakeCDS
 
 B = CFG["region_bbox"]
@@ -65,11 +64,6 @@ def _same_gpkg_shape(stub, simulated, layer):
     assert list(a["fields"]) == list(s["fields"]) and a["features"] == 0
 
 
-def test_probe_reports_no_go_without_network():
-    s1_ok, gfw_ok, notes = probe.probe()
-    assert (s1_ok, gfw_ok) == (False, False) and "stub" in notes
-
-
 def test_list_passes_columns():
     passes = s1.list_passes(BBOX, START, END)
     assert list(passes.columns) == ["pass_id", "time", "orbit_dir", "rel_orbit", "footprint"]
@@ -105,18 +99,6 @@ def test_fetch_scene_matches_simulator(simraw, raw):
     assert s1.fetch_scene(row) == tif  # cache hit
 
 
-@pytest.mark.parametrize(
-    "fn, name", [(gfw.fetch_sar, "gfw_sar"), (gfw.fetch_presence, "gfw_presence")]
-)
-def test_gfw_matches_simulator_schema(simraw, raw, fn, name):
-    path = fn(BBOX, START, END)
-    assert path == raw / f"{name}.parquet"
-    sim_schema = pq.read_schema(simraw / f"{name}.parquet").remove_metadata()
-    assert pq.read_schema(path).remove_metadata().equals(sim_schema)
-    assert pq.read_metadata(path).num_rows == 0  # nothing downloaded, never a fake zero
-    _recorded(raw, path)
-
-
 def test_fetch_inshore_matches_simulator(simraw, raw):
     paths = static.fetch_inshore()
     assert {p.relative_to(raw).as_posix() for p in paths} == {
@@ -133,7 +115,7 @@ def test_fetch_bathy_matches_simulator(simraw, raw):
     _recorded(raw, path)
 
 
-def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch):
+def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch, fake_gfw):
     monkeypatch.setattr(era5, "_client", lambda: FakeCDS(simraw / "era5.nc"))
     monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
     fetch_all(CFG)
