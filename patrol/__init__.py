@@ -20,6 +20,7 @@ from core import io
 from core.config import load
 from core.crs import to_utm
 from core.grid import FINE, cell_index
+from core.schemas import SCHEMAS
 from core.time import iso_week
 from patrol import bandit
 
@@ -342,15 +343,63 @@ def _write(asset: str, stops: list[dict]) -> dict:
     return plan
 
 
+def _week_no(iso: str) -> int:
+    """'2026-W48' -> 202648, so ISO weeks compare in time order across years."""
+    year, week = iso.split("-W")
+    return int(year) * 100 + int(week)
+
+
+def _read_outcomes() -> pd.DataFrame | None:
+    """The crews' "we checked" answers (#317, contract #329), or None when the file or its schema is
+    missing: "no outcomes yet", never a row of zeros."""
+    if "patrol/outcomes" not in SCHEMAS or not io.stage_path("patrol/outcomes").exists():
+        return None
+    return io.read_stage("patrol/outcomes")
+
+
+def _learn(
+    state: bandit.State, outcomes: pd.DataFrame | None, plan_week: str, discount: float
+) -> bandit.State:
+    """Feed each answered week before the plan week (never the plan week or later: principle 6) into
+    bandit.update, oldest first. A site's last_visit_week marks the answers it has already learnt from,
+    so running patrol again never counts an answer twice. "not_visited" gives no update (contract #329)."""
+    if outcomes is None:
+        return state
+    o = outcomes[(outcomes["outcome"] != "not_visited") & (outcomes["iso_week"] < plan_week)]
+    for week in sorted(o["iso_week"].unique(), key=_week_no):
+        wn = _week_no(week)
+        rows = o[o["iso_week"] == week]
+        new = rows[
+            [
+                (st := state.get(str(sid))) is not None
+                and (st.get("last_visit_week") is None or st["last_visit_week"] < wn)
+                for sid in rows["site_id"]
+            ]
+        ]
+        if len(new):
+            frame = pd.DataFrame(
+                {
+                    "site_id": new["site_id"].astype(str),
+                    "visited": True,
+                    "found": new["outcome"] == "found_something",
+                }
+            )
+            state = bandit.update(state, frame, discount, week=wn)
+    return state
+
+
 def _bandit(cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int) -> dict[str, Any]:
     """Learning L5: the saved posterior, with new top sites warm-started from their prior (sites that
-    leave the top keep their state), one seeded Thompson draw, and the state written back."""
+    leave the top keep their state), updated with the crews' answers from earlier weeks (#317), one
+    seeded Thompson draw, and the state written back."""
     try:
         state = io.read_json_stage("patrol/bandit_state")
     except ValueError:  # no state yet, or one made with an older config: start from the priors
         state = {}
     learn = cfg["learn"]
     state = {**bandit.prior(_greedy_inputs(sites), learn["prior_strength"]), **state}
+    plan_week = "{}-W{:02d}".format(*iso_week(_start(cfg)[0].date()))
+    state = _learn(state, _read_outcomes(), plan_week, float(learn["discount"]))
     io.write_json_stage("patrol/bandit_state", state, _provenance("fuse/sites"))
     return {
         "theta": bandit.sample(state, seed),
