@@ -39,6 +39,7 @@ def sim_cell(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("p4w")
     mp = pytest.MonkeyPatch()
     mp.setenv("NARCO_DATA", str(tmp / "data"))
+    mp.setenv("NARCO_RAW", str(tmp / "raw"))  # never the repo's real raw/ (#331)
     cfg = tmp / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
     mp.setattr(io, "CONFIG_PATH", cfg)
