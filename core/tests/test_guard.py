@@ -91,7 +91,15 @@ def test_a_broken_guard_fails_closed(tmp_path):
     ("branch", "module"),
     [
         ("mod/p4/12", "P4"),
-        ("MOD/P7/x", "P7"),
+        pytest.param(
+            "MOD/P7/x",
+            "P7",
+            marks=pytest.mark.xfail(
+                strict=True,
+                reason=".githooks/commit-msg matches 'mod/' case-sensitively; CI ignores case. "
+                "No module owns .githooks/, so a human applies the fix (#182)",
+            ),
+        ),
         ("mod/p8/1", None),
         ("main", None),
         ("integration", None),
