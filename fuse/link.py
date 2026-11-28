@@ -117,11 +117,18 @@ def sites(slowdowns: pd.DataFrame) -> pd.DataFrame:
 
 def suppress(ranked_sites: pd.DataFrame, radius_m=PARAMS["link_radius_m"]) -> pd.DataFrame:
     """The top list: walk sites in the given rank order and drop any within radius_m of a site already kept
-    (it is "nearby" that one). Distances between site centres in metres."""
+    (it is "nearby" that one). Distances between site centres in metres. A site with more slowdowns than every
+    kept neighbour is never dropped (#269, Liam 28 Nov): its "looked, saw nothing" record stays visible."""
     keep: list[int] = []
     xy = ranked_sites[["x_m", "y_m"]].to_numpy(float)
+    n = (
+        ranked_sites["n_slowdowns"].to_numpy()
+        if "n_slowdowns" in ranked_sites
+        else np.zeros(len(xy))
+    )
     for i in range(len(ranked_sites)):
-        if all(math.hypot(*(xy[i] - xy[j])) > radius_m for j in keep):
+        near = [j for j in keep if math.hypot(*(xy[i] - xy[j])) <= radius_m]
+        if not near or all(n[i] > n[j] for j in near):
             keep.append(i)
     return ranked_sites.iloc[keep]
 
@@ -375,7 +382,12 @@ def reasons(site, inputs) -> list[str]:
     f = inputs.get("inshore_frac")
     if f is not None and np.isfinite(f) and f < 0.1:
         out.append("Outside inshore fishing grounds.")
-    if inputs.get("significant"):
+    if inputs.get("flags_off"):
+        out.append(
+            "Not flagged: the site significance test is being replaced (it is not valid at busy places), so "
+            "sites are ranked by score and the patrol model meanwhile."
+        )
+    elif inputs.get("significant"):
         out.append(
             f"Worth checking: busy traffic alone rarely scores this high (p = {site['p_perm']:.3g}, "
             f"still unusual after correcting for {inputs.get('n_tested', 0)} sites)."
@@ -420,9 +432,9 @@ def _scored_sites(
     in_top = out["S"].rank(ascending=False, method="first") <= PARAMS["test_top_k"]
     tested = ((out["S"] > 0) & in_top).to_numpy()
     flag = np.zeros(len(out), bool)
-    flag[tested] = multipletests(out.loc[tested, "p_perm"], alpha=PARAMS["fdr_q"], method="fdr_bh")[
-        0
-    ]
+    if PARAMS["site_flags"] and tested.any():  # #269: off while the shift test is replaced
+        p_t = out.loc[tested, "p_perm"]
+        flag[tested] = multipletests(p_t, alpha=PARAMS["fdr_q"], method="fdr_bh")[0]
     out["bh_flag"] = flag
     agree = _small_rows(cells).set_index(["cell_id", "date"])["agreement"]
     strongest = _strongest(slow, u_small, agree, nbrs)
@@ -478,6 +490,7 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
             "n_tested": n_tested,
             "significant": bool(site["bh_flag"]),
             "tested": sid in tested_ids,
+            "flags_off": not PARAMS["site_flags"],
         }
         if sid in strongest.index:
             st = strongest.loc[sid]

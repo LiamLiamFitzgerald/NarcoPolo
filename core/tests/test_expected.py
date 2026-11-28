@@ -44,6 +44,11 @@ def test_two_backtest_folds_on_one_date_keep_the_most_recent_fit():
 
 
 def test_rows_with_unknown_fold_are_not_used_and_no_fold_column_means_all_live():
-    e = pd.concat([_rows(0, ["2026-11-20"], 1.0), _rows(0, ["2026-11-21"], 5.0).assign(fold=pd.NA)])
+    e = pd.concat(
+        [
+            _rows(0, ["2026-11-20"], 1.0),
+            _rows(0, ["2026-11-21"], 5.0).assign(fold=pd.array([pd.NA], dtype="Int64")),
+        ]
+    )
     assert scoring_rows(e)["mu"].tolist() == [1.0]
     assert len(scoring_rows(e.drop(columns="fold"))) == 2
