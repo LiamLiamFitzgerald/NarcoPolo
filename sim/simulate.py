@@ -709,11 +709,23 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         else pd.DataFrame({"site_id": pd.Series([], dtype=object), "L": [], "age_days": []})
     )
 
+    # coverage/weather_daily (#208): the weather is uniform and constant through each day, so the daily max is the
+    # day's value in every cell; float32 as sim/raw.py stores it in era5.nc
+    weather_daily = pd.DataFrame(
+        {
+            "cell_id": np.tile(cell_ids, days),
+            "date": np.repeat([start + timedelta(days=d) for d in range(days)], n),
+            "wind_max_ms": np.repeat(weather["wind_ms"].to_numpy(np.float32), n).astype(float),
+            "hs_max_m": np.repeat(weather["hs_m"].to_numpy(np.float32), n).astype(float),
+        }
+    )
+
     for name, frame in {
         "reference/cells": gpd.GeoDataFrame(cells, crs=32629),
         "reference/piers": piers,
         "reference/travel_hours": travel,
         "coverage/exposure": exp_df,
+        "coverage/weather_daily": weather_daily,
         "detect/detections": detections,
         "match/events": events.drop(columns="day"),
         "aggregate/observed": observed,

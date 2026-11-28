@@ -64,6 +64,12 @@ def _later(col: pa.Column) -> pa.Column:
     return col
 
 
+def _unique(*cols: str) -> pa.Check:
+    return pa.Check(
+        lambda df: ~df.duplicated(list(cols)), error=f"duplicate ({', '.join(cols)}) rows"
+    )
+
+
 def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSchema:
     return pa.DataFrameSchema(columns, checks=list(checks), strict=True, ordered=False)
 
@@ -103,6 +109,25 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "pier_id": pa.Column(str, nullable=False),
             "hours": _num(ge=0),
         }
+    ),
+    "reference/presence_2km": _schema(  # #208: reference.regrid_presence output (shared.md issue 4)
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),  # UTC
+            "vessel_type": pa.Column(str, nullable=False),  # as in raw/gfw_presence
+            "speed_bin": pa.Column(str, nullable=False),  # GFW's label, e.g. "0-2", "8+"
+            "hours": _num(ge=0),  # area-weighted presence hours
+        },
+        _unique("cell_id", "date", "vessel_type", "speed_bin"),
+    ),
+    "coverage/weather_daily": _schema(  # #208: max over the UTC day's hourly ERA5, coverage.weather_at point rules
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),  # UTC
+            "wind_max_ms": _num(ge=0),
+            "hs_max_m": _num(ge=0),  # no row where ERA5 is unknown: never 0 or NaN in its place
+        },
+        _unique("cell_id", "date"),
     ),
     "coverage/exposure": _schema(
         {

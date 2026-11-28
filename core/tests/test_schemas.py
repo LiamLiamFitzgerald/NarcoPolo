@@ -116,6 +116,12 @@ VALID = {
     ),
     "fuse/piers": row(pier_id="p1", P_j=0.3),
     "fuse/links": row(site_id="s1", L=0.6, age_days=4.0),
+    "reference/presence_2km": row(
+        cell_id="2000_0_0", date="2026-11-27", vessel_type="cargo", speed_bin="0-2", hours=1.5
+    ),
+    "coverage/weather_daily": row(
+        cell_id="2000_0_0", date="2026-11-27", wind_max_ms=7.0, hs_max_m=1.2
+    ),
 }
 
 
@@ -148,6 +154,10 @@ def test_every_schema_has_a_valid_example():
         ("reference/cells", {"sea_frac": 0.1}),
         ("reference/cells", {"level": 500}),
         ("match/events", {"p": 1.5}),
+        ("reference/presence_2km", {"hours": -0.1}),
+        ("reference/presence_2km", {"speed_bin": 2.0}),  # GFW's str label, not a number (#208)
+        ("coverage/weather_daily", {"hs_max_m": np.nan}),  # unknown ERA5 is no row, not NaN
+        ("coverage/weather_daily", {"wind_max_ms": -1.0}),
     ],
 )
 def test_broken_rule_is_rejected(name, bad):
@@ -176,3 +186,9 @@ def test_learning_columns_are_optional_but_checked():
     )
     with pytest.raises(SchemaErrors):
         check("fuse/sites", frame("fuse/sites", p_site=1.5))
+
+
+@pytest.mark.parametrize("name", ["reference/presence_2km", "coverage/weather_daily"])
+def test_one_row_per_key(name):  # #208
+    with pytest.raises(SchemaErrors):
+        check(name, pd.concat([frame(name)] * 2))

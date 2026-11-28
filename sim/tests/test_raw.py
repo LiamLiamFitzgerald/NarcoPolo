@@ -88,3 +88,14 @@ def test_gfw_sar_and_presence(raw):
     assert (
         abs(slow - world.ships["duration_min"].sum() / 60) < 1
     )  # every slowdown shows as slow hours
+
+
+def test_presence_2km_holds_the_raw_presence_hours(raw):  # #208
+    root, world = raw
+    pres = pd.read_parquet(root / "gfw_presence.parquet")
+    p2 = io.read_stage("reference/presence_2km")
+    assert set(p2["cell_id"]) <= set(world.fine["cell_id"])
+    keys = ["date", "vessel_type", "speed_bin"]
+    raw_h = pres.assign(date=pd.to_datetime(pres["date"])).groupby(keys)["hours"].sum()
+    assert (p2.groupby(keys)["hours"].sum() - raw_h).abs().max() < 0.01  # raw rounds to 3 dp
+    assert (p2["hours"] > 0).all() and set(p2["speed_bin"]) == set(pres["speed_bin"])
