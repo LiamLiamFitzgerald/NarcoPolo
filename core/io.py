@@ -19,7 +19,11 @@ from core.schemas import JSON_CHECKS, SCHEMAS, check, check_json
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config.yaml"
-_GPKG = {"reference/cells": "cells", "reference/piers": "piers"}  # layers of reference/layers.gpkg
+_GPKG = {
+    "reference/cells": "cells",
+    "reference/piers": "piers",
+    "reference/land": "land",
+}  # layers of reference/layers.gpkg
 _STAMP = b"narco"
 
 
