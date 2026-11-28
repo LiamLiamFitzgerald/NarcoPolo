@@ -464,6 +464,7 @@ def forecast_all(
         hits, n = 0.0, 0
         for i in range(1, k + 1):  # each fold has its own phi
             r = fold_rows[(chosen, i)].merge(seen, on=_ID)
+            r = r[r["mu"].notna()]  # unknown covariate: mu NaN, not scored (never as zero)
             if r.empty:  # no calm pass that week, as backtest skips
                 continue
             hits += _pit_coverage(r["count"], r["mu"], r["phi"].iloc[0], params[2]) * len(r)
