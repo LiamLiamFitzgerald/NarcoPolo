@@ -235,3 +235,13 @@ def test_plans_with_stand_ins_say_so_and_pass_the_contract(world):
     _, plan = world
     assert all(s.get("stand_in") for a in plan.values() for s in (a[0], a[-1]))
     check_json("patrol/plan", io.read_json_stage("patrol/plan"))
+
+
+def test_simulator_plans_carry_bandit_fields_and_save_the_state(world):
+    _, plan = world
+    for stops in plan.values():
+        assert all(
+            s["reason"] in ("exploit", "explore") and 0 <= s["theta"] <= 1 for s in stops[1:-1]
+        )
+    state = io.read_json_stage("patrol/bandit_state")  # checked against the contract on read
+    assert {s["id"] for a in plan.values() for s in a[1:-1]} <= set(state)
