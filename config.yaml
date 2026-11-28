@@ -155,6 +155,8 @@ reads:
   reference/piers: [x0, y0, region_bbox, reference]
   reference/land: [x0, y0, region_bbox, reference]
   reference/travel_hours: [x0, y0, region_bbox, reference]
+  reference/presence_2km: [x0, y0, region_bbox, reference]
+  coverage/weather_daily: [x0, y0, region_bbox, coverage]
   coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]
   match/events: [x0, y0, region_bbox]
