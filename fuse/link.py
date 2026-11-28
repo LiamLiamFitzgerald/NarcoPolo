@@ -375,12 +375,13 @@ def reasons(site, inputs) -> list[str]:
     return out
 
 
-def run(observed=None, expected=None, layers=None, travel=None, events=None):
-    """Pure (cells, sites) from the input frames; validate.null_test calls it this way.
+def run(observed=None, expected=None, layers=None, travel=None, events=None, cells=None, T=None):
+    """Pure (cells, sites) from the input frames; validate.null_test calls it this way and passes `cells` (from
+    detectors.scores.score_cells, which fuse may not import) so slowdowns get link scores (#177).
     With no arguments (make all, DECISIONS.md 2026-11-27 18:30) it reads the stage files and writes fuse/sites."""
     if observed is None:
         return run_sites()
-    return _run(observed, expected, layers, travel, events)
+    return _run(observed, expected, layers, travel, events, cells=cells, T=T)
 
 
 def _scored_sites(
