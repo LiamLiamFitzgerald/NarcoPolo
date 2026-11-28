@@ -258,6 +258,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "generated_utc": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "region": dict(cfg["region_bbox"]),
             "T": t.isoformat(),
+            "top_sites": int(cfg.get("patrol", {}).get("top_sites", 15)),  # the spec's default
             "week": weeks[-1],
             "weeks": weeks,
             "config_hash": cfg_hash,

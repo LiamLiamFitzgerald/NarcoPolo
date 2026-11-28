@@ -174,6 +174,7 @@ def test_snapshot_has_the_spec_keys_and_a_data_driven_label(world):
     assert snap["meta"]["data_label"] == "simulated"  # from the stamps, not typed in
     assert snap["meta"]["weeks"] == ["2026-W45", "2026-W46", "2026-W47", "2026-W48"]
     assert snap["meta"]["T"] == "2026-11-27"
+    assert snap["meta"]["top_sites"] == 15  # patrol.top_sites in config.yaml
     assert snap["validation"]["brier"] == 0.1
 
 

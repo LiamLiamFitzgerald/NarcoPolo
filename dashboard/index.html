@@ -44,7 +44,7 @@
     <div id="toggles"></div>
   </div>
   <aside>
-    <section><h2>Sites worth checking</h2><ol id="sites"></ol></section>
+    <section><h2>Sites worth checking</h2><ol id="sites"></ol><button id="more" type="button"></button></section>
     <section><h2>Patrol plan</h2><div id="plan"></div></section>
     <section><h2>How far to trust this</h2><div id="validation"></div></section>
   </aside>
@@ -64,7 +64,8 @@ const OVERLAYS = [
   ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
 ];
 let snap, ext, H;
-const view = { map: "normal", week: null };
+const view = { map: "normal", week: null, more: false };
+const TOP_LIST = 3; // Design principle 13: a weekly top 3, the rest one click away
 const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
 
 async function loadSnapshot() {
@@ -200,8 +201,8 @@ function drawOverlays() {
     el("rect", { x: x - h, y: y - h, width: 2 * h, height: 2 * h, fill: "#222", stroke: "#fff" }, piers, `${p.name ?? p.id}${p.P_j === null ? "" : `, pier score ${p.P_j.toFixed(2)}`}`);
   }
 
-  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...snap.sites.map(s => s.S), 1e-9);
-  for (const s of snap.sites) {
+  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...candidates().map(s => s.S), 1e-9);
+  for (const s of candidates()) { // not all sites: a map of everything is not a plan
     const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS);
     el("circle", { cx: x, cy: y, r, fill: s.bh_flag ? "#c0392b" : "none", "fill-opacity": 0.75, stroke: "#c0392b", "stroke-width": 2 }, sites,
       `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`);
@@ -221,11 +222,14 @@ function drawOverlays() {
   }
 }
 
+// The sites the patrol planner chose from (meta.top_sites, highest score first); the map and the list draw these, not every site.
+const candidates = () => [...snap.sites].sort((a, b) => b.S - a.S).slice(0, snap.meta.top_sites);
+
 function drawSiteList() {
   const ol = document.getElementById("sites");
   ol.replaceChildren();
   const pierName = id => snap.piers.find(p => p.id === id)?.name ?? id;
-  for (const s of [...snap.sites].sort((a, b) => b.S - a.S)) {
+  for (const s of candidates().slice(0, view.more ? undefined : TOP_LIST)) {
     const li = document.createElement("li"), head = document.createElement("div");
     const b = document.createElement("strong"); b.textContent = s.id;
     const nm = s.agreement_merged ?? 0; // D1 (#176): merged signal groups, not the raw 0-4 count
@@ -240,6 +244,9 @@ function drawSiteList() {
     ol.appendChild(li);
   }
   if (!snap.sites.length) ol.textContent = "No sites this week.";
+  const more = document.getElementById("more"), n = candidates().length;
+  more.hidden = n <= TOP_LIST;
+  more.textContent = view.more ? `Show only the top ${TOP_LIST}` : `Show the ${n} patrol candidates (${snap.sites.length} sites in all)`;
 }
 
 function drawPlan() {
@@ -299,6 +306,7 @@ function setup() {
   const mapSel = document.getElementById("map"), wk = document.getElementById("week"), tg = document.getElementById("toggles");
   for (const [k, m] of Object.entries(MAPS)) mapSel.add(new Option(m.title, k));
   for (const w of snap.meta.weeks) wk.add(new Option(w, w, false, w === snap.meta.week));
+  document.getElementById("more").onclick = () => { view.more = !view.more; drawSiteList(); };
   mapSel.onchange = () => { view.map = mapSel.value; onWeekChange(view.week); };
   wk.onchange = () => onWeekChange(wk.value);
   for (const [id, label] of OVERLAYS) {
