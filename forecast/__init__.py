@@ -227,6 +227,24 @@ def nb_interval(mu: pd.Series, phi: float, level: float) -> tuple[np.ndarray, np
     return np.where(zero, 0.0, lo), np.where(zero, 0.0, hi)
 
 
+def _pit_coverage(count: Any, mu: Any, phi: float, level: float) -> float:
+    """Interval coverage from the nonrandomised PIT (Czado, Gneiting & Held 2009), D7 (#175).
+
+    "count in [lo, hi]" can't drop below P(0) for any interval holding 0, about 0.99 at small mu;
+    this measure is exactly `level` when mu and phi are right, whatever mu is.
+    """
+    lo_q, hi_q = (1 - level) / 2, 1 - (1 - level) / 2
+    c, m = np.asarray(count, dtype=float), np.asarray(mu, dtype=float)
+    if phi > 1:  # same choice as nb_interval
+        dist = stats.nbinom(np.maximum(m, 1e-12) / (phi - 1), 1 / phi)
+    else:
+        dist = stats.poisson(m)
+    # shortcut: soft counts floored by scipy cdf (C=0.75 scores as 0), fine while p is near 0 or 1
+    a, b = dist.cdf(c - 1), dist.cdf(c)
+    inside = np.clip(b, lo_q, hi_q) - np.clip(a, lo_q, hi_q)
+    return float(np.mean(inside / np.maximum(b - a, np.finfo(float).tiny)))
+
+
 def poisson_deviance(C: pd.Series, mu: pd.Series) -> float:
     """Mean Poisson deviance; soft counts allowed. A C = 0 row contributes 2 mu."""
     c, m = np.asarray(C, dtype=float), np.asarray(mu, dtype=float)
@@ -441,6 +459,17 @@ def forecast_all(
 
         prod = evaluation_split(T)
         alpha = nb2_alpha(prod, prod.train(f2), X2)
+        # interval coverage of the chosen model's backtest rows with E > 0 (D7, #175)
+        seen = f2.loc[f2["exposure"] > 0, [*_ID, "count"]]
+        hits, n = 0.0, 0
+        for i in range(1, k + 1):  # each fold has its own phi
+            r = fold_rows[(chosen, i)].merge(seen, on=_ID)
+            r = r[r["mu"].notna()]  # unknown covariate: mu NaN, not scored (never as zero)
+            if r.empty:  # no calm pass that week, as backtest skips
+                continue
+            hits += _pit_coverage(r["count"], r["mu"], r["phi"].iloc[0], params[2]) * len(r)
+            n += len(r)
+        coverage = hits / n if n else np.nan
         for name, table in skills.items():
             report.append(
                 {
@@ -452,6 +481,7 @@ def forecast_all(
                     "skill_max": table["skill"].max(),
                     "phi": window["phi"].iloc[0],
                     "nb2_alpha": alpha,
+                    "coverage": coverage if name == chosen else np.nan,
                 }
             )
     return pd.concat(expected, ignore_index=True), pd.DataFrame(report)

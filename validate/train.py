@@ -23,15 +23,13 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 from scipy.special import expit
-from scipy.stats import poisson
 
 from core import io
 from core.config import Config, load
-from core.observed import Observed
 from core.split import Split, folds
-
-_AGENTS = ("oe", "midp", "gi", "cusum")  # R3: `link` is site-level only and enters through p_comb
-_RHO = 2.0  # Poisson CUSUM shift, A1
+from fuse.features import AGENTS as _AGENTS
+from fuse.features import _midp  # noqa: F401  (validate/tests/test_train.py checks it)
+from fuse.features import weekly_scores as _scores
 
 
 def model_path() -> Path:
@@ -66,68 +64,6 @@ def _simulate(cfg: Config, seed: int, regime: str) -> None:
     from sim.simulate import simulate
 
     simulate(cfg, seed, regime)
-
-
-def _midp(c: np.ndarray, mu: np.ndarray) -> np.ndarray:
-    """-log10 of the upper mid-p, interpolated between floor(C) and ceil(C) for soft counts (A6)."""
-
-    def pm(k: np.ndarray) -> np.ndarray:
-        return poisson.sf(k, mu) + 0.5 * poisson.pmf(k, mu)
-
-    lo = np.floor(c)
-    f = c - lo
-    p = (1 - f) * pm(lo) + f * pm(lo + 1)
-    return -np.log10(np.clip(p, np.finfo(float).tiny, 1))
-
-
-def _gi(ix: np.ndarray, iy: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Getis-Ord Gi* z of y over one week's observed cells; binary weights on the 8 surrounding 2 km cells, self
-    included."""
-    pos = {(int(i), int(j)): k for k, (i, j) in enumerate(zip(ix, iy, strict=True))}
-    local, W = y.copy(), np.ones(len(y))
-    for k, (i, j) in enumerate(zip(ix, iy, strict=True)):
-        for di in (-1, 0, 1):
-            for dj in (-1, 0, 1):
-                nb = pos.get((int(i) + di, int(j) + dj)) if (di or dj) else None
-                if nb is not None:
-                    local[k] += y[nb]
-                    W[k] += 1
-    n, s = len(y), y.std()
-    den = s * np.sqrt((n * W - W**2) / max(n - 1, 1))
-    return np.divide(local - y.mean() * W, den, out=np.zeros(n), where=den > 0)
-
-
-def _scores(obs: pd.DataFrame, exp: pd.DataFrame) -> pd.DataFrame:
-    """Weekly agent scores per fine cell from its observed rows only (exposure > 0; principle 4): a cell-week
-    with no exposure has no row, never a zero. `date` is the week's Sunday, so Split.train keeps whole weeks."""
-    seen = Observed(obs).observed_rows()
-    seen = seen[seen["level"] == 2000]
-    exp = exp[exp["fold"] == 0]  # the live forecast; backtest folds would duplicate cell-days
-    key = ["cell_id", "date", "event_type"]
-    m = seen.merge(exp[[*key, "mu"]], on=key)
-    d = pd.to_datetime(m["date"])
-    m["date"] = (d + pd.to_timedelta(6 - d.dt.day_of_week, unit="D")).dt.normalize()
-    w = m.groupby(["cell_id", "date"], as_index=False)[["count", "mu"]].sum()
-    w = w.sort_values(["cell_id", "date"], ignore_index=True)
-    c, mu = w["count"].to_numpy(float), w["mu"].to_numpy(float)
-    y = (c + 0.5) / (mu + 0.5)
-    w["oe"] = np.log(y)
-    w["midp"] = _midp(c, mu)
-    inc = c * np.log(_RHO) - (_RHO - 1) * mu
-    cus = np.zeros(len(w))
-    for idx in w.groupby("cell_id").indices.values():
-        s = 0.0
-        for i in idx:  # rows are in date order within a cell; unobserved weeks have no row
-            s = max(0.0, s + inc[i])
-            cus[i] = s
-    w["cusum"] = cus
-    parts = w["cell_id"].str.split("_", expand=True)
-    ix, iy = parts[1].astype(int).to_numpy(), parts[2].astype(int).to_numpy()
-    gi = np.zeros(len(w))
-    for idx in w.groupby("date").indices.values():
-        gi[idx] = _gi(ix[idx], iy[idx], y[idx])
-    w["gi"] = gi
-    return w
 
 
 def _labels(rows: pd.DataFrame, truth: pd.DataFrame) -> pd.Series:

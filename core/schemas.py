@@ -109,6 +109,12 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "road_access": _flag(),
         }
     ),
+    "reference/land": _schema(
+        {  # the land layer of reference/layers.gpkg (#133): one (multi)polygon, for the basemap
+            "id": pa.Column(int, nullable=False),
+            "geometry": pa.Column(nullable=False),
+        }
+    ),
     "reference/travel_hours": _schema(
         {
             "cell_id": pa.Column(str, nullable=False),

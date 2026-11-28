@@ -36,12 +36,33 @@ reference:
   sea_raster_m: 250
   boat_speed_kn: 15
   pier_road_m: 200           # road_access if a road is within 200 m
+# P7 patrol (#89): docs/specs/P7.md Parameters. n_boot is left out: D3 removed the bootstrap exploration slot (#176)
+patrol:
+  top_sites: 15
+  ship_kn: 12
+  ship_budget_h: 24
+  ship_dwell_h: 1
+  aircraft_kn: 180           # TODO(P7): spec says "confirm with the team"
+  aircraft_budget_h: 4
+  aircraft_dwell_h: 0.2
+
 coverage:
   calm_wind_ms: 6            # provisional until the recall curve exists
   calm_hs_m: 1.5             # provisional
   storm_hs_m: 2.5            # A9 post_storm: >= storm_hours of hs > storm_hs_m ...
   storm_hours: 24
   storm_lookback_h: 72       # ... in the 72 h before the pass
+
+# P2 ingest (#215, #221): proposed by P2; values from docs/specs/P2.md where noted, the rest TODO(P2)
+ingest:
+  era5_dataset: reanalysis-era5-single-levels            # TODO(P2): CDS catalogue id, see #216
+  overpass_url: https://overpass-api.de/api/interpreter  # TODO(P2): see #216
+  road_buffer_m: 200          # docs/specs/P2.md step 8: highway=* within 200 m = road access
+  inshore_layers: {}          # TODO(P2): {layer_name: {url, licence}}: BIM / Marine Institute under-12 m net, pot, dredge (data.gov.ie)
+  survey_extent: null         # TODO(P2): {url, licence}: survey extent polygon (shared.md issue 7)
+  infomar_bathy: null         # TODO(P2): {url, licence}: licence must include INFOMAR's CC BY 4.0 attribution line
+  s1_calm_share: 0.5          # docs/specs/P2.md: download a pass if >= 50% of the region cells it covers are calm
+  s1_rough_passes: 5          # docs/specs/P2.md: plus 5 rough passes for P1's recall curve
 
 validate:
   injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
@@ -132,6 +153,7 @@ p6:
 reads:
   reference/cells: [x0, y0, region_bbox, reference]
   reference/piers: [x0, y0, region_bbox, reference]
+  reference/land: [x0, y0, region_bbox, reference]
   reference/travel_hours: [x0, y0, region_bbox, reference]
   coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]

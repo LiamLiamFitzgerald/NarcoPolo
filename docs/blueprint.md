@@ -229,6 +229,7 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | --- | --- | --- |
 | `reference/layers.gpkg` cells layer (P3) | `cell_id` str; `level` int (2000 or 10000); `geometry` polygon; `inshore_frac` `float 0–1, or NaN where no inshore map exists; lane`, `anchorage`, `port_zone`, `exclusion` bool; `dist_coast_m` float; `static_frac` float 0–1; sea\_frac float 0.2–1 | \~1,000 |
 | `reference/layers.gpkg` piers layer (P3) | `pier_id` str; `name` str; `geometry` point; `road_access` bool | tens |
+| `reference/layers.gpkg` land layer (P3, #133) | `id` int; `geometry` (multi)polygon, EPSG:32629: the land P3 closes from the coastline lines (land on the left, as in OSM); read by P7 for the basemap | 1 |
 | `reference/sea_250m.tif` (P3) | uint8: 1 sea, 0 land | about 750 × 380 px (the whole bounding box, land included) |
 | `reference/travel_hours.parquet` (P3) | `cell_id`, `pier_id`, `hours` float | cells × piers, \~50k |
 | `coverage/exposure.parquet` (P3) | `cell_id`, `pass_id`, `time_utc`, `covered_frac` 0–1, `wind_ms`, `hs_m`, `calm` bool, `exposure_small` float 0–1 | \~60 passes × \~940 cells, \~56k |
@@ -509,7 +510,7 @@ A 150 × 25 km band at 10 m is 15,000 × 2,500 pixels; two int16 bands is about 
 
 **Inputs:** `raw/` static layers, scene metadata and footprints, ERA5; radar scenes only for the static-object mask.
 
-**Outputs:** `reference/layers.gpkg` (cells and piers layers), `reference/sea_250m.tif`, `reference/land_mask_10m.tif, reference/static_mask_10m.tif, reference/travel_hours.parquet`, `coverage/exposure.parquet`.
+**Outputs:** `reference/layers.gpkg` (cells, piers and land layers), `reference/sea_250m.tif`, `reference/land_mask_10m.tif, reference/static_mask_10m.tif, reference/travel_hours.parquet`, `coverage/exposure.parquet`.
 
 ### Steps: layers per 2 km cell (and aggregated to 10 km)
 
@@ -1102,6 +1103,9 @@ reference/masks
 reference/piers
   fn piers(osm, roads) -> frame[pier_id, name, geometry, road_access]
   fn sea_raster(coastline, res_m = 250) -> uint8; fn assert_closed(sea)   flood-fill check for leaks
+
+reference/land
+  fn land(coastline, region) -> frame[id, geometry]   coastline lines closed into land polygons (land on the left, OSM); #133
   fn travel_hours(sea, piers, kn = 15) -> frame[cell_id, pier_id, hours]  MCP_Geometric from the nearest sea pixel
 
 coverage/
