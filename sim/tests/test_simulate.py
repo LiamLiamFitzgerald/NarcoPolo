@@ -34,6 +34,7 @@ def test_detection_probability_matches_spec():
     assert abs(_p_det(cfg, 15, 2) - 0.73) < 0.01
 
 
+@pytest.mark.slow
 def test_same_seed_same_files(world, tmp_path_factory):
     data, mp = world
     first = {
@@ -121,6 +122,7 @@ def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
     assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
 
 
+@pytest.mark.slow
 def test_pickups_use_pickup_length_m_and_only_pickups_change(tmp_path):
     """#266: validate's visible world sets sim.pickup_length_m; the default equals small_boat_length_m."""
     cfg, _ = load("config.yaml")

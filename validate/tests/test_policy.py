@@ -153,6 +153,7 @@ def test_block_is_none_while_dependencies_are_missing(monkeypatch):
     assert _block() is None
 
 
+@pytest.mark.slow
 def test_end_to_end_on_the_simulator():
     if policy._real_deps() is None:
         pytest.skip("needs sim.patrol_outcome (#150), patrol.bandit (#151), fuse.learn (#152)")
