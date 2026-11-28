@@ -24,13 +24,16 @@ def _outcomes(rows):
     return pd.DataFrame(rows, columns=COLUMNS)
 
 
-def test_prior_uses_p_site_else_rescaled_S():
+def test_prior_uses_p_site_else_rank_of_S():
     st = bandit.prior(pd.DataFrame({"site_id": ["a", "b"], "p_site": [0.2, 0.6], "S": [9, 1]}), N0)
     assert st["a"]["alpha"] == pytest.approx(1.0) and st["a"]["beta"] == pytest.approx(4.0)
     assert st["b"]["alpha"] == pytest.approx(3.0) and st["b"]["last_visit_week"] is None
-    st = bandit.prior(pd.DataFrame({"site_id": ["a", "b", "c"], "S": [1.0, 3.0, 5.0]}), N0)
-    assert st["b"]["alpha"] == pytest.approx(2.5) and st["b"]["beta"] == pytest.approx(2.5)
-    assert all(v["alpha"] > 0 and v["beta"] > 0 for v in st.values())  # S ends at 0 and 1
+    # no p_site: p = rank(S) / (n + 1), ties averaged -> 1/5, 2.5/5, 2.5/5, 4/5
+    st = bandit.prior(pd.DataFrame({"site_id": list("abcd"), "S": [1.0, 3.0, 3.0, 5.0]}), N0)
+    assert [st[k]["alpha"] for k in "abcd"] == pytest.approx([1.0, 2.5, 2.5, 4.0])
+    assert [st[k]["beta"] for k in "abcd"] == pytest.approx([4.0, 2.5, 2.5, 1.0])
+    st = bandit.prior(pd.DataFrame({"site_id": ["a", "b"], "S": [2.0, 2.0]}), N0)
+    assert st["a"]["alpha"] == st["a"]["beta"] == pytest.approx(2.5)  # all tied: p = 0.5
     check_json("patrol/bandit_state", st)
 
 
@@ -50,6 +53,10 @@ def test_update_counts_visits_and_leaves_unvisited_sites_alone_apart_from_discou
         "last_visit_week": None,
     }  # unvisited: discount only
     assert new["a"]["last_visit_week"] == 48 and st["a"]["alpha"] == 2.5  # input not mutated
+    assert new["b"]["last_visit_week"] == 48  # visited, found nothing: still a visit
+    no_week = bandit.update(st, out, discount=0.9)
+    assert all(v["last_visit_week"] is None for v in no_week.values())  # week= omitted: unchanged
+    assert bandit.update(new, out, discount=1.0)["a"]["last_visit_week"] == 48
     assert bandit.update(st, _outcomes([]), discount=1.0) == st
 
 
