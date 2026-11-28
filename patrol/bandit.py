@@ -11,19 +11,17 @@ import pandas as pd
 
 State = dict[str, dict[str, Any]]
 
-_EPS = 1e-6  # keeps alpha0, beta0 > 0 when p is exactly 0 or 1 (a Beta needs both positive)
+_EPS = 1e-6  # keeps alpha0, beta0 > 0 when p_site is exactly 0 or 1 (a Beta needs both positive)
 
 
 def prior(sites: pd.DataFrame, n0: float) -> State:
     """Beta(n0 * p, n0 * (1 - p)) per site, n0 = learn.prior_strength virtual visits.
-    p = p_site when the column exists, else S rescaled to 0-1 over these sites (issue 151)."""
+    p = p_site when the column exists, else rank(S) / (n + 1) over these n sites, ties averaged
+    (issue 151): never 0 or 1, so the lowest-S site still has a real chance of being sampled."""
     if "p_site" in sites:
-        p = sites["p_site"].astype(float)
+        p = sites["p_site"].astype(float).clip(_EPS, 1 - _EPS)
     else:
-        s = sites["S"].astype(float)
-        span = s.max() - s.min()
-        p = (s - s.min()) / span if span > 0 else pd.Series(0.5, index=s.index)
-    p = p.clip(_EPS, 1 - _EPS)
+        p = sites["S"].astype(float).rank(method="average") / (len(sites) + 1)
     return {
         str(i): {"alpha": float(n0 * q), "beta": float(n0 * (1 - q)), "last_visit_week": None}
         for i, q in zip(sites["site_id"], p, strict=True)
@@ -38,7 +36,9 @@ def update(
 ) -> State:
     """Discount every site (alpha, beta <- discount * alpha, beta), then one count per visit row of
     outcomes [site_id, asset, visited, found]: found -> alpha + 1, visited and not found -> beta + 1.
-    Sites with no visit row change only by the discount. `week`, if given, becomes last_visit_week."""
+    Sites with no visit row change only by the discount. `week` (optional; the L6 evaluation loop in
+    validate/policy.py passes it) becomes last_visit_week of each visited site; without it
+    last_visit_week is left as it was."""
     new = {
         k: {**v, "alpha": discount * v["alpha"], "beta": discount * v["beta"]}
         for k, v in state.items()
