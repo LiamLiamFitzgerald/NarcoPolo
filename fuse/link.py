@@ -1,14 +1,16 @@
-"""Lag link (issue 56), drop sites, significance, recurrence, piers and reasons. The sites, permutation,
-recurrence, pier and reason steps are still STUBS (issue 24) returning neutral, schema-valid placeholders."""
+"""Lag link (issue 56), drop sites, significance and recurrence (issue 57), piers and reasons. The pier and reason
+steps are still STUBS (issue 24, real in #59) returning neutral, schema-valid placeholders."""
 
+import math
 from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
+from statsmodels.stats.multitest import multipletests
 
 from core import io
-from core.grid import FINE, neighbours
-from fuse._common import PARAMS, RADAR_HISTORY_DAYS, _provenance
+from core.grid import FINE, centroid, neighbours
+from fuse._common import _CFG, PARAMS, RADAR_HISTORY_DAYS, _provenance
 
 _SITE_COLUMNS = {
     "site_id": str, "x_m": float, "y_m": float, "n_slowdowns": int, "S": float, "p_perm": float,
@@ -79,16 +81,55 @@ def link_score(s, U_small, nbrs, tau=PARAMS["tau_days"]) -> float | None:
     return float(s["U"] * np.max(U_small[m].to_numpy() * np.exp(-lag / tau)))
 
 
-def sites(slowdowns: pd.DataFrame) -> pd.DataFrame:  # stub, issue 24: one site per 2 km cell (A2)
+def _empty_sites() -> pd.DataFrame:
     return pd.DataFrame({c: pd.Series(dtype=t) for c, t in _SITE_COLUMNS.items()})
 
 
+def sites(slowdowns: pd.DataFrame) -> pd.DataFrame:
+    """One site per 2 km cell of its slowdowns (A2, no DBSCAN). slowdowns: _link_slowdowns rows (cell_id, X, L,
+    age_days). L NaN adds nothing to S or recurrence but counts in n_slowdowns; X = 0 counts as follow-up
+    unobserved. p_perm, bh_flag and agreement are neutral here and filled by the permutation step."""
+    if slowdowns.empty:
+        return _empty_sites()
+    median_L = float(np.nanmedian(slowdowns["L"])) if slowdowns["L"].notna().any() else math.inf
+    rows = []
+    for cid, g in slowdowns.groupby("cell_id", sort=True):
+        x, y = centroid(str(cid))
+        rows.append(
+            {
+                "site_id": str(cid),
+                "x_m": x,
+                "y_m": y,
+                "n_slowdowns": len(g),
+                "S": site_score(g["L"], g["age_days"]),
+                "p_perm": 1.0,
+                "bh_flag": False,
+                "recurrence": recurrence(g["L"], median_L),
+                "followup_unobserved": int((g["X"] == 0).sum()),
+                "agreement": 0,
+                "reasons": [],
+                "top_piers": [],
+            }
+        )
+    return pd.DataFrame(rows).astype({c: t for c, t in _SITE_COLUMNS.items() if t is not object})
+
+
 def suppress(ranked_sites: pd.DataFrame, radius_m=PARAMS["link_radius_m"]) -> pd.DataFrame:
-    return ranked_sites  # stub, issue 24
+    """The top list: walk sites in the given rank order and drop any within radius_m of a site already kept
+    (it is "nearby" that one). Distances between site centres in metres."""
+    keep: list[int] = []
+    xy = ranked_sites[["x_m", "y_m"]].to_numpy(float)
+    for i in range(len(ranked_sites)):
+        if all(math.hypot(*(xy[i] - xy[j])) > radius_m for j in keep):
+            keep.append(i)
+    return ranked_sites.iloc[keep]
 
 
-def site_score(L, ages, half_life=PARAMS["half_life_days"]) -> float:  # stub, issue 24
-    return 0.0
+def site_score(L, ages, half_life=PARAMS["half_life_days"]) -> float:
+    """S = sum of L x 2^(-age / half_life) over slowdowns with a link score; missing L (None/NaN) add nothing."""
+    L, a = np.asarray(L, float), np.asarray(ages, float)
+    ok = np.isfinite(L)
+    return float(np.sum(L[ok] * 2.0 ** (-a[ok] / half_life)))
 
 
 class LinkTable(NamedTuple):
@@ -174,14 +215,82 @@ def _link_slowdowns(
     return out.assign(X=X, L=L, age_days=age)
 
 
+def _shuffle_scores(
+    d: np.ndarray,
+    ci: np.ndarray,
+    U: np.ndarray,
+    site: np.ndarray,
+    n_sites: int,
+    table: LinkTable,
+    offsets: np.ndarray,
+) -> np.ndarray:
+    """S per (offset, site) with every slowdown moved by the same offset, wrapping within the link table's days
+    ([first radar day - link_days, T]); each keeps its cell and U. L and age follow the moved date (A4: lookups)."""
+    span = table.X.shape[1]
+    nd = (d[None, :] + offsets[:, None]) % span
+    best, X = table.best[ci[None, :], nd], table.X[ci[None, :], nd]
+    L = np.where((X > 0) & np.isfinite(best), U[None, :] * best, 0.0)
+    w = L * 2.0 ** (-(span - 1 - nd) / PARAMS["half_life_days"])
+    out = np.zeros((len(offsets), n_sites))
+    for k in range(len(offsets)):
+        out[k] = np.bincount(site, weights=w[k], minlength=n_sites)
+    return out
+
+
 def permutation(
     slowdowns, link_table, n=None, shift_days=PARAMS["shift_days"], seed=None
-) -> np.ndarray:
-    return np.ones(len(slowdowns))  # stub, issue 24: n = max(999, ceil(10 m / q)) (A3)
+) -> pd.Series:
+    """p_perm per site (index site_id = cell_id). Tested: sites with at least one linked slowdown (m of them);
+    the rest get 1.0. n = max(n_shuffles, ceil(10 m / q)) shuffles (A3), each one random offset in
+    [-shift_days, shift_days] for all slowdowns. p = (1 + shuffles with S >= observed) / (n + 1). Slowdowns
+    outside the link table (no L possible) are left out; moved ones landing on unobserved windows get no L,
+    exactly like real ones. Observed S is the zero-offset lookup, so it is computed the same way."""
+    all_sites = pd.Index(sorted(slowdowns["cell_id"].astype(str).unique()), name="site_id")
+    p = pd.Series(1.0, index=all_sites, name="p_perm")
+    ci = link_table.cells.get_indexer(pd.Index(slowdowns["cell_id"]))
+    d = (_days(slowdowns["date"]) - link_table.day0).days.to_numpy()
+    U = slowdowns["U"].to_numpy(float)
+    ok = (ci >= 0) & (d >= 0) & (d < link_table.X.shape[1]) & np.isfinite(U)
+    if not ok.any():
+        return p
+    site_ids = all_sites.get_indexer(pd.Index(slowdowns["cell_id"].astype(str)))[ok]
+    args = (d[ok], ci[ok], U[ok], site_ids, len(all_sites), link_table)
+    observed = _shuffle_scores(*args, offsets=np.zeros(1, int))[0]
+    tested = observed > 0
+    m = int(tested.sum())
+    if m == 0:
+        return p
+    if n is None:
+        n = max(int(PARAMS["n_shuffles"]), math.ceil(10 * m / PARAMS["fdr_q"]))
+    if seed is None:
+        seed = int(_CFG["seed"]) + int(PARAMS["perm_seed_offset"])
+    rng = np.random.default_rng(seed)
+    ge = np.zeros(len(all_sites))
+    for start in range(0, n, 500):  # chunks keep memory at 500 x slowdowns
+        offsets = rng.integers(-shift_days, shift_days + 1, min(500, n - start))
+        ge += (_shuffle_scores(*args, offsets=offsets) >= observed[None, :] - 1e-12).sum(axis=0)
+    p[tested] = (1 + ge[tested]) / (n + 1)
+    return p
 
 
-def recurrence(L_site, median_L) -> int:  # stub, issue 24
-    return 0
+def recurrence(L_site, median_L) -> int:
+    """Distinct slowdowns of the site whose link score is above the median L of all slowdowns."""
+    L = np.asarray(L_site, float)
+    return int(np.sum(np.isfinite(L) & (L > median_L)))
+
+
+def _site_agreement(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -> pd.Series:
+    """Per site: agreement of the dark_small cell-day that gave its highest L (P6 Resolved ambiguities)."""
+    out = {}
+    for cid, g in slow[slow["L"].notna()].groupby("cell_id"):
+        s = g.loc[g["L"].idxmax()]
+        m, d0 = _window(s, u_small, nbrs, PARAMS["link_days"])
+        if not m.any():
+            continue
+        lag = (pd.DatetimeIndex(u_small.index.get_level_values(1)[m]) - d0).days.to_numpy()
+        k = int(np.argmax(u_small[m].to_numpy() * np.exp(-lag / PARAMS["tau_days"])))
+        out[str(cid)] = int(agree.reindex(u_small.index[m][[k]]).fillna(0).iloc[0])
+    return pd.Series(out, dtype=int)
 
 
 def pier_scores(
@@ -202,13 +311,50 @@ def run(observed=None, expected=None, layers=None, travel=None, events=None):
     return _run(observed, expected, layers, travel, events)
 
 
-def _run(observed, expected, layers, travel, events) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """The pure path of run(): frames in, (cells, sites) out, no file I/O (the null test calls it 200 times)."""
-    cells = pd.DataFrame(
-        {c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()}
-    )  # stub, issue 24
-    slow = events[events["event_type"] == "slowdown"] if events is not None else pd.DataFrame()
-    return cells, suppress(sites(slow))
+def _scored_sites(
+    cells: pd.DataFrame, observed: pd.DataFrame, events: pd.DataFrame, T
+) -> pd.DataFrame:
+    """Sites with S, p_perm (permutation through the link table), bh_flag (BH once over the tested sites),
+    recurrence, followup_unobserved and agreement, ranked by S and suppressed to the top list."""
+    if events is None or not (events["event_type"] == "slowdown").any():
+        return _empty_sites()
+    slow = _link_slowdowns(cells, observed, events, T)
+    out = sites(slow)
+    fine = observed.loc[observed["level"] == FINE, "cell_id"]
+    nbrs = neighbours(sorted(set(fine) | set(slow["cell_id"])), PARAMS["link_radius_m"])
+    u_small = _radar(_u_small(cells, observed), T)
+    table = link_table(u_small, _radar(_exposure(observed), T), nbrs)
+    p = permutation(slow, table)
+    out["p_perm"] = p.reindex(out["site_id"]).to_numpy()
+    tested = (out["S"] > 0).to_numpy()
+    flag = np.zeros(len(out), bool)
+    flag[tested] = multipletests(out.loc[tested, "p_perm"], alpha=PARAMS["fdr_q"], method="fdr_bh")[
+        0
+    ]
+    out["bh_flag"] = flag
+    agree = _small_rows(cells).set_index(["cell_id", "date"])["agreement"]
+    out["agreement"] = (
+        _site_agreement(slow, u_small, agree, nbrs)
+        .reindex(out["site_id"])
+        .fillna(0)
+        .astype(int)
+        .to_numpy()
+    )
+    ranked = out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable")
+    return suppress(ranked).reset_index(drop=True)
+
+
+def _run(
+    observed, expected, layers, travel, events, cells=None, T=None
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The pure path of run(): frames in, (cells, sites) out, no file I/O (the null test calls it 200 times).
+    fuse may not import detectors/ (tach), so cell scores come in as `cells`; without them every U is unknown,
+    no slowdown gets a link score and no site is flagged. T defaults to the last observed date."""
+    if cells is None:
+        cells = pd.DataFrame({c: pd.Series(dtype=t) for c, t in _CELL_COLUMNS.items()})
+    if T is None:
+        T = pd.Timestamp(max(observed["date"])).date() if len(observed) else None
+    return cells, _scored_sites(cells, observed, events, T)
 
 
 def run_sites() -> None:
@@ -220,5 +366,6 @@ def run_sites() -> None:
         "reference/travel_hours",
         "match/events",
     ]
-    _, out = _run(*(io.read_stage(n) for n in names))
+    cells = io.read_stage("fuse/cells")  # written by detectors.run_cells, which make all runs first
+    _, out = _run(*(io.read_stage(n) for n in names), cells=cells, T=io.read_snapshot()["T"])
     io.write_stage("fuse/sites", out, _provenance("aggregate/observed"))  # type: ignore[arg-type]
