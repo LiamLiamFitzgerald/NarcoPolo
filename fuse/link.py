@@ -693,6 +693,14 @@ def run_sites() -> None:
     io.write_stage("fuse/links", links, prov)  # type: ignore[arg-type]
     from fuse.fisheries import _gated  # fuse.fisheries imports this module
 
-    fish = _gated(frames[0], frames[1], frames[3], io.read_stage("reference/piers"))
+    areas = None  # #322: the closed-areas layer, once core/schemas declares it and P3 (or the simulator) wrote it
+    if "reference/closed_areas" in SCHEMAS:
+        try:
+            areas = io.read_stage("reference/closed_areas")
+        except (FileNotFoundError, ValueError):  # no file yet, or the layer isn't in the GeoPackage
+            areas = None
+    fish = _gated(
+        frames[0], frames[1], frames[3], io.read_stage("reference/piers"), frames[2], areas
+    )
     if fish is not None:  # until #344-#346 land, nothing is written
         io.write_stage("fuse/fisheries", fish, prov)  # type: ignore[arg-type]
