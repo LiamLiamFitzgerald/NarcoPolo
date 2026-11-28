@@ -908,18 +908,30 @@ function calibrationChart(rows, brier) {
     "Dots on the dashed line mean the probabilities can be taken at face value; dot size shows how many candidates are in the bin.", svg, rows);
 }
 
+// Forecast skill per event type and model: the mean over backtest folds with its min-to-max range (validate's
+// shape); a plain `skill` column per fold also works.
 function skillChart(rows) {
-  const key = Object.keys(rows[0]).find(k => /skill/i.test(k)), labelKey = Object.keys(rows[0]).find(k => k !== key);
-  if (!key) return chartCard("Forecast skill", "By backtest fold", "Above 0 beats assuming every cell is average.", empty("No skill values in the report."), rows);
-  const w = 360, hgt = 170, m = { l: 40, r: 10, t: 10, b: 30 }, svg = chartSvg(w, hgt), vals = rows.map(r => r[key]).filter(v => v !== null);
-  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), y = lin(lo, hi, hgt - m.b, m.t), band = (w - m.l - m.r) / rows.length;
-  yAxis(svg, y, ticks(lo, hi), m.l, w - m.r, v => v.toFixed(2));
-  el("line", { x1: m.l, x2: w - m.r, y1: y(0), y2: y(0), class: "ref" }, svg, "0: no better than assuming every cell is average");
+  const ranged = "mean" in rows[0], val = r => (ranged ? r.mean : r.skill ?? null);
+  const label = r => (ranged ? `${r.event_type ?? ""} · ${r.model ?? ""}` : String(r.fold ?? ""));
+  if (!rows.some(r => typeof val(r) === "number")) return chartCard("Forecast skill", "From the backtest", "Above 0 beats assuming every cell is average.", empty("No skill values in the report."), rows);
+  const w = 360, row = 30, m = { l: 118, r: 14, t: 6, b: 26 }, hgt = m.t + m.b + row * rows.length, svg = chartSvg(w, hgt);
+  const vals = rows.flatMap(r => (ranged ? [r.min, r.max] : [val(r)])).filter(v => typeof v === "number");
+  const lo = Math.min(0, ...vals), hi = Math.max(0, ...vals), xt = ticks(lo, hi, 4), x = lin(Math.min(lo, xt[0]), Math.max(hi, xt[xt.length - 1]), m.l, w - m.r);
+  for (const t of xt) {
+    el("line", { x1: x(t), x2: x(t), y1: m.t, y2: hgt - m.b, class: "grid" }, svg);
+    el("text", { x: x(t), y: hgt - m.b + 14, "text-anchor": "middle" }, svg).textContent = t.toFixed(2);
+  }
+  el("line", { x1: x(0), x2: x(0), y1: m.t, y2: hgt - m.b, class: "ref" }, svg, "0: no better than assuming every cell is average");
   rows.forEach((r, i) => {
-    el("text", { x: m.l + band * (i + 0.5), y: hgt - m.b + 16, "text-anchor": "middle" }, svg).textContent = String(r[labelKey] ?? i + 1);
-    if (r[key] !== null) mark(svg, "circle", { cx: m.l + band * (i + 0.5), cy: y(r[key]), r: 4.5, class: "s1" }, `${labelKey ?? "fold"} ${r[labelKey] ?? i + 1}: skill ${fmt(r[key], 3)}`);
+    const cy = m.t + row * (i + 0.5);
+    el("text", { x: m.l - 8, y: cy + 4, "text-anchor": "end" }, svg).textContent = label(r);
+    if (typeof val(r) !== "number") return;
+    if (ranged) el("line", { x1: x(r.min), x2: x(r.max), y1: cy, y2: cy, class: "whisker s1" }, svg);
+    mark(svg, "circle", { cx: x(val(r)), cy, r: 4.5, class: "s1" },
+      `${label(r)}: skill ${fmt(val(r), 3)}${ranged ? ` (folds from ${fmt(r.min, 3)} to ${fmt(r.max, 3)})` : ""}`);
   });
-  return chartCard("Forecast skill", "Per backtest fold", "Above the dashed line the forecast beats assuming every cell is average.", svg, rows);
+  return chartCard("Forecast skill", ranged ? "Mean over backtest folds, with the range from worst to best fold" : "Per backtest fold",
+    "Right of the dashed line the forecast beats assuming every cell is average; left of it, it does worse.", svg, rows);
 }
 
 // Gap-aware line: a null breaks the line (a day not observed is never drawn as 0).
@@ -1081,7 +1093,8 @@ function drawValidation() {
   if (v.skill?.length) parts.push(skillChart(v.skill));
   const stat = (title, value, sub) => h("div", { className: "chart-card" }, h("h3", {}, title), h("div", { className: "stat" }, h("span", { className: "value" }, value), h("span", { className: "muted" }, sub)));
   parts.push(v.null?.share_with_any_flag == null ? h("div", { className: "chart-card" }, h("h3", {}, "Alarms on pure noise"), empty("Null test not run yet.", "info"))
-    : stat("Alarms on pure noise", pct(v.null.share_with_any_flag), `of ${v.null.runs} shuffled runs raised any flag`));
+    : stat("Alarms on pure noise", pct(v.null.share_with_any_flag), `of ${v.null.runs} shuffled runs raised any flag` +
+      (v.null.lo != null ? ` (95% range ${pct(v.null.lo)} to ${pct(v.null.hi)})` : "")));
   if (v.interval_coverage != null) parts.push(stat("Forecast ranges that held the actual count", pct(v.interval_coverage), "aim: 90%"));
   box.replaceChildren(...parts);
 }
