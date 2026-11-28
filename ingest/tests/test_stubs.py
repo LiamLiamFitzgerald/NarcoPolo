@@ -1,4 +1,4 @@
-"""Every offline stub writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
+"""Every offline stub (era5 is real: tests/test_era5.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
 
 import json
 import socket
@@ -9,28 +9,13 @@ import pandas as pd
 import pyarrow.parquet as pq
 import pyogrio
 import pytest
-from scipy.io import netcdf_file
 
-import sim.simulate
-from core import io
-from core.config import load
 from ingest import era5, fetch_all, gfw, osm, probe, s1, static
+from ingest.tests.conftest import CFG, FakeCDS
 
-SEED = 20261127
-CFG = load(io.CONFIG_PATH)[0]
 B = CFG["region_bbox"]
 BBOX = (B["lon_min"], B["lat_min"], B["lon_max"], B["lat_max"])
 START, END = date(2026, 11, 1), date(2026, 11, 3)
-
-
-@pytest.fixture(scope="module")
-def simraw(tmp_path_factory):
-    root = tmp_path_factory.mktemp("sim")
-    with pytest.MonkeyPatch.context() as mp:
-        mp.setenv("NARCO_DATA", str(root / "data"))
-        mp.setenv("NARCO_RAW", str(root / "raw"))
-        sim.simulate.simulate(CFG, SEED)
-    return root / "raw"
 
 
 @pytest.fixture(autouse=True)
@@ -132,21 +117,6 @@ def test_gfw_matches_simulator_schema(simraw, raw, fn, name):
     _recorded(raw, path)
 
 
-def test_era5_matches_simulator_grid(simraw, raw):
-    path = era5.fetch_era5(BBOX, START, END)
-    with netcdf_file(path, mmap=False) as a, netcdf_file(simraw / "era5.nc", mmap=False) as s:
-        assert set(a.variables) == set(s.variables)
-        for v in ("u10", "v10", "swh"):
-            assert a.variables[v].dimensions == s.variables[v].dimensions
-            assert a.variables[v].units == s.variables[v].units
-        assert list(a.variables["latitude"][:]) == list(s.variables["latitude"][:])
-        assert list(a.variables["longitude"][:]) == list(s.variables["longitude"][:])
-        t = a.variables["time"][:]
-        assert len(t) == 3 * 24 and t[1] - t[0] == 1
-        assert pd.isna(a.variables["u10"][:]).all()
-    _recorded(raw, path)
-
-
 def test_fetch_piers_is_feature_collection(simraw, raw):
     path = osm.fetch_piers(BBOX)
     sim_type = json.loads((simraw / "osm_piers.geojson").read_text())["type"]
@@ -176,7 +146,8 @@ def test_fetch_bathy_matches_simulator(simraw, raw):
     _recorded(raw, path)
 
 
-def test_fetch_all_records_everything_and_is_idempotent(raw):
+def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch):
+    monkeypatch.setattr(era5, "_client", lambda: FakeCDS(simraw / "era5.nc"))
     fetch_all(CFG)
     on_disk = {p.relative_to(raw).as_posix() for p in raw.rglob("*") if p.is_file()} - {
         "manifest.json"
