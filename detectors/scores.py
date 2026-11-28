@@ -46,10 +46,11 @@ def bh(p, q=PARAMS["fdr_q"]) -> np.ndarray:
     return multipletests(p, alpha=q, method="fdr_bh")[0] if len(p) else np.zeros(0, bool)
 
 
-def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"], perm=PARAMS["gi_perm"], seed=None):
-    """Getis-Ord Gi* z of y = (C + 0.5) / (mu + 0.5) for one week's observed cells; binary DistanceBand weights,
-    self included. This is esda.G_Local(star=True).Zs, the analytic z: `perm` and `seed` only drive esda's
-    permutation p-value, which we don't keep, so the z is deterministic."""
+def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"]) -> np.ndarray:
+    """Getis-Ord Gi* z (Ord & Getis 1995) of y = (C + 0.5) / (mu + 0.5) for one week's observed cells; binary
+    DistanceBand weights, self included. Our own code, not esda (not a dependency): the same analytic z as
+    esda.G_Local(star=True).Zs, which is unchanged by row-standardising the weights. We keep the z, not a
+    permutation p, so there is no permutation count or seed (D6)."""
     y = (np.asarray(C_week, float) + 0.5) / (np.asarray(mu_week, float) + 0.5)
     cells = list(cells)
     n = len(cells)
@@ -65,7 +66,9 @@ def gi_star(C_week, mu_week, cells, band_m=PARAMS["gi_band_m"], perm=PARAMS["gi_
 
 def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarray:
     """Poisson likelihood-ratio CUSUM over one cell's days in date order (A1). NaN C = unobserved day: S stays
-    as it was. Returns S each day before any reset; S restarts at 0 after it exceeds h."""
+    as it was. Returns S each day before any reset; S restarts at 0 after it exceeds h. The increment is divided
+    by max(phi, 1) because A1 writes it so (D2): a quasi-likelihood ratio, so overdispersed counts climb slower,
+    and underdispersed ones (phi < 1) are never made more alarming. h is calibrated on null runs (_calibrate_h)."""
     C, mu, phi = (np.asarray(a, float) for a in (C, mu, phi))
     inc = (C * np.log(rho) - (rho - 1) * mu) / np.maximum(phi, 1)
     out, S = np.empty(len(C)), 0.0
@@ -76,6 +79,37 @@ def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarra
         if S > h:
             S = 0.0
     return out
+
+
+def _alarm_rate(series, h, rho=PARAMS["cusum_rho"]) -> float:
+    """CUSUM alarms per observed cell-quarter (91 days) over `series`, a list of one cell's (C, mu, phi) in date
+    order, NaN C = unobserved day."""
+    alarms = days = 0
+    for C, mu, phi in series:
+        alarms += int((cusum(C, mu, phi, rho, h) > h).sum())
+        days += int(np.isfinite(np.asarray(C, float)).sum())
+    return alarms / days * 91 if days else 0.0
+
+
+def _calibrate_h(
+    series, target=PARAMS["cusum_alarms_per_quarter"], rho=PARAMS["cusum_rho"]
+) -> float:
+    """Smallest h whose alarm rate on null-regime series is <= `target` alarms per cell-quarter (D2), the CUSUM
+    analogue of fuse.combine.calibrate. Candidates are the S values the series reach without resets; the rate
+    falls with h (not strictly, because of resets), so this is a bisection over them."""
+    S = [cusum(C, mu, phi, rho, np.inf) for C, mu, phi in series]
+    cand = np.unique(np.concatenate([s[s > 0] for s in S] + [np.zeros(1)]))
+    lo, hi = (
+        0,
+        len(cand) - 1,
+    )  # the largest S never alarms (alarm = S > h), so hi always meets the target
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _alarm_rate(series, cand[mid], rho) <= target:
+            hi = mid
+        else:
+            lo = mid + 1
+    return float(cand[lo])
 
 
 def _fact(known, yes) -> np.ndarray:
