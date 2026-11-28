@@ -71,6 +71,7 @@ def test_land_mask_buffers_300_m_and_fits_the_contract():
     assert land[:3_000].sum() == 0  # open sea far to the south
 
 
+@pytest.mark.slow
 def test_planted_drop_site_never_masked_and_a_fixed_object_is(sim):
     chips, (sx, sy) = sim
     assert len(chips) == 15

@@ -198,3 +198,40 @@ def test_planted_site_is_a_patrol_candidate(planted):
     tested = out[out["S"] > 0].sort_values("S", ascending=False).head(PARAMS["test_top_k"])
     assert site in set(tested["site_id"])
     assert not out.sort_values("n_slowdowns", ascending=False).head(3)["bh_flag"].any()
+
+
+def test_suppression_never_hides_a_busier_neighbour():
+    """#269: a quiet neighbour with a slightly higher S must not hide a site with more slowdowns."""
+    from fuse.link import suppress
+
+    ranked = pd.DataFrame(
+        {
+            "site_id": ["quiet", "busy", "far"],
+            "x_m": [0.0, 1000.0, 50000.0],
+            "y_m": 0.0,
+            "S": [0.3, 0.0, 0.1],
+            "n_slowdowns": [4, 17, 2],
+        }
+    )
+    assert suppress(ranked)["site_id"].tolist() == ["quiet", "busy", "far"]
+    ranked.loc[1, "n_slowdowns"] = 3  # now quieter than the kept neighbour: suppressed as before
+    assert suppress(ranked)["site_id"].tolist() == ["quiet", "far"]
+
+
+def test_site_flags_off_gives_no_flags_and_says_why(monkeypatch):
+    """#269: while the shift test is replaced, no site is flagged and every reason says so."""
+    from fuse import link
+
+    monkeypatch.setitem(link.PARAMS, "site_flags", False)
+    site = pd.Series(
+        {
+            "site_id": "a",
+            "S": 1.0,
+            "p_perm": 0.001,
+            "n_slowdowns": 3,
+            "recurrence": 1,
+            "followup_unobserved": 0,
+        }
+    )
+    text = " ".join(link.reasons(site, {"flags_off": True, "n_tested": 15, "significant": False}))
+    assert "being replaced" in text and "Worth checking: busy traffic" not in text

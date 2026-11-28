@@ -15,6 +15,8 @@ from core.grid import FINE
 from fuse._common import PARAMS
 from sim.simulate import simulate
 
+pytestmark = pytest.mark.slow  # shared setup >= 12 s (28 Nov); run with `pytest -m slow`
+
 SEEN, UNSEEN = (1, 3), (2,)
 _NAMES = (
     "aggregate/observed",

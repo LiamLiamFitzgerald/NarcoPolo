@@ -289,6 +289,7 @@ def _all_observed() -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.concat(parts, ignore_index=True), fake_sim.cells()
 
 
+@pytest.mark.slow
 def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
     from forecast import forecast_all
 
@@ -327,6 +328,7 @@ def test_undefined_skill_falls_back_to_ewma_and_records_nothing(tmp_path):
     assert not decisions.exists()
 
 
+@pytest.mark.slow
 def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatch):
     """make all's calls on sim.simulate's files: aggregate.run() then forecast.run()."""
     import aggregate
@@ -387,6 +389,7 @@ def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatc
     assert log.read_bytes() == before  # simulated runs record no decision
 
 
+@pytest.mark.slow
 def test_report_coverage_skips_rows_whose_mu_is_unknown():
     """A cell with an unknown covariate has mu = NaN under the GLM; coverage must score the rest, not turn NaN."""
     from forecast import forecast_all
@@ -451,6 +454,7 @@ def test_choose_baseline_records_nothing_without_a_path_and_no_repeats(tmp_path)
     assert decisions.read_text().count("slowdown: ewma") == 1  # a change is written
 
 
+@pytest.mark.slow
 def test_glm_is_fitted_once_per_fold(monkeypatch):
     import forecast
     from forecast import forecast_all

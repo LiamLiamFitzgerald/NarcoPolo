@@ -34,6 +34,7 @@ def test_detection_probability_matches_spec():
     assert abs(_p_det(cfg, 15, 2) - 0.73) < 0.01
 
 
+@pytest.mark.slow
 def test_same_seed_same_files(world, tmp_path_factory):
     data, mp = world
     first = {
@@ -121,6 +122,7 @@ def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
     assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
 
 
+@pytest.mark.slow
 def test_pickups_use_pickup_length_m_and_only_pickups_change(tmp_path):
     """#266: validate's visible world sets sim.pickup_length_m; the default equals small_boat_length_m."""
     cfg, _ = load("config.yaml")
@@ -158,3 +160,15 @@ def test_weather_daily_covers_every_cell_day_with_the_day_weather(world):  # #20
     assert len(on_pass) == len(ex)  # every pass's cell-day has weather
     assert (on_pass["wind_max_ms"] - on_pass["wind_ms"]).abs().max() < 1e-5
     assert (on_pass["hs_max_m"] - on_pass["hs_m"]).abs().max() < 1e-5
+
+
+def test_dist_coast_is_measured_to_the_shoreline():
+    """#245: the shoreline sits SHORE_FRAC into the shore row; the shore row's centre is 200 m from it, not 1000."""
+    from sim.simulate import FINE, NY, SHORE_FRAC, _make_map
+
+    fine = _make_map(load("config.yaml")[0])["fine"]
+    shore = fine.loc[fine["iy"] == NY - 1, "dist_coast_m"]
+    assert shore.eq(SHORE_FRAC * FINE - FINE / 2).all()
+    assert (
+        fine.loc[fine["iy"] == NY - 1, "inshore_frac"].eq(1).all()
+    )  # the inshore band did not move
