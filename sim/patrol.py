@@ -11,7 +11,7 @@ import pandas as pd
 from core import io
 from core.config import load
 
-COLS = ["site_id", "asset", "visited", "found"]
+COLUMNS = ["site_id", "asset", "visited", "found"]
 WEEK = pd.Timedelta(days=7)
 
 
@@ -43,4 +43,4 @@ def patrol_outcome(truth: pd.DataFrame, plan: dict, week: object) -> pd.DataFram
             key = [int(start.value // 86_400_000_000_000), zlib.crc32(f"{sid}|{asset}".encode())]
             hit = np.random.default_rng(key).random() < p_find[asset]
             rows.append((sid, asset, True, bool(near and hit)))
-    return pd.DataFrame(rows, columns=COLS).astype({"visited": bool, "found": bool})
+    return pd.DataFrame(rows, columns=COLUMNS).astype({"visited": bool, "found": bool})

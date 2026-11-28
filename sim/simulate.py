@@ -547,7 +547,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "lo90": poisson.ppf(0.05, mu),
             "hi90": poisson.ppf(0.95, mu),
             "model": "sim_truth",
-            "fold": pd.array([None] * len(f), dtype="Int64"),
+            "fold": pd.array(
+                [0] * len(f), dtype="Int64"
+            ),  # the live forecast, as forecast writes it (#172)
         }
     )
 
