@@ -67,12 +67,13 @@ def test_every_stage_file_reads_back_valid(world):
     )
 
 
-def test_truth_has_planted_drops_about_every_10_days(world):
+def test_truth_has_planted_drops_about_every_10_days_at_irregular_times(world):
     data, _ = world
     truth = pd.read_parquet(data / "sim" / "truth.parquet")
     drops = truth[truth["kind"] == "drop"]["time_utc"].sort_values()
-    assert 9 <= len(drops) <= 13
-    assert 8 <= drops.diff().dt.days.dropna().min() and drops.diff().dt.days.max() <= 12
+    gaps = drops.diff().dt.total_seconds().dropna() / 86400
+    assert 5 <= len(drops) <= 20 and 6 <= gaps.mean() <= 16  # mean drop_interval_days = 10
+    assert gaps.min() >= 0.9 and gaps.std() > 2  # a Poisson process, not a fixed cadence (#177)
     assert (truth["kind"] == "pickup").sum() >= 0.5 * len(drops)  # 0.8 expected
     assert truth[truth["kind"] == "drop"]["cell_id"].nunique() == 1
 

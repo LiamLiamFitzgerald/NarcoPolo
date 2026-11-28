@@ -24,7 +24,9 @@ def cells(tmp_path_factory):
     cfg = tmp / "config.yaml"
     shutil.copy(io.ROOT / "config.yaml", cfg)
     mp.setattr(io, "CONFIG_PATH", cfg)
-    simulate(load(cfg)[0], 20261127)
+    # seed with planted drops inside the scored window: drop gaps are random since #177, and 20261127's last drop
+    # falls before the window, which left the planted-drop test with nothing to find
+    simulate(load(cfg)[0], 20261130)
     import detectors
 
     detectors.run()
@@ -116,6 +118,6 @@ def test_planted_drop_cell_days_are_top_decile_with_agreement(cells):
     drops = truth[truth["kind"] == "drop"].assign(date=lambda t: t["time_utc"].dt.date)
     slow = c[c["event_type"] == "slowdown"].assign(date=lambda t: pd.to_datetime(t["date"]).dt.date)
     hit = slow.merge(drops[["cell_id", "date"]], on=["cell_id", "date"])
-    assert len(hit) > 0
+    assert len(hit) > 0, "no planted drop inside the scored window: pick a seed that has one"
     assert (hit["U"] >= slow["U"].quantile(0.9)).all()
     assert (hit["agreement"] >= 2).all()
