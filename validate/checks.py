@@ -41,7 +41,7 @@ def _within(truth_xy: np.ndarray, det_xy: np.ndarray, metres: float) -> np.ndarr
 
 
 def recall_curve(
-    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[str, bool]
+    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
 ) -> pd.DataFrame:
     """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
     boats = truth[
