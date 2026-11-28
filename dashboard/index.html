@@ -209,7 +209,9 @@ function drawOverlays() {
       const dx = x + r + 7, dy = y - r - 7;
       el("polygon", { points: `${dx},${dy - 6} ${dx + 6},${dy} ${dx},${dy + 6} ${dx - 6},${dy}`, fill: "none", stroke: "#222", "stroke-width": 1.5 }, follow, `${s.followup_unobserved} follow-up days unobserved`);
     }
-    for (let i = 0; i < s.agreement; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, fill: "#222" }, agree, `${s.agreement} of 4 detectors agree`);
+    // D1 (#176): merged signal groups that flag the site, not the raw 0-4 count (its detectors share counts)
+    const nm = s.agreement_merged ?? 0;
+    for (let i = 0; i < nm; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, fill: "#222" }, agree, `${nm} independent signal group(s) agree (angles, not proof)`);
   }
   // beside cells the detectors rate U >= 0.9 this week (the spec's threshold): one dot per agreeing detector
   for (const c of snap.cells.weeks[view.week]) {
@@ -226,8 +228,9 @@ function drawSiteList() {
   for (const s of [...snap.sites].sort((a, b) => b.S - a.S)) {
     const li = document.createElement("li"), head = document.createElement("div");
     const b = document.createElement("strong"); b.textContent = s.id;
-    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = " " + "●".repeat(s.agreement) + "○".repeat(4 - s.agreement);
-    badge.title = `${s.agreement} of 4 detectors agree`;
+    const nm = s.agreement_merged ?? 0; // D1 (#176): merged signal groups, not the raw 0-4 count
+    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = s.agreement_merged === null ? " (agreement not available)" : " " + (nm ? "●".repeat(nm) : "○");
+    badge.title = s.agreement_merged === null ? "agreement not available yet" : `${nm} independent signal group(s) agree (angles, not proof)`;
     head.append(b, badge, ` score ${s.S.toFixed(2)}, p = ${s.p_perm.toFixed(3)}` + (s.bh_flag ? "" : " (not significant)"));
     const why = document.createElement("div"); why.textContent = s.reasons.join("; ");
     const meta = document.createElement("div"); meta.className = "tag";

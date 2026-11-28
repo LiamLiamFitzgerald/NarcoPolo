@@ -115,7 +115,7 @@ def overlap(seeds: Sequence[int], regime: str = "fixed") -> tuple[pd.DataFrame, 
     for i, a in enumerate(AGENTS):
         for b in AGENTS[i + 1 :]:
             kab = kappa(flags[a], flags[b])
-            r = spearmanr(rows[a], rows[b]).statistic
+            r = spearmanr(rows[a], rows[b]).statistic  # pyright: ignore[reportAttributeAccessIssue]
             kap.loc[a, b] = kap.loc[b, a] = float(kab)
             rho.loc[a, b] = rho.loc[b, a] = float(r)
     return kap, rho
@@ -130,9 +130,10 @@ def merge(kap: pd.DataFrame, threshold: float, precision: Mapping[str, float]) -
             a = parent[a]
         return a
 
-    for a in kap.index:
-        for b in kap.columns:
-            if a != b and kap.loc[a, b] >= threshold:
+    vals = kap.to_numpy(float)
+    for i, a in enumerate(kap.index):
+        for j, b in enumerate(kap.columns):
+            if a != b and vals[i, j] >= threshold:
                 parent[root(b)] = root(a)
     groups: dict[str, list[str]] = {}
     for a in kap.index:
@@ -183,7 +184,9 @@ def write_signals_report(seeds: Sequence[int] | None = None) -> Path:
     held = bt[
         bt["regime"].isin(learn["regimes"]["held_out"])
     ]  # merge order: held-out precision (L2 step 3)
-    precision = held.groupby("agent")["precision_at_k"].mean().to_dict()
+    precision = {
+        str(a): float(p) for a, p in held.groupby("agent")["precision_at_k"].mean().items()
+    }
     kap, rho = overlap(seeds)
     agents: dict[str, Any] = {
         a: {

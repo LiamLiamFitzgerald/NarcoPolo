@@ -74,8 +74,9 @@ def test_sea_raster_and_travel_hours_are_schema_valid():
     osm = gpd.GeoDataFrame(
         {"name": ["A", None]}, geometry=[Point(x0 + 5000, y0 + 5000), Point(x0, y0)], crs=32629
     )
-    p = piers.piers(osm, gpd.GeoDataFrame())
+    road = gpd.GeoDataFrame(geometry=[Point(x0 + 5000, y0 + 5100)], crs=32629)
+    p = piers.piers(osm, road)
     check("reference/piers", p)
     th = check("reference/travel_hours", piers.travel_hours(sea, p))
     one = th[(th["cell_id"] == "2000_2_2") & (th["pier_id"] == "pier_0")]["hours"].item()
-    assert one == pytest.approx(0.0)  # pier sits on that cell's centre
+    assert one < 0.01  # pier sits on that cell's centre: under one pixel away

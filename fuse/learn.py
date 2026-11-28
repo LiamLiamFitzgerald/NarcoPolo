@@ -103,11 +103,15 @@ def _agent_pvalues(sites: pd.DataFrame, agents) -> pd.DataFrame:
     return pd.DataFrame(cols, index=sites.index)
 
 
-def _add_learning_columns(sites: pd.DataFrame, q: float) -> pd.DataFrame:
-    """fuse/sites + p_comb, comb_flag, agreement_merged, p_site, model_rung on every row. Agent scores (-log10 p,
-    named by agent) are offered to the site model and not written (the fuse/sites schema is strict)."""
+def _add_learning_columns(
+    sites: pd.DataFrame, q: float, features: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """fuse/sites + p_comb, comb_flag, agreement_merged, p_site, model_rung on every row. `features` are the raw
+    agent scores per site (fuse.features.site_features, R3): they give each agent its null-sample p (score_<agent>)
+    and are the site model's inputs. They are not written (the fuse/sites schema is strict)."""
+    work = sites if features is None else pd.concat([sites, features.add_prefix("score_")], axis=1)
     merged = combine.groups()
-    pv = _agent_pvalues(sites, [a for g in merged for a in g])
+    pv = _agent_pvalues(work, [a for g in merged for a in g])
     p_comb = combine.cct(pv, combine.weights(pv.columns, merged))
     if p_comb.isna().any():  # no agent p at all: "no evidence" (p = 1), never "unusual"
         log.warning("%d sites have no agent p value: p_comb = 1", int(p_comb.isna().sum()))
@@ -120,8 +124,6 @@ def _add_learning_columns(sites: pd.DataFrame, q: float) -> pd.DataFrame:
         comb_flag=combine.flags(p_comb, q, threshold),
         agreement_merged=combine.agreement_merged(pv, merged, q),
     )
-    scores = -np.log10(pv.clip(lower=np.finfo(float).tiny))
-    p_site, rung = _site_value(
-        pd.concat([out, scores.drop(columns=out.columns, errors="ignore")], axis=1), model
-    )
+    x = out if features is None else pd.concat([out, features], axis=1)
+    p_site, rung = _site_value(x, model)
     return out.assign(p_site=p_site.astype(float), model_rung=rung)

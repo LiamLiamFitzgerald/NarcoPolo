@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 import numpy as np
 import pandas as pd
 
-from detect._standin import Split
+from core.split import Split
 from detect.pboat import FEATURES, features, fit_pboat, predict_pboat
 
 BETA = {"const": -6.0, "peak_ratio_vv_db": 0.5, "peak_ratio_vh_db": 0.2, "pol_agree": 1.0, "n_px": 0.1,
@@ -19,6 +19,7 @@ def _injections(n, seed, flip_after_cut=False):
         "ghost": rng.random(n) < 0.1,
         "time_utc": CUT + pd.to_timedelta(rng.uniform(-60, 30, n), unit="D"),
     })  # fmt: skip
+    df["date"] = df["time_utc"].dt.date  # core.Split splits on the date
     eta = BETA["const"] + sum(BETA[f] * df[f].astype(float) for f in FEATURES)
     df["true_p"] = 1 / (1 + np.exp(-eta))
     df["is_boat"] = rng.random(n) < df["true_p"]
@@ -29,7 +30,7 @@ def _injections(n, seed, flip_after_cut=False):
 
 def test_fit_recovers_known_coefficients_and_is_calibrated_out_of_sample():
     df = _injections(20_000, 0)
-    split = Split(CUT)
+    split = Split(CUT.date(), test_days=23)
     m = fit_pboat(df, split)
     for k, b in BETA.items():
         assert abs(m.params[k] - b) < 4 * m.bse[k], k
@@ -49,8 +50,8 @@ def test_fit_recovers_known_coefficients_and_is_calibrated_out_of_sample():
 
 
 def test_fit_never_sees_data_after_the_cutoff():
-    a = fit_pboat(_injections(5000, 1), Split(CUT)).params
-    b = fit_pboat(_injections(5000, 1, flip_after_cut=True), Split(CUT)).params
+    a = fit_pboat(_injections(5000, 1), Split(CUT.date(), test_days=23)).params
+    b = fit_pboat(_injections(5000, 1, flip_after_cut=True), Split(CUT.date(), test_days=23)).params
     assert np.allclose(a, b)
 
 
