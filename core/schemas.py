@@ -12,7 +12,11 @@ import pandera.pandas as pa
 
 
 def _id() -> pa.Column:
-    return pa.Column(nullable=False)
+    """A string key (#171): a numeric pass_id would validate, then never join with the string ones."""
+    # plain Python, so any storage dtype works, including an empty pandas string column (an Arrow-backed
+    # .all() raises on string dtype); empty is fine
+    ok = lambda s: all(isinstance(v, str) for v in s)
+    return pa.Column(checks=pa.Check(ok, error="not a string id"), nullable=False)
 
 
 def _num(
@@ -36,10 +40,18 @@ def _utc() -> pa.Column:
     return pa.Column(checks=pa.Check(ok, error="not timezone-aware UTC"), nullable=False)
 
 
+def _is_date(s: pd.Series) -> bool:
+    """Calendar dates (#171): parseable, timezone-naive and at midnight, so merges on date never drop rows."""
+    d = pd.to_datetime(s, errors="coerce")
+    if isinstance(d.dtype, pd.DatetimeTZDtype):
+        return False
+    return bool(d.notna().all() and (d == d.dt.normalize()).all())
+
+
 def _date() -> pa.Column:
-    ok = lambda s: bool(pd.to_datetime(s, errors="coerce").notna().all())
     return pa.Column(
-        checks=pa.Check(ok, element_wise=False, error="not calendar dates"), nullable=False
+        checks=pa.Check(_is_date, element_wise=False, error="not calendar dates (naive, midnight)"),
+        nullable=False,
     )
 
 

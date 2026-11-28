@@ -1,6 +1,7 @@
 import http.server
 import json
 import re
+import subprocess
 import sys
 import threading
 import urllib.request
@@ -28,6 +29,28 @@ def test_page_loads_nothing_from_the_internet():
 def test_page_computes_no_scores():
     # the browser may sort and format; it must not derive any statistic (docs/specs/P7.md)
     assert not re.search(r"Math\.(log|exp|sqrt|pow)\b|\.reduce\(", HTML)
+
+
+def test_site_list_ranks_by_p_site_then_s():
+    # D1 (#176): p_site ranks sites, S breaks ties; sites without p_site follow, by S
+    src = re.search(r"function siteOrder\(.*?\n\}\n", HTML, re.DOTALL)
+    assert src, "siteOrder not found"
+    sites = [
+        {"id": "a", "p_site": 0.2, "S": 9.0},
+        {"id": "b", "p_site": 0.8, "S": 1.0},
+        {"id": "c", "p_site": 0.8, "S": 5.0},
+        {"id": "d", "S": 7.0},
+        {"id": "e", "p_site": None, "S": 8.0},
+    ]
+    js = (
+        src.group(0)
+        + f"console.log(JSON.stringify({json.dumps(sites)}.sort(siteOrder).map(s => s.id)))"
+    )
+    # the node binary that ships with basedpyright (dev dependency), so no new tool
+    out = subprocess.run(
+        [sys.executable, "-m", "nodejs_wheel", "-e", js], capture_output=True, text=True, check=True
+    ).stdout
+    assert json.loads(out) == ["c", "b", "a", "e", "d"]
 
 
 def test_main_falls_back_to_the_browser_without_pywebview(monkeypatch):

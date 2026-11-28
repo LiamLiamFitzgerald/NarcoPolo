@@ -221,11 +221,18 @@ function drawOverlays() {
   }
 }
 
+// D1 (#176): p_site ranks sites (highest first), S breaks ties; sites without p_site come after, by S
+function siteOrder(a, b) {
+  const pa = a.p_site ?? null, pb = b.p_site ?? null;
+  if (pa !== pb) return pa === null ? 1 : pb === null ? -1 : pb - pa;
+  return b.S - a.S;
+}
+
 function drawSiteList() {
   const ol = document.getElementById("sites");
   ol.replaceChildren();
   const pierName = id => snap.piers.find(p => p.id === id)?.name ?? id;
-  for (const s of [...snap.sites].sort((a, b) => b.S - a.S)) {
+  for (const s of [...snap.sites].sort(siteOrder)) {
     const li = document.createElement("li"), head = document.createElement("div");
     const b = document.createElement("strong"); b.textContent = s.id;
     const nm = s.agreement_merged ?? 0; // D1 (#176): merged signal groups, not the raw 0-4 count
