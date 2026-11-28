@@ -113,7 +113,9 @@ def test_same_seed_and_state_give_the_same_plan_and_it_passes_the_contract():
     check_json("patrol/plan", {"ship": p1})
     for s in p1[1:-1]:
         assert 0 <= s["theta"] <= 1 and s["reason"] in ("exploit", "explore")
-    assert "theta" not in p1[0] and not any(s.get("exploration") for s in p1)
+    assert "theta" not in p1[0] and "exploration" not in p1[0]
+    # D3 (#176): the Thompson draw is the one exploration method; its "explore" stops are the exploration visits
+    assert all(s.get("exploration", False) == (s["reason"] == "explore") for s in p1[1:-1])
     assert {_bandit_plan(sites, st, s)[1]["id"] for s in range(30)} != {p1[1]["id"]}  # it explores
 
 
