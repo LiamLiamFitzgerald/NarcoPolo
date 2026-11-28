@@ -66,3 +66,10 @@ def test_real_match_writes_dark_small_and_presence_slowdowns(tmp_path, monkeypat
     slow = ev[ev["event_type"] == "slowdown"]
     assert slow["duration_min"].gt(0).all() and slow["ship_key"].isna().all()
     assert not ev[ev["event_type"] == "dark_small"]["matched"].any()
+    # #344: every unmatched medium detection is also a dark_medium event, and stays in dark_small
+    dets = io.read_stage("detect/detections")
+    medium = set("dark_medium-" + dets.loc[dets["size_class"] == "medium", "det_id"])
+    dm = ev[ev["event_type"] == "dark_medium"]
+    ds = set(ev.loc[ev["event_type"] == "dark_small", "event_id"])
+    assert len(dm) and set(dm["event_id"]) <= medium and not dm["matched"].any()
+    assert set(dm["event_id"].str.replace("dark_medium-", "dark_small-")) <= ds

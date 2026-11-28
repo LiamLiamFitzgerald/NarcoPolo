@@ -166,7 +166,7 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   slowdown_rate_hot: 1.0         # ship slowdowns per cell-day in the anchorage and port zones
   slowdown_rate_cold: 0.01       # ... everywhere else
   pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
-  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fixed_targets: 11}
+  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10, fixed_targets: 11, fishing: 12, illegal_fishing: 13}
   stand_in_sites: 15         # TODO(P1) #104: extra fuse/sites rows with no drops, so P7 has 16+ sites to rank and route
   site_gap_m: 4000           # A2: no site within 4 km of another
   fixed_targets:             # TODO(P1) #334: none of these are in the spec; a stack for the fixed-target suppression test
@@ -176,6 +176,14 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
     fixed_db: 20             # peak over the sea mean, = sim/scenes.py SHIP_DB
     boats_per_pass: 15
     boat_db: [3, 12]         # small-boat peak over the sea mean at the two ends of pickup_length_m, linear in length
+  # #346 fishing boats and planted illegal fishing (fisheries lens #321). TODO(P1): none of these values is in a spec;
+  # chosen so the simulator has a steady medium-size fleet and an illegal-fishing surplus the weekly lens can find
+  fishing_rate_inshore: 0.5      # TODO(P1): medium-size fishing boats per full-sea cell-day where inshore_frac = 1
+  fishing_rate_offshore: 0.05    # TODO(P1): ... where inshore_frac = 0 (linear in between); a cell's rate x its sea_frac
+  fishing_boat_length_m: [8, 12] # TODO(P1): the sim's "medium" size_class (8 <= L < 12 m, as its detection rows assign it)
+  fishing_ais_frac: 0.2          # TODO(P1): share of normal fishing boats with AIS: matched, so no dark_medium event
+  illegal_fishing_rate: 20       # TODO(P1): extra dark medium-size boats per full-sea cell-day inside the closure ...
+  illegal_fishing_weeks: [12, 13, 14]  # TODO(P1): ... in these ISO weeks, counted from the first Monday (day 3, 2026-08-03)
 
 # A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
 # Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
@@ -205,6 +213,7 @@ reads:
   reference/cells: [x0, y0, region_bbox, reference]
   reference/piers: [x0, y0, region_bbox, reference]
   reference/land: [x0, y0, region_bbox, reference]
+  reference/closed_areas: [x0, y0, region_bbox, reference]   # #322
   reference/travel_hours: [x0, y0, region_bbox, reference]
   reference/presence_2km: [x0, y0, region_bbox, reference]
   coverage/weather_daily: [x0, y0, region_bbox, coverage]
@@ -218,6 +227,7 @@ reads:
   fuse/sites: [x0, y0, region_bbox]
   fuse/piers: [x0, y0, region_bbox]
   fuse/links: [x0, y0, region_bbox]
+  fuse/fisheries: [x0, y0, region_bbox]   # #346: the same keys as fuse/sites
 
 # Learning layer (docs/learning.md). Values not given by a source are TODO(P1): tune on train regimes only.
 learn:

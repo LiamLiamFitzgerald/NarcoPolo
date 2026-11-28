@@ -30,6 +30,13 @@ SITE_COLS = [
     "site_id", "x_m", "y_m", "n_slowdowns", "S", "p_perm", "bh_flag", "recurrence",
     "followup_unobserved", "agreement", "reasons", "top_piers",
 ]  # fmt: skip
+# #322 / #346: simulated closed areas as inclusive (ix_lo, ix_hi, iy_lo, iy_hi) blocks of 2 km cells, outside the
+# planted site's ix range (10-65), so neither the drop site nor a stand-in site can fall inside one. The closure spans
+# offshore and inshore cells and gets the planted illegal fishing; the protected area is a control with none.
+CLOSED_AREAS = {
+    "closure": ("area_0", "Closure A (simulated)", (66, 71, 8, 12)),
+    "protected_area": ("area_1", "Protected area B (simulated)", (0, 3, 5, 9)),
+}
 NX, NY = 75, 13  # 150 km along the coast x 26 km out: 975 fine cells; iy = NY - 1 touches the shore
 SHORE_FRAC = 0.6  # the shore row is 60% sea
 KN = 0.514444
@@ -138,11 +145,123 @@ def _make_map(cfg: Config) -> dict:
             "road_access": [True, True, False, True, False, True],
         }
     )
+    start = pd.Timestamp(cfg["sim"]["start_date"])
+    areas = gpd.GeoDataFrame(
+        {
+            "area_id": [a for a, _, _ in CLOSED_AREAS.values()],
+            "name": [nm for _, nm, _ in CLOSED_AREAS.values()],
+            "type": list(CLOSED_AREAS),
+            # the closure has published dates (the whole season), the protected area none: both cases exist
+            "start_date": [start, pd.NaT],
+            "end_date": [start + pd.Timedelta(days=int(cfg["sim"]["days"]) - 1), pd.NaT],
+        },
+        geometry=[
+            box(x0 + a * FINE, y0 + c * FINE, x0 + (b + 1) * FINE, y0 + (d + 1) * FINE)
+            for _, _, (a, b, c, d) in CLOSED_AREAS.values()
+        ],
+        crs=32629,
+    )
     return {
         "fine": fine,
         "cells": cells,
         "piers": gpd.GeoDataFrame(piers, geometry="geometry", crs=32629),
+        "closed_areas": areas,
     }
+
+
+def _in_area(fine: pd.DataFrame, kind: str) -> np.ndarray:
+    a, b, c, d = CLOSED_AREAS[kind][2]
+    return (fine["ix"].between(a, b) & fine["iy"].between(c, d)).to_numpy()
+
+
+def _fishing_rate(cfg: Config, fine: pd.DataFrame) -> np.ndarray:
+    """Normal medium-size fishing boats per cell-day: linear in inshore_frac, per full-sea cell, times sea_frac."""
+    s, f = cfg["sim"], fine["inshore_frac"].to_numpy()
+    full = s["fishing_rate_inshore"] * f + s["fishing_rate_offshore"] * (1 - f)
+    return full * fine["sea_frac"].to_numpy()
+
+
+def _illegal_days(cfg: Config, days: int) -> np.ndarray:
+    """Day indices of the planted illegal-fishing ISO weeks (week k = days 3 + 7k .. 9 + 7k; day 3 is a Monday)."""
+    out = np.concatenate(
+        [np.arange(3 + 7 * k, 10 + 7 * k) for k in cfg["sim"]["illegal_fishing_weeks"]] or [[]]
+    )
+    return out[out < days].astype(int)
+
+
+def _fishing(
+    cfg: Config, seed: int, fine: pd.DataFrame, passes: pd.DataFrame, weather: pd.DataFrame
+) -> dict:
+    """#346: normal fishing boats (inshore grounds, steady rate, mostly no AIS) and planted illegal fishing (extra dark
+    boats in the closure during illegal_fishing_weeks), observed with the small boats' rules (calm passes, p_det).
+    Two seed streams of their own, so every other stream draws exactly what it drew before."""
+    s, days = cfg["sim"], int(cfg["sim"]["days"])
+    x0, y0 = _origin()
+    n = len(fine)
+    rng = _rng(cfg, "fishing", seed)
+    normal = rng.poisson(np.broadcast_to(_fishing_rate(cfg, fine), (days, n)))
+    illegal = np.zeros((days, n), int)
+    closed, idays = np.flatnonzero(_in_area(fine, "closure")), _illegal_days(cfg, days)
+    irng = _rng(cfg, "illegal_fishing", seed)
+    rate = s["illegal_fishing_rate"] * fine["sea_frac"].to_numpy()[closed]
+    illegal[np.ix_(idays, closed)] = irng.poisson(np.broadcast_to(rate, (len(idays), len(closed))))
+    parts = []
+    for counts, kind, g in ((normal, "fishing_boat", rng), (illegal, "illegal_fishing", irng)):
+        d, c = np.nonzero(counts)
+        d, c = np.repeat(d, counts[d, c]), np.repeat(c, counts[d, c])
+        k = len(d)
+        ais = g.random(k) < s["fishing_ais_frac"] if kind == "fishing_boat" else np.zeros(k, bool)
+        parts.append(
+            pd.DataFrame(
+                {
+                    "kind": np.where(ais, "fishing_boat_ais", kind),
+                    "day": d + g.random(k),
+                    "cell": c,
+                    "x_m": x0 + (fine["ix"].to_numpy()[c] + g.random(k)) * FINE,
+                    # on the water: the shore row's sea is its southern sea_frac
+                    "y_m": y0
+                    + (fine["iy"].to_numpy()[c] + g.random(k) * fine["sea_frac"].to_numpy()[c])
+                    * FINE,
+                    "length_m": g.uniform(*s["fishing_boat_length_m"], k),
+                    "ais": ais,
+                }
+            )
+        )
+    boats = pd.concat(parts, ignore_index=True)
+    # observation: the small boats' rules, with the fishing stream
+    bday = boats["day"].astype(int).to_numpy()
+    pass_of_day = {int(r.day): i for i, r in enumerate(passes.itertuples())}
+    bpass = np.array([pass_of_day.get(int(v), -1) for v in bday], dtype=int)
+    bxc = (boats["x_m"].to_numpy() - x0) / FINE
+    inside = (
+        (bpass >= 0)
+        & (bxc >= passes["a"].to_numpy()[bpass])
+        & (bxc <= passes["b"].to_numpy()[bpass])
+    )
+    calm_b = inside & ~weather["rough"].to_numpy()[bday]
+    wind_b = weather["wind_ms"].to_numpy()[bday]
+    boats["detected"] = calm_b & (
+        rng.random(len(boats)) < _p_det(cfg, boats["length_m"].to_numpy(), wind_b)
+    )
+    boats["pass"] = np.where(inside, bpass, -1)
+    b = boats[boats["detected"]]
+    k, L = len(b), b["length_m"].to_numpy()
+    vv = 6 + 0.4 * (L - 6) + rng.normal(0, 1, k)
+    det = pd.DataFrame(
+        {
+            "k": b["pass"].to_numpy(),
+            "x_m": b["x_m"].to_numpy() + rng.normal(0, 30, k),
+            "y_m": b["y_m"].to_numpy() + rng.normal(0, 30, k),
+            "vv": vv,
+            "vh": vv - 3 + rng.normal(0, 1, k),
+            "pol_agree": rng.random(k) < 0.8,
+            "n_px": np.maximum(1, np.round(L / 5)).astype(int),
+            "size_class": np.where(L < 8, "small", np.where(L < 12, "medium", "large")),
+            "p_boat": np.clip(0.75 + rng.normal(0, 0.1, k), 0.05, 0.99),
+            "ais": b["ais"].to_numpy(),
+        }
+    )
+    return {"boats": boats, "det": det}
 
 
 def _make_weather(cfg: Config, days: int, seed: int) -> pd.DataFrame:
@@ -156,6 +275,87 @@ def _make_weather(cfg: Config, days: int, seed: int) -> pd.DataFrame:
     wind = np.clip(wind, 0.5, None)
     hs = np.clip(0.025 * wind**2 + rng.normal(0, 0.15, days), 0.1, None)
     return pd.DataFrame({"wind_ms": wind, "hs_m": hs, "rough": wind >= cfg["sim"]["rough_wind_ms"]})
+
+
+def _bh(p: np.ndarray, q: float) -> np.ndarray:
+    """Benjamini-Hochberg flags at level q."""
+    out = np.zeros(len(p), bool)
+    order = np.argsort(p)
+    passed = p[order] <= q * (np.arange(1, len(p) + 1) / max(len(p), 1))
+    if passed.any():
+        out[order[: np.flatnonzero(passed).max() + 1]] = True
+    return out
+
+
+def _fisheries(
+    cfg: Config,
+    f: pd.DataFrame,
+    mu: np.ndarray,
+    dates: dict[int, date],
+    fine: pd.DataFrame,
+    travel: pd.DataFrame,
+    piers: pd.DataFrame,
+) -> pd.DataFrame:
+    """fuse/fisheries stand-in (#346), the simulator's own code: observed dark_medium cell-days summed per ISO week
+    (Monday), Poisson mid-p of the weekly count, BH at fdr_q over all cell-weeks; candidates are flagged with
+    y_fish > 1. The range uses the daily Poisson 90% bounds summed over the week. in_closed_area: the cell lies in a
+    simulated closed area (the sim's areas are whole cells). Harbours: the 3 road-access piers nearest by sea."""
+    keep = f["event_type"].to_numpy() == "dark_medium"
+    m = pd.DataFrame(
+        {
+            "cell_id": f["cell_id"].to_numpy()[keep],
+            "week": [
+                dates[d] - timedelta(days=dates[d].weekday()) for d in f["day"].to_numpy()[keep]
+            ],
+            "count": f["count"].to_numpy()[keep],
+            "mu": mu[keep],
+            "lo": poisson.ppf(0.05, mu[keep]),
+            "hi": poisson.ppf(0.95, mu[keep]),
+        }
+    )
+    w = m.groupby(["cell_id", "week"], as_index=False, sort=True)[["count", "mu", "lo", "hi"]].sum()
+    c = np.round(w["count"].to_numpy())
+    w["p_mid"] = poisson.sf(c, w["mu"]) + 0.5 * poisson.pmf(c, w["mu"])
+    w["flag"] = _bh(w["p_mid"].to_numpy(), cfg["p6"]["fdr_q"])
+    top = w["count"] + 0.5
+    w["y_fish"], w["y_fish_lo"], w["y_fish_hi"] = (
+        top / (w["mu"] + 0.5),
+        top / (w["hi"] + 0.5),
+        top / (w["lo"] + 0.5),
+    )
+    w = w[w["flag"] & (w["y_fish"] > 1)].sort_values(["p_mid", "y_fish"], ascending=[True, False])
+    inside = dict(
+        zip(
+            fine["cell_id"],
+            _in_area(fine, "closure") | _in_area(fine, "protected_area"),
+            strict=True,
+        )
+    )
+    road = travel[travel["pier_id"].isin(piers.loc[piers["road_access"], "pier_id"])]
+    near = {
+        k: g.nsmallest(3, "hours")
+        for k, g in road[road["cell_id"].isin(set(w["cell_id"]))].groupby("cell_id")
+    }
+    rows = []
+    for cell, cnt, mu_ in zip(w["cell_id"], w["count"], w["mu"], strict=True):
+        h = near[cell]
+        said = f"{cnt:.1f} unmatched medium-size boats this week where {mu_:.1f} were expected"
+        rows.append(
+            {
+                "in_closed_area": inside[cell],
+                "reasons": [
+                    f"{said}: unusual, worth checking (simulated stand-in)",
+                    "inside a closed area" if inside[cell] else "outside closed areas",
+                ],
+                "top_harbours": h["pier_id"].astype(str).tolist(),
+                "top_harbours_hours": h["hours"].astype(float).tolist(),
+            }
+        )
+    extra = pd.DataFrame(
+        rows, columns=["in_closed_area", "reasons", "top_harbours", "top_harbours_hours"]
+    )
+    out = w.reset_index(drop=True).drop(columns=["lo", "hi"]).join(extra)
+    return out.assign(in_closed_area=out["in_closed_area"].astype("boolean"), lens="fisheries")
 
 
 def _day_time(start: date, day: float) -> pd.Timestamp:
@@ -177,7 +377,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     h0 = min(0, days - int(config["ship_history_days"]))
     x0, y0 = _origin()
     m = _make_map(config)
-    fine, cells, piers = m["fine"], m["cells"], m["piers"]
+    fine, cells, piers, areas = m["fine"], m["cells"], m["piers"], m["closed_areas"]
     n = len(fine)
     weather = _make_weather(config, days, seed)
     rough = weather["rough"].to_numpy()
@@ -446,15 +646,31 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         }
     )
 
+    # #346: fishing boats on their own streams; their detections follow the small boats' rows, so those keep their ids
+    fishing = _fishing(config, seed, fine, passes, weather)
+    fdet = fishing["det"]
+    fish_detections = pd.DataFrame(
+        {
+            "det_id": [f"det_{i:05d}" for i in range(len(det), len(det) + len(fdet))],
+            "pass_id": passes["pass_id"].to_numpy()[fdet["k"].astype(int)],
+            "time_utc": passes["time_utc"].iloc[fdet["k"].astype(int)].reset_index(drop=True),
+            "x_m": fdet["x_m"],
+            "y_m": fdet["y_m"],
+            "peak_ratio_vv_db": fdet["vv"],
+            "peak_ratio_vh_db": fdet["vh"],
+            "pol_agree": fdet["pol_agree"],
+            "n_px": fdet["n_px"],
+            "size_class": fdet["size_class"],
+            "ghost": np.zeros(len(fdet), bool),
+            "p_boat": fdet["p_boat"],
+        }
+    )
+
     # events: dark small boats from non-ghost detections, slowdowns from ships
     def cid(x: np.ndarray, y: np.ndarray) -> np.ndarray:
         i = np.clip(np.floor((np.asarray(x) - x0) / FINE), 0, NX - 1).astype(int)
         j = np.clip(np.floor((np.asarray(y) - y0) / FINE), 0, NY - 1).astype(int)
         return _ids(i, j)
-
-    det_cells = cid(
-        detections["x_m"].to_numpy(), detections["y_m"].to_numpy()
-    )  # for validate/pboat_training
 
     dk = detections[~detections["ghost"]]
     dark = pd.DataFrame(
@@ -485,7 +701,30 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "matched": True,
         }
     )
-    events = pd.concat([dark, slow], ignore_index=True)
+    # #344 stand-in: a fishing detection without AIS is a dark_medium event (p = p_boat); with AIS it is matched, so
+    # no event. The small-boat stream keeps its old rule (every non-ghost detection is dark_small) so `fixed` is
+    # unchanged; its 8-12 m boats are "medium" by size_class too (DECISIONS.md)
+    fm = fish_detections[~fdet["ais"].to_numpy()]
+    medium = pd.DataFrame(
+        {
+            "event_id": [f"ev_m_{i:05d}" for i in range(len(fm))],
+            "event_type": "dark_medium",
+            "time_utc": fm["time_utc"],
+            "x_m": fm["x_m"],
+            "y_m": fm["y_m"],
+            "cell_id": cid(fm["x_m"].to_numpy(), fm["y_m"].to_numpy()),
+            "p": fm["p_boat"],
+            "duration_min": np.nan,
+            "ship_key": None,
+            "matched": False,
+        }
+    )
+    events = pd.concat([dark, slow, medium], ignore_index=True)
+    det_label = np.concatenate([det["label"].to_numpy(bool), np.ones(len(fish_detections), bool)])
+    detections = pd.concat([detections, fish_detections], ignore_index=True)
+    det_cells = cid(
+        detections["x_m"].to_numpy(), detections["y_m"].to_numpy()
+    )  # for validate/pboat_training
 
     # aggregate/observed: full grid, unobserved rows kept with count 0 and exposure 0
     events["day"] = (
@@ -504,8 +743,8 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         .sum()
     )
     parts = []
-    for et in ("dark_small", "slowdown"):
-        span = range(days) if et == "dark_small" else range(h0, days)  # radar vs ship history
+    for et in ("dark_small", "slowdown", "dark_medium"):
+        span = range(h0, days) if et == "slowdown" else range(days)  # ship history vs radar
         full = pd.MultiIndex.from_product([cell_ids, span], names=["cell_id", "day"])
         c = (
             events[events["event_type"] == et]
@@ -514,8 +753,8 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             .reindex(full, fill_value=0.0)
         )
         e = (
-            ex_day.reindex(full, fill_value=0.0)
-            if et == "dark_small"
+            ex_day.reindex(full, fill_value=0.0)  # dark_medium: the same calm-pass exposure (#345)
+            if et != "slowdown"
             else pd.Series(
                 np.tile(fine["sea_frac"].to_numpy()[:, None], (1, len(span))).ravel(), index=full
             )
@@ -527,10 +766,18 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     )
     obs["level"] = FINE
     pmap = dict(zip(fine["cell_id"], fine["pcell"], strict=True))
-    coarse = (
-        obs.assign(cell_id=obs["cell_id"].map(pmap))
-        .groupby(["cell_id", "day", "event_type"], as_index=False)[["count", "exposure"]]
-        .sum()
+    new = (
+        obs["event_type"].eq("dark_medium").to_numpy()
+    )  # coarse rows per group, so the old ones keep their order
+    coarse = pd.concat(
+        [
+            obs[g]
+            .assign(cell_id=obs.loc[g, "cell_id"].map(pmap))
+            .groupby(["cell_id", "day", "event_type"], as_index=False)[["count", "exposure"]]
+            .sum()
+            for g in (~new, new)
+        ],
+        ignore_index=True,
     )
     coarse["level"] = COARSE
     observed = pd.concat([obs, coarse], ignore_index=True)
@@ -550,8 +797,21 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     small_rate = (
         lam * (0.75 * pdet_day)[:, None] + s["false_alarm_per_km2_pass"] * (FINE / 1000) ** 2 * 0.15
     )
-    is_small = (f["event_type"] == "dark_small").to_numpy()
-    rate = np.where(is_small, small_rate[np.where(is_small, f["day"], 0), ci_], ship_rate[ci_])
+    # dark_medium: the normal fleet without AIS x P(detected) x mean p_boat; illegal fishing is the unexpected part
+    fish_len = np.linspace(*s["fishing_boat_length_m"], 50)
+    pdet_fish = np.array([_p_det(config, fish_len, w).mean() for w in weather["wind_ms"]])
+    fish_rate = (
+        (_fishing_rate(config, fine) / fine["sea_frac"].to_numpy())[None, :]  # per unit exposure
+        * (1 - s["fishing_ais_frac"])
+        * (0.75 * pdet_fish)[:, None]
+    )
+    et_ = f["event_type"].to_numpy()
+    d_ = np.where(et_ == "slowdown", 0, f["day"].to_numpy())  # slowdown days may be < 0
+    rate = np.select(
+        [et_ == "dark_small", et_ == "dark_medium"],
+        [small_rate[d_, ci_], fish_rate[d_, ci_]],
+        ship_rate[ci_],
+    )
     mu = f["exposure"].to_numpy() * rate
     expected = pd.DataFrame(
         {
@@ -570,14 +830,12 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     )
 
     # fuse/cells: observed rows only; mid-p tail, Benjamini-Hochberg at q = 0.1
-    seen = f["exposure"].to_numpy() > 0
+    # dark_medium is left out of this stand-in (P6 decides whether it enters fuse/cells); it feeds fuse/fisheries
+    fisheries_in = f["exposure"].to_numpy() > 0
+    seen = fisheries_in & (f["event_type"].to_numpy() != "dark_medium")
     ci = np.round(f["count"].to_numpy()[seen])
     pmid = poisson.sf(ci, mu[seen]) + 0.5 * poisson.pmf(ci, mu[seen])
-    order = np.argsort(pmid)
-    passed = pmid[order] <= 0.1 * (np.arange(1, len(pmid) + 1) / len(pmid))
-    bh = np.zeros(len(pmid), bool)
-    if passed.any():
-        bh[order[: np.flatnonzero(passed).max() + 1]] = True
+    bh = _bh(pmid, 0.1)
     u = pd.Series(-pmid).rank(pct=True).to_numpy()
     fc = f[seen]
     fuse_cells = pd.DataFrame(
@@ -728,8 +986,10 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     ].assign(
         cell_id=det_cells,
         date=pd.to_datetime(detections["time_utc"]).dt.date,
-        label=det["label"].to_numpy(bool),
+        label=det_label,
     )
+
+    fisheries = _fisheries(config, f[fisheries_in], mu[fisheries_in], dates, fine, travel, piers)
 
     # coverage/weather_daily (#208): the weather is uniform and constant through each day, so the daily max is the
     # day's value in every cell; float32 as sim/raw.py stores it in era5.nc
@@ -745,6 +1005,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     for name, frame in {
         "reference/cells": gpd.GeoDataFrame(cells, crs=32629),
         "reference/piers": piers,
+        "reference/closed_areas": areas,
         "reference/land": gpd.GeoDataFrame(  # north of the shore line, as raw/coastline.gpkg draws it
             {"id": [0]},
             geometry=[box(x0, y0 + (NY - 1 + SHORE_FRAC) * FINE, x0 + NX * FINE, y0 + NY * FINE)],
@@ -762,6 +1023,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         "fuse/sites": sites,
         "fuse/piers": fuse_piers,
         "fuse/links": fuse_links,
+        "fuse/fisheries": fisheries,
     }.items():
         io.write_stage(name, frame, "simulated")
 
@@ -770,9 +1032,11 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         {"latest": {"radar": last, "gfw_presence": last, "gfw_sar": last, "era5": last}}
     )
 
+    fb = fishing["boats"].drop(columns="ais")
     world = SimWorld(
-        config, seed, start, days, fine, weather, passes, boats, ships, detections, history_start=h0
-    )
+        config, seed, start, days, fine, weather, passes,
+        pd.concat([boats, fb], ignore_index=True), ships, detections, history_start=h0,
+    )  # fmt: skip
     write_scenes(world)
     write_static(world)
     write_raw(world)  # last: the manifest lists every file the others wrote
@@ -811,6 +1075,29 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             ].assign(site_id=None, active=False),
             planted("drop", drop_days, drop_cells, True),
             *([planted("visit", visit_days, visit_cells, False)] if len(visit_days) else []),
+            # #346: every fishing boat (kind fishing_boat, fishing_boat_ais or illegal_fishing), after the old rows
+            fb.assign(
+                time_utc=pd.Series(
+                    [_day_time(start, v) for v in fb["day"]], dtype="datetime64[ns, UTC]"
+                ),
+                cell_id=cell_ids[fb["cell"].to_numpy()],
+                pass_index=fb["pass"],
+                site_id=None,
+                active=False,
+            )[
+                [
+                    "kind",
+                    "time_utc",
+                    "x_m",
+                    "y_m",
+                    "cell_id",
+                    "length_m",
+                    "detected",
+                    "pass_index",
+                    "site_id",
+                    "active",
+                ]
+            ],
         ],
         ignore_index=True,
     ).assign(regime=regime)

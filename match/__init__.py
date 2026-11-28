@@ -1,4 +1,4 @@
-"""P4 match: GFW/AIS matching, dark_small and slowdown events."""
+"""P4 match: GFW/AIS matching, dark_small, dark_medium and slowdown events."""
 
 import logging
 
@@ -10,6 +10,7 @@ from core.crs import to_utm
 from core.grid import FINE, centroid
 from match._common import cell_ids
 from match.events import (
+    _dark_medium_events,
     dark_small_events,
     match,
     ship_key,
@@ -56,8 +57,8 @@ def run() -> None:
 
     Simulator: `make sim` already wrote the events file; it is re-validated and kept (detect keeps the
     simulator's detections, so there is nothing new to match).
-    Real data: dark_small from detect/detections and raw/gfw_sar; slowdowns from reference/presence_2km and
-    coverage/weather_daily (#208).
+    Real data: dark_small and dark_medium (#344) from detect/detections and raw/gfw_sar; slowdowns from
+    reference/presence_2km and coverage/weather_daily (#208).
     """
     if io.read_provenance("detect/detections") == "simulated":
         io.write_stage("match/events", io.read_stage("match/events"), "simulated")
@@ -74,4 +75,6 @@ def run() -> None:
     slow = slowdowns_from_presence(
         io.read_stage("reference/presence_2km"), cells, io.read_stage("coverage/weather_daily")
     )
-    write_events(dark_small_events(dets[known]), slow, provenance="real")
+    write_events(
+        dark_small_events(dets[known]), _dark_medium_events(dets[known]), slow, provenance="real"
+    )

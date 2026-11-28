@@ -65,6 +65,19 @@ def dark_small_events(dets: pd.DataFrame) -> pd.DataFrame:
     }).reset_index(drop=True)  # fmt: skip
 
 
+def _dark_medium_events(dets: pd.DataFrame) -> pd.DataFrame:
+    """Unmatched medium detections -> dark_medium events (#344), for the fisheries lens.
+
+    The same rows also stay in dark_small (spec: dark_small covers small and medium; DECISIONS.md #344), so each
+    event type is a complete count on its own. Same columns and rules as dark_small, calm passes only.
+    """
+    ev = dark_small_events(dets[dets["size_class"] == "medium"])
+    return ev.assign(
+        event_type="dark_medium",
+        event_id=ev["event_id"].str.replace("dark_small-", "dark_medium-", n=1, regex=False),
+    )
+
+
 def _outside_exclusion_and_calm(
     ev: pd.DataFrame, cells: pd.DataFrame, weather: pd.DataFrame
 ) -> pd.DataFrame:
@@ -184,7 +197,7 @@ def ship_key(ship_id) -> str:
 def write_events(
     *frames: pd.DataFrame, provenance: Literal["simulated", "real"] = "real"
 ) -> pd.DataFrame:
-    """Write the dark_small and slowdown frames as the events stage file through core.io (schema check, config
+    """Write the dark_small, dark_medium and slowdown frames as the events stage file through core.io (schema check, config
     hash, provenance). Refuses any raw ship identifier column. Returns the frame it wrote."""
     raw = RAW_ID_COLUMNS & {c.lower() for f in frames for c in f.columns}
     if raw:

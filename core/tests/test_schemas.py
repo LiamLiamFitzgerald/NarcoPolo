@@ -30,6 +30,30 @@ VALID = {
     ),
     "reference/piers": row(pier_id="p1", name="Pier", geometry=Point(1, 1), road_access=True),
     "reference/land": row(id=0, geometry=box(0, 0, 2000, 1000)),
+    "reference/closed_areas": row(
+        area_id="a1",
+        name="Closure A",
+        type="closure",
+        start_date=pd.Timestamp("2026-08-01"),
+        end_date=pd.Timestamp("2026-11-27"),
+        geometry=box(0, 0, 2000, 2000),
+    ),
+    "fuse/fisheries": row(
+        cell_id="2000_0_0",
+        week=pd.Timestamp("2026-11-23").date(),
+        count=4.0,
+        mu=0.5,
+        y_fish=4.5,
+        y_fish_lo=2.0,
+        y_fish_hi=9.0,
+        p_mid=0.001,
+        flag=True,
+        in_closed_area=True,
+        reasons=["unusual: worth checking"],
+        top_harbours=["p1", "p2"],
+        top_harbours_hours=[0.5, 1.0],
+        lens="fisheries",
+    ),
     "reference/travel_hours": row(cell_id="2000_0_0", pier_id="p1", hours=0.5),
     "coverage/exposure": row(
         cell_id="2000_0_0",
@@ -172,6 +196,21 @@ def test_every_schema_has_a_valid_example():
         ("coverage/weather_daily", {"wind_max_ms": -1.0}),
         ("validate/pboat_training", {"n_px": 0}),
         ("validate/pboat_training", {"label": None}),
+        ("match/events", {"event_type": "dark_large"}),
+        ("reference/closed_areas", {"type": "park"}),
+        ("reference/closed_areas", {"start_date": pd.Timestamp("2026-12-01")}),  # after end_date
+        ("reference/closed_areas", {"end_date": pd.Timestamp("2026-11-27T06:00")}),  # not a date
+        ("fuse/fisheries", {"lens": "drop-off"}),
+        ("fuse/fisheries", {"week": pd.Timestamp("2026-11-23T12:00")}),
+        ("fuse/fisheries", {"top_harbours_hours": [0.5]}),  # not the length of top_harbours
+        ("fuse/fisheries", {"top_harbours_hours": [0.5, -1.0]}),
+        ("fuse/fisheries", {"top_harbours_hours": ["0.5", "1"]}),
+        ("fuse/fisheries", {"y_fish_lo": 10.0}),  # above y_fish_hi
+        ("fuse/fisheries", {"p_mid": 1.5}),
+        ("fuse/fisheries", {"in_closed_area": "yes"}),
+        ("fuse/sites", {"top_piers_hours": [0.5, 1.0]}),  # top_piers has one pier
+        ("fuse/sites", {"check_outside_fishing": "maybe"}),
+        ("fuse/sites", {"check_rare_slowdown": None}),  # only check_outside_fishing may be unknown
     ],
 )
 def test_broken_rule_is_rejected(name, bad):
@@ -206,3 +245,40 @@ def test_learning_columns_are_optional_but_checked():
 def test_one_row_per_key(name):  # #208
     with pytest.raises(SchemaErrors):
         check(name, pd.concat([frame(name)] * 2))
+
+
+@pytest.mark.parametrize("event_type", ["dark_small", "dark_medium", "slowdown"])
+def test_dark_medium_is_an_event_type_everywhere(event_type):  # #344, #345
+    for name in ("match/events", "aggregate/observed", "forecast/expected", "fuse/cells"):
+        check(name, frame(name, event_type=event_type))
+
+
+def test_briefing_card_columns_are_optional_and_unknown_is_na():  # #320
+    check("fuse/sites", frame("fuse/sites"))
+    full = {"check_rare_slowdown": True, "check_followup_seen": False, "top_piers_hours": [0.4]}
+    for outside in (True, False, None):
+        out = check("fuse/sites", frame("fuse/sites", check_outside_fishing=outside, **full))
+        assert out["check_outside_fishing"].dtype == "boolean"
+        assert (
+            pd.isna(out["check_outside_fishing"][0])
+            if outside is None
+            else out["check_outside_fishing"][0] == outside
+        )
+    empty = frame("fuse/sites", top_piers=[], top_piers_hours=[])  # no reachable pier: both empty
+    check("fuse/sites", empty)
+    check(
+        "fuse/sites", frame("fuse/sites", top_piers_hours=np.array([1]))
+    )  # ints from Arrow are numbers
+
+
+def test_fisheries_allows_unknown_closed_area_and_undated_areas():  # #346, #322
+    out = check("fuse/fisheries", frame("fuse/fisheries", in_closed_area=None))
+    assert out["in_closed_area"].isna().all() and out["in_closed_area"].dtype == "boolean"
+    check(
+        "reference/closed_areas",
+        frame("reference/closed_areas", start_date=pd.NaT, end_date=pd.NaT),
+    )
+    check(
+        "reference/closed_areas",
+        frame("reference/closed_areas", type="protected_area", end_date=pd.NaT),
+    )
