@@ -46,7 +46,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 11  # 10 stage files + truth
+    assert first == second and len(first) == 13  # 12 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -119,3 +119,15 @@ def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
     )
     cells = io.read_stage("fuse/cells")
     assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
+
+
+def test_weather_daily_covers_every_cell_day_with_the_day_weather(world):  # #208
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    wd, cells = io.read_stage("coverage/weather_daily"), io.read_cells()
+    ex = io.read_stage("coverage/exposure")
+    assert len(wd) == (cells["level"] == 2000).sum() * wd["date"].nunique()
+    on_pass = wd.merge(ex.assign(date=ex["time_utc"].dt.tz_localize(None).dt.normalize()))
+    assert len(on_pass) == len(ex)  # every pass's cell-day has weather
+    assert (on_pass["wind_max_ms"] - on_pass["wind_ms"]).abs().max() < 1e-5
+    assert (on_pass["hs_max_m"] - on_pass["hs_m"]).abs().max() < 1e-5
