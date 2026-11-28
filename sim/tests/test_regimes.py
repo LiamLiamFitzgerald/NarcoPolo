@@ -7,7 +7,8 @@ import yaml
 
 from core import io
 from core.config import load
-from sim import patrol_outcome, simulate
+from sim import patrol_outcome
+from sim.simulate import simulate
 
 DAYS = 60  # a short season keeps the suite fast; two_sites still has two halves
 
