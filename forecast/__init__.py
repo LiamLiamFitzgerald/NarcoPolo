@@ -76,7 +76,8 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
     """Covariates per (cell, date) from reference/layers.gpkg cells (one level at a time).
 
     inshore_frac NaN (no map) gets a missing flag and 0 in the value column, per the spec.
-    Seasonal terms only for slowdowns: 90 days of radar can't estimate a season.
+    Seasonal terms only for slowdowns: 90 days of radar can't estimate a season. static_frac is not a
+    covariate (#156): it separated the data (fully static cells never have events) and the fits did not converge.
     """
     c = cells.assign(
         intercept=1.0,
@@ -91,8 +92,7 @@ def design_matrix(cells: pd.DataFrame, dates: pd.DatetimeIndex, event_type: str)
         "inshore_missing",
         "lane",
         "log_dist_coast",
-        "static_frac",
-    ]
+    ]  # no static_frac (#156): masking already removes static areas from detection, and the term separates
     X = c[["cell_id", *cols]].merge(pd.DataFrame({"date": dates}), how="cross")
     if event_type == "slowdown":
         angle = 2 * np.pi * X["date"].dt.day_of_year / 365
