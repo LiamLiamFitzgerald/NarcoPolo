@@ -16,6 +16,7 @@ from validate.backtest import backtest
 from validate.injection import injection_test
 from validate.null import null_test
 from validate.policy import _block as policy_block
+from validate.power import _power_block
 
 LENGTH_BINS = [("<8", 0, 8), ("8-12", 8, 12), ("12-15", 12, 15), ("15-24", 15, 24)]
 KEYS = ("recall", "injection", "skill", "calibration", "brier", "null")
@@ -322,6 +323,7 @@ def run(quick: bool = False) -> Path:
                 ],
                 ignore_index=True,
             ),
+            "power": _power_block(),  # #351: which cells can ever flag
             "policy": policy_block()
             if q is None
             else policy_block(n_seeds=q["policy_seeds"]),  # L6; None until #150, #151 and #152 land
