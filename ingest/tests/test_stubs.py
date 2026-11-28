@@ -5,11 +5,10 @@ import socket
 import struct
 from datetime import date
 
-import pandas as pd
 import pyogrio
 import pytest
 
-from ingest import s1, static
+from ingest import static
 from ingest.tests.conftest import CFG
 
 B = CFG["region_bbox"]
@@ -62,41 +61,6 @@ def _same_gpkg_shape(stub, simulated, layer):
     a, s = pyogrio.read_info(stub, layer=layer), pyogrio.read_info(simulated, layer=layer)
     assert a["geometry_type"] == s["geometry_type"] and a["crs"] == s["crs"]
     assert list(a["fields"]) == list(s["fields"]) and a["features"] == 0
-
-
-def test_list_passes_columns():
-    passes = s1.list_passes(BBOX, START, END)
-    assert list(passes.columns) == ["pass_id", "time", "orbit_dir", "rel_orbit", "footprint"]
-    assert len(passes) == 0
-
-
-def test_select_passes_adds_downloaded_flag(simraw):
-    passes = pd.DataFrame({"pass_id": ["pass_000", "pass_001"]})
-    out = s1.select_passes(passes, simraw / "era5.nc")
-    assert list(out["pass_id"]) == ["pass_000", "pass_001"]
-    assert out["downloaded"].dtype == bool and not out["downloaded"].any()
-
-
-def test_fetch_scene_matches_simulator(simraw, raw):
-    sim_tif = min((simraw / "s1").glob("*.tif"))
-    sim_meta = json.loads(sim_tif.with_suffix(".json").read_text())
-    row = {
-        "pass_id": sim_meta["pass_id"],
-        "time": pd.Timestamp(sim_meta["start_time"]),
-        "orbit_dir": sim_meta["orbit_direction"],
-        "rel_orbit": sim_meta["relative_orbit"],
-        "footprint": sim_meta["footprint"],
-    }
-    tif = s1.fetch_scene(row)
-    assert tif.parent == raw / "s1" and tif.suffix == ".tif"
-    _same_raster_shape(tif, sim_tif)
-    assert _tiff_tags(tif)[33550] == _tiff_tags(sim_tif)[33550]  # 10 m pixels
-    meta = json.loads(tif.with_suffix(".json").read_text())
-    assert set(meta) == set(sim_meta)
-    assert meta["start_time"] == pd.Timestamp(sim_meta["start_time"]).isoformat()
-    _recorded(raw, tif)
-    _recorded(raw, tif.with_suffix(".json"))
-    assert s1.fetch_scene(row) == tif  # cache hit
 
 
 def test_fetch_inshore_matches_simulator(simraw, raw):

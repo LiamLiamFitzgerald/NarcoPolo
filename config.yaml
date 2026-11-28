@@ -134,6 +134,7 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
 # P6 detectors and fuse (#123): docs/specs/P6.md Parameters, A1 and A3; the same values as P6's code defaults
 p6:
   fdr_q: 0.1
+  site_flags: false          # #269 (Liam, 28 Nov): the shift test falsely flags busy anchorages over the 90-day radar history; off until P6's exact per-site test + weighted BH replaces it
   gi_band_m: 2900            # binary Gi* weights: the 8 surrounding 2 km cells
   gi_perm: 999
   cusum_rho: 2               # A1

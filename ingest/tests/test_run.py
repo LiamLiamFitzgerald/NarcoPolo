@@ -2,6 +2,8 @@
 
 import json
 import socket
+import threading
+import time
 from datetime import date, timedelta
 from typing import Any
 
@@ -153,8 +155,7 @@ def test_order_era5_first_then_s1_gfw_osm_static(fakes):
         "era5",
         "s1.list_passes",
         "s1.select_passes",
-        "s1.fetch_scene:a",  # only the selected passes are downloaded
-        "s1.fetch_scene:c",
+        *sorted(_scene_calls(fakes)),  # in parallel, so in any order
         "gfw_sar",
         "gfw_presence",
         "osm.fetch_piers",
@@ -162,6 +163,7 @@ def test_order_era5_first_then_s1_gfw_osm_static(fakes):
         "static.fetch_inshore",
         "static.fetch_bathy",
     ]
+    assert sorted(_scene_calls(fakes)) == ["s1.fetch_scene:a", "s1.fetch_scene:c"]  # selected only
     radar_days = CFG["radar_history_days"]
     assert fakes.radar_window == (END - timedelta(days=radar_days - 1), END)
 
@@ -256,13 +258,16 @@ def test_report_names_every_file_with_size(fakes, capsys):
 
 
 def test_real_fetchers_with_offline_fakes(simraw, raw, monkeypatch, fake_gfw):
-    """The real era5/osm/gfw modules behind fake CDS, Overpass and GFW clients; s1 and static as merged."""
+    """The real era5/osm/gfw modules behind fake CDS, Overpass and GFW clients; s1 with an empty catalogue, static as merged."""
     with netCDF4.Dataset(simraw / "era5.nc") as s:
         last: Any = netCDF4.num2date(s["time"][:].max(), s["time"].units)
     end = date(last.year, last.month, last.day)
     cds = FakeCDS(simraw / "era5.nc")
     monkeypatch.setattr(era5, "_client", lambda: cds)
     monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
+    monkeypatch.setattr(
+        s1, "_catalogue", lambda url, params: {"value": []}
+    )  # no pass in the window
     monkeypatch.setattr(run, "_today", lambda: end + timedelta(days=1))
     small = {**CFG, "ship_history_days": 3}  # keep the fake GFW call count small
     run.fetch_all(small)
@@ -273,3 +278,119 @@ def test_real_fetchers_with_offline_fakes(simraw, raw, monkeypatch, fake_gfw):
     assert all(e["licence"].strip() for e in files.values())
     run.fetch_all(small)
     assert _manifest(raw)["files"] == files and (len(cds.calls), len(fake_gfw)) == (n_cds, n_gfw)
+
+
+# --- Sentinel-1 scenes: N in flight, resume, retry once (#33) ---
+
+
+def _many(fakes, n):
+    """n selected passes instead of the three in Fakes."""
+    fakes.passes = pd.DataFrame(
+        {
+            "pass_id": [f"p{i:02d}" for i in range(n)],
+            "time": pd.date_range("2026-11-01T06:20Z", periods=n, freq="12h"),
+            "orbit_dir": ["DESCENDING"] * n,
+            "rel_orbit": [1] * n,
+            "footprint": ["POLYGON EMPTY"] * n,
+        }
+    )
+    fakes.select_passes = lambda passes, era5_path: passes.assign(downloaded=True)
+    return fakes
+
+
+def _workers(n):
+    return {**CFG, "ingest": {**CFG["ingest"], "s1_workers": n}}
+
+
+def _scene_calls(fakes):
+    return [c for c in fakes.calls if c.startswith("s1.fetch_scene:")]
+
+
+def test_scenes_run_n_at_once_and_never_more(fakes, monkeypatch):
+    _many(fakes, 7).install(monkeypatch)
+    real, lock = fakes.fetch_scene, threading.Lock()
+    now = {"in": 0, "max": 0}
+    three = threading.Barrier(3, timeout=10)  # passes only if 3 scenes are in flight together
+
+    def slow(row):
+        with lock:
+            now["in"] += 1
+            now["max"] = max(now["max"], now["in"])
+        if row["pass_id"] in ("p00", "p01", "p02"):
+            three.wait()
+        time.sleep(0.02)
+        with lock:
+            now["in"] -= 1
+        return real(row)
+
+    monkeypatch.setattr(s1, "fetch_scene", slow)
+    run.fetch_all(_workers(3))
+    assert now["max"] == 3
+    assert sorted(_scene_calls(fakes)) == [f"s1.fetch_scene:p{i:02d}" for i in range(7)]
+
+
+def test_parallel_scenes_all_reach_the_manifest(fakes, raw, monkeypatch):
+    _many(fakes, 12).install(monkeypatch)
+    run.fetch_all(_workers(6))  # 6 threads writing manifest.json at once
+    files = _manifest(raw)["files"]
+    assert {f"s1/p{i:02d}.tif" for i in range(12)} <= set(files)
+    assert {f"s1/p{i:02d}.json" for i in range(12)} <= set(files)
+
+
+def test_one_progress_line_per_finished_pass(fakes, monkeypatch, capsys):
+    _many(fakes, 4).install(monkeypatch)
+    run.fetch_all(_workers(2))
+    lines = [ln for ln in capsys.readouterr().err.splitlines() if "fetch: s1 " in ln and "/4" in ln]
+    assert sorted(ln.split("s1 ")[1].split(" ")[0] for ln in lines) == ["1/4", "2/4", "3/4", "4/4"]
+    assert all("elapsed" in ln and "downloaded" in ln for ln in lines)
+
+
+def test_a_pass_that_fails_once_is_retried_and_counts_as_done(fakes, raw, monkeypatch, capsys):
+    _many(fakes, 3).install(monkeypatch)
+    real, tries = fakes.fetch_scene, {"p01": 0}
+
+    def flaky(row):
+        if row["pass_id"] == "p01" and tries["p01"] == 0:
+            tries["p01"] += 1
+            raise TimeoutError("openEO batch job timed out")
+        return real(row)
+
+    monkeypatch.setattr(s1, "fetch_scene", flaky)
+    run.fetch_all(_workers(2))  # no FetchError: the retry worked
+    report = capsys.readouterr().err
+    assert "retry s1.fetch_scene:p01" in report and "TimeoutError" in report
+    assert "s1/p01.tif" in _manifest(raw)["files"]
+
+
+def test_a_pass_that_fails_twice_is_reported_and_the_rest_finish(fakes, raw, monkeypatch, capsys):
+    _many(fakes, 4).install(monkeypatch)
+    fakes.fail.add("s1.fetch_scene:p02")
+    with pytest.raises(run.FetchError, match="s1.fetch_scene:p02"):
+        run.fetch_all(_workers(2))
+    report = capsys.readouterr().err
+    assert _scene_calls(fakes).count("s1.fetch_scene:p02") == 2  # tried, retried once, no more
+    assert "FAILED s1.fetch_scene:p02: RuntimeError: s1.fetch_scene:p02 is down" in report
+    assert {"s1/p00.tif", "s1/p01.tif", "s1/p03.tif"} <= set(_manifest(raw)["files"])
+    assert "static.fetch_bathy" in fakes.calls
+
+
+def test_resume_after_a_stop_fetches_only_what_is_missing(fakes, raw, monkeypatch, capsys):
+    _many(fakes, 5).install(monkeypatch)
+    fakes.fail.update({"s1.fetch_scene:p01", "s1.fetch_scene:p03"})  # stopped before these landed
+    with pytest.raises(run.FetchError):
+        run.fetch_all(_workers(2))
+    done = set(fakes.downloads)
+    fakes.fail.clear()
+    capsys.readouterr()
+    run.fetch_all(_workers(2))
+    assert set(fakes.downloads) - done == {"s1/p01.tif", "s1/p03.tif"}
+    report = capsys.readouterr().err
+    assert report.count("cached s1/") == 3 and report.count("downloaded s1/") == 2
+
+
+def test_a_pass_listed_twice_is_fetched_once(fakes, monkeypatch):
+    _many(fakes, 3)
+    fakes.passes = pd.concat([fakes.passes, fakes.passes.iloc[[1]]], ignore_index=True)
+    fakes.install(monkeypatch)
+    run.fetch_all(_workers(3))  # two threads on one pass would both miss the cache
+    assert sorted(_scene_calls(fakes)) == [f"s1.fetch_scene:p{i:02d}" for i in range(3)]
