@@ -161,3 +161,56 @@ def test_an_empty_sites_file_keeps_its_list_types():
     for col in ("reasons", "top_piers", "site_id"):
         assert got.field(col).type == want.field(col).type
     assert io.read_stage("fuse/sites").empty
+
+
+def test_nullable_flags_and_number_lists_round_trip_through_parquet():  # #320, #346
+    f = pd.concat(
+        [
+            frame("fuse/fisheries", cell_id=c, in_closed_area=v)
+            for c, v in (("2000_0_0", True), ("2000_0_0", None))
+        ],
+        ignore_index=True,
+    ).assign(week=[pd.Timestamp("2026-11-23").date(), pd.Timestamp("2026-11-30").date()])
+    io.write_stage("fuse/fisheries", f, "simulated")
+    back = io.read_stage("fuse/fisheries")
+    assert back["in_closed_area"].dtype == "boolean"
+    assert back["in_closed_area"][0] and pd.isna(back["in_closed_area"][1])
+    assert [list(v) for v in back["top_harbours_hours"]] == [[0.5, 1.0]] * 2
+    sites = frame("fuse/sites", check_outside_fishing=None, top_piers_hours=[0.3])
+    io.write_stage("fuse/sites", sites, "simulated")
+    assert pd.isna(io.read_stage("fuse/sites")["check_outside_fishing"][0])
+
+
+def test_empty_number_lists_keep_their_type():
+    empty = frame("fuse/fisheries").iloc[:0]
+    io.write_stage("fuse/fisheries", empty, "simulated")
+    import pyarrow.parquet as pq
+
+    t = pq.read_schema(io.stage_path("fuse/fisheries")).field("top_harbours_hours").type
+    assert str(t) == "list<element: double>" and io.read_stage("fuse/fisheries").empty
+
+
+def test_closed_areas_layer_round_trips_with_and_without_dates():  # #322
+    import geopandas as gpd
+
+    areas = pd.concat(
+        [
+            frame("reference/closed_areas"),
+            frame(
+                "reference/closed_areas",
+                area_id="a2",
+                type="protected_area",
+                start_date=pd.NaT,
+                end_date=pd.NaT,
+            ),
+        ],
+        ignore_index=True,
+    )
+    io.write_stage("reference/closed_areas", gpd.GeoDataFrame(areas, crs=32629), "simulated")
+    back = io.read_stage("reference/closed_areas")
+    assert list(back["type"]) == ["closure", "protected_area"] and back[
+        "end_date"
+    ].isna().tolist() == [False, True]
+    assert io.read_stage("reference/cells")["cell_id"].tolist() == [
+        "2000_0_0"
+    ]  # the other layers are untouched

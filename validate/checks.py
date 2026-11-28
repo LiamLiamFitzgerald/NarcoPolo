@@ -176,6 +176,17 @@ def simulator_recovery() -> dict[str, Any]:
     m = obs[(obs["level"] == 2000) & (obs["exposure"] > 0)].merge(
         exp, on=["cell_id", "date", "event_type"]
     )
+    # #346: planted illegal fishing is surplus by design, so its cells and days are left out of the normal rate
+    ill = truth[truth["kind"] == "illegal_fishing"]
+    if len(ill):
+        when = ill["time_utc"].dt.tz_convert(None).dt.normalize()
+        m = m[
+            ~(
+                (m["event_type"] == "dark_medium")
+                & m["cell_id"].isin(set(ill["cell_id"]))
+                & m["date"].between(when.min(), when.max())
+            )
+        ]
     ratio = (m.groupby("event_type")["count"].sum() / m.groupby("event_type")["mu"].sum()).to_dict()
     rank = int(near.idxmax()) + 1 if near.any() else None
     k = int(

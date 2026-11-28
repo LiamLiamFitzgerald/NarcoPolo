@@ -23,6 +23,7 @@ _GPKG = {
     "reference/cells": "cells",
     "reference/piers": "piers",
     "reference/land": "land",
+    "reference/closed_areas": "closed_areas",  # #322
 }  # layers of reference/layers.gpkg
 _STAMP = b"narco"
 
@@ -151,16 +152,19 @@ def _stale(cfg: Config, name: str, stamp: dict[str, Any]) -> None:
 
 def _typed_empty(name: str, table: pa.Table) -> pa.Table:
     """A 0-row frame gives Arrow type `null` to untyped columns; give them the type a non-empty file has (#171):
-    list<string> for the list-of-str columns, string for the rest."""
+    list<string> for the list-of-str columns, list<double> for the list-of-number ones, string for the rest."""
+    kinds = {
+        "not a list of str": pa.list_(pa.string()),
+        "not a list of numbers": pa.list_(pa.float64()),
+    }
     lists = {
-        c
+        c: kinds[ch.error]
         for c, col in SCHEMAS[name].columns.items()
-        if any(getattr(ch, "error", None) == "not a list of str" for ch in col.checks)
+        for ch in col.checks
+        if getattr(ch, "error", None) in kinds
     }
     fields = [
-        f.with_type(pa.list_(pa.string()) if f.name in lists else pa.string())
-        if pa.types.is_null(f.type)
-        else f
+        f.with_type(lists.get(f.name, pa.string())) if pa.types.is_null(f.type) else f
         for f in table.schema
     ]
     return table.cast(pa.schema(fields, metadata=table.schema.metadata))
