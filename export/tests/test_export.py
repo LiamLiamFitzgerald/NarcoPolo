@@ -606,3 +606,34 @@ def test_mission_mix_offers_only_mixes_patrol_planned_for_this_T():
         "ready": [0],
         "plans": {},
     }
+
+
+@pytest.mark.slow  # a whole simulated season through detectors and fuse, ~15 s
+def test_simulator_drop_site_card_recovers_p6_checks_and_pier_hours(tmp_path, monkeypatch):
+    # #320 / #337: with P6's columns declared (#360), seed 1 sees a planted pick-up on a calm pass; its card
+    # carries all three checks; every card's pier minutes are reference/travel_hours x 60, in top_piers order
+    if "check_rare_slowdown" not in SCHEMAS["fuse/sites"].columns:
+        pytest.skip("fuse/sites #320 columns (#360) not merged yet")
+    import detectors
+    import fuse
+    from patrol import aircraft_plan, ship_plan
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("NARCO_REPORTS", str(tmp_path / "reports"))
+    simulate(load(io.CONFIG_PATH)[0], 1)
+    detectors.run_cells()
+    fuse.run()
+    ship_plan()
+    aircraft_plan()
+    snap = build_snapshot()
+    truth = pd.read_parquet(io.truth_path())
+    planted = str(truth.loc[truth["kind"] == "drop", "cell_id"].iloc[0])
+    (card,) = [s for s in snap["sites"] if s["id"] == planted and s["lens"] == "dropoff"]
+    assert card["checks"] == {"rare_slowdown": True, "boats_after": True, "outside_fishing": True}
+    # fuse lists piers only for some sites (none for the planted one on this seed): check every card that has them
+    t = io.read_stage("reference/travel_hours").set_index(["cell_id", "pier_id"])["hours"]
+    with_piers = [s for s in snap["sites"] if s["lens"] == "dropoff" and s["top_piers"]]
+    assert with_piers
+    for s in with_piers:
+        want = [float(t[(s["id"], p)]) * 60 for p in s["top_piers"]]
+        assert s["top_pier_minutes"] == pytest.approx(want, abs=1e-3)
