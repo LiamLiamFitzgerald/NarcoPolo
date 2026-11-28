@@ -31,25 +31,13 @@ from fuse.features import AGENTS as _AGENTS
 from fuse.features import _midp  # noqa: F401  (validate/tests/test_train.py checks it)
 from fuse.features import weekly_scores as _scores
 
-# TODO(P1): move to config.yaml learn.train (#158); 500, 5 and 2 are docs/learning.md L4 steps 3-4
-_DEFAULTS: dict[str, float] = {
-    "l2": 1.0,
-    "n_eff_min": 500,
-    "pos_mult": 5,
-    "promote_se": 2,
-    "nam_hidden": 32,
-    "nam_epochs": 300,
-    "nam_lr": 0.01,
-    "nam_l2": 0.001,
-}
-
 
 def model_path() -> Path:
     return Path(os.environ.get("NARCO_DATA", io.ROOT / "data")) / "models" / "site_model.json"
 
 
 def _params(cfg: Config) -> dict[str, float]:
-    return {**_DEFAULTS, **cfg["learn"].get("train", {})}
+    return dict(cfg["learn"]["train"])  # config.yaml learn.train (#158)
 
 
 # ---------------------------------------------------------------- rows: site-weeks from the simulator
@@ -73,10 +61,9 @@ def _scratch() -> Iterator[None]:
 
 
 def _simulate(cfg: Config, seed: int, regime: str) -> None:
-    # tach-ignore(validate runs the simulator; tach.toml change requested in #158)
     from sim.simulate import simulate
 
-    simulate(cfg, seed, regime)  # NotImplementedError for regimes #150 has not built yet
+    simulate(cfg, seed, regime)
 
 
 def _labels(rows: pd.DataFrame, truth: pd.DataFrame) -> pd.Series:

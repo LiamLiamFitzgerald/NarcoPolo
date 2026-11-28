@@ -24,7 +24,14 @@ __all__ = [
 def run() -> None:
     """make all entry point (DECISIONS.md 2026-11-27 18:30).
 
-    Stub: passes the simulated match/events through core.io, which re-validates it.
-    TODO(P4): build events from detect/detections and the GFW feeds once those land in core.io.
+    Simulator: `make sim` already wrote the events file; it is re-validated and kept (detect keeps the
+    simulator's detections, so there is nothing new to match).
+    Real data: slowdowns_from_presence needs GFW presence on the 2 km grid, which reference.regrid_presence (P3)
+    computes but no stage file holds yet, and match may import only core (TODO(P1/P3) contract, #183).
     """
-    io.write_stage("match/events", io.read_stage("match/events"), "simulated")
+    if io.read_provenance("detect/detections") == "simulated":
+        io.write_stage("match/events", io.read_stage("match/events"), "simulated")
+        return
+    raise NotImplementedError(
+        "match on real data: GFW presence on the 2 km grid has no stage file yet (P3/P1 contract, #183)"
+    )

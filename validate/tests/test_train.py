@@ -151,7 +151,7 @@ def test_scores_skip_unobserved_rows_and_cusum_only_looks_back():
     obs.loc[(obs["cell_id"] == "2000_0_0") & (obs["date"] == days[16]), "count"] = (
         5.0  # week 3 burst
     )
-    exp = obs[["cell_id", "date", "event_type"]].assign(mu=0.1, fold=pd.NA)
+    exp = obs[["cell_id", "date", "event_type"]].assign(mu=0.1, fold=0)
     s = train._scores(obs, exp)
     assert len(s[s["cell_id"] == "2000_5_5"]) == 2  # no row for the unseen week, not a zero
     hot = s[s["cell_id"] == "2000_0_0"].sort_values("date")
