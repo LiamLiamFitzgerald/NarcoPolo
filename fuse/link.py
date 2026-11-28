@@ -10,6 +10,7 @@ from statsmodels.stats.multitest import multipletests
 from core import io
 from core.grid import FINE, centroid, neighbours
 from fuse._common import _CFG, PARAMS, RADAR_HISTORY_DAYS, _provenance
+from fuse.features import site_features
 from fuse.learn import _add_learning_columns
 
 _SITE_COLUMNS = {
@@ -292,7 +293,7 @@ def _strongest(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -
     ambiguities), the lag in days after that slowdown and the slowdown's own row (for the reasons)."""
     rows = {}
     for cid, g in slow[slow["L"] > 0].groupby("cell_id"):
-        s = g.loc[g["L"].idxmax()]
+        s = g.nlargest(1, "L").iloc[0]  # first row with the highest L, as idxmax
         m, d0 = _window(s, u_small, nbrs, PARAMS["link_days"])
         if not m.any():
             continue
@@ -399,7 +400,7 @@ def run(observed=None, expected=None, layers=None, travel=None, events=None, cel
 
 
 def _scored_sites(
-    cells: pd.DataFrame, observed: pd.DataFrame, events: pd.DataFrame, T
+    cells: pd.DataFrame, observed: pd.DataFrame, expected: pd.DataFrame, events: pd.DataFrame, T
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """(sites, slowdowns, strongest): sites with S, p_perm (permutation through the link table), bh_flag (BH once
     over the tested sites), recurrence, followup_unobserved and agreement, ranked by S and suppressed to the top
@@ -427,9 +428,12 @@ def _scored_sites(
     strongest = _strongest(slow, u_small, agree, nbrs)
     a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
     out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
-    ranked = out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable")
+    ranked = suppress(out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable"))
+    ranked = ranked.reset_index(drop=True)
+    # R3: raw agent scores, as the trainer fits them; no forecast (some pure-path tests) means no features
+    feats = None if expected is None else site_features(ranked, observed, expected, T)
     return (
-        _add_learning_columns(suppress(ranked).reset_index(drop=True), PARAMS["fdr_q"]),
+        _add_learning_columns(ranked, PARAMS["fdr_q"], feats),
         slow,
         strongest,
     )
@@ -518,7 +522,7 @@ def _all(observed, expected, layers, travel, events, cells, T, piers=None):
     """(sites, piers, links) from frames; no file I/O."""
     if T is None:
         T = pd.Timestamp(max(observed["date"])).date() if len(observed) else None
-    s, slow, strongest = _scored_sites(cells, observed, events, T)
+    s, slow, strongest = _scored_sites(cells, observed, expected, events, T)
     return _finish(s, slow, strongest, observed, expected, layers, travel, piers)
 
 
