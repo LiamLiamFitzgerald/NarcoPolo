@@ -74,6 +74,7 @@ def heatmap_values(
     """Per cell for one ISO week: the four heat-map values and `observed` (small-boat exposure > 0).
 
     normal    mean over observed days of mu / E for dark_small     (forecast/expected, coverage)
+    ratio     the week's y_week itself, for plain-language phrasing (#315)
     obs_vs_exp  log2 of the week's y_week = (sum C + 0.5) / (sum mu + 0.5) for dark_small (fuse/cells, #87)
     unusual   weekly max of U over both event types                (fuse/cells)
     agreement the 0-4 badge of the row that gave that maximum      (fuse/cells)
@@ -113,6 +114,8 @@ def heatmap_values(
             "observed": bool(e > 0),
             "normal": _num(normal.get(cid)) if e > 0 else None,
             "obs_vs_exp": _num(np.log2(y_week[cid])) if cid in y_week.index else None,
+            # the same value as a plain ratio, for "about 2x more small boats than normal" (#315)
+            "ratio": _num(y_week[cid]) if cid in y_week.index else None,
             "unusual": _num(top["U"].get(cid)),
             "agreement": None if cid not in top.index else int(top.at[cid, "agreement"]),
             "exposure": _num(e),
@@ -324,6 +327,9 @@ def _sites(df: pd.DataFrame, links: dict[str, list[dict]] | None = None) -> list
             # D1 (#176): the dashboard ranks sites by p_site; None where the site model gave none
             "p_site": _num(r.get("p_site")),
             "links": links.get(str(r["site_id"]), []),
+            # the briefing lens that put the site here (#313): every site P6 writes today is a drop-off
+            # site; a `lens` column from P6 (fisheries, #321) takes over when it exists
+            "lens": str(r["lens"]) if "lens" in r and isinstance(r["lens"], str) else "dropoff",
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],
         }

@@ -402,3 +402,14 @@ def test_site_links_add_up_to_the_score_and_p_site_is_passed_on(world):
         assert s["p_site"] == (
             None if want is None or np.isnan(want) else pytest.approx(want, abs=1e-4)
         )
+
+
+def test_cells_carry_a_plain_ratio_and_sites_a_lens(world):
+    _, snap = world
+    rows = [c for w in snap["cells"]["weeks"].values() for c in w]
+    with_ratio = [c for c in rows if c["ratio"] is not None]
+    assert with_ratio and all(c["obs_vs_exp"] is not None for c in with_ratio)
+    for c in with_ratio[:50]:  # obs_vs_exp is log2 of the same ratio (both rounded to 4 places)
+        assert 2 ** c["obs_vs_exp"] == pytest.approx(c["ratio"], rel=2e-3, abs=2e-4)
+    assert all(c["ratio"] is None for c in rows if c["obs_vs_exp"] is None)  # unobserved stays None
+    assert {s["lens"] for s in snap["sites"]} == {"dropoff"}  # fisheries sites arrive with #321

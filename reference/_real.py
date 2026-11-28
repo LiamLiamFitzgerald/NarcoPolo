@@ -27,6 +27,9 @@ class Reference(NamedTuple):
     land: gpd.GeoDataFrame  # reference/land: one (multi)polygon row, id 0 (#133, P7's basemap)
     piers: gpd.GeoDataFrame
     travel: pd.DataFrame
+    presence: (
+        pd.DataFrame
+    )  # reference/presence_2km (#208): regrid_presence on the 2 km cells of the cells layer
     rasters: dict[
         str, tuple[NDArray[np.uint8], int]
     ]  # name to (array, pixel_m); rows south to north
@@ -117,7 +120,11 @@ def build(
         "reference/static_mask_10m": (static10, masks.PX),
         "reference/sea_250m": (sea, int(cfg["sea_raster_m"])),
     }
-    return Reference(cells, land_gdf, piers, travel, rasters)
+    # P4 reads the regridded presence (#208); hours on 2 km cells outside the cells layer (all land, or beyond the
+    # region) have no row there, as no other stage file has
+    fine = set(cells.loc[cells["level"] == 2000, "cell_id"])
+    presence = p2[p2["cell_id"].isin(fine)].reset_index(drop=True)
+    return Reference(cells, land_gdf, piers, travel, presence, rasters)
 
 
 def write_raster(name: str, array: NDArray[np.uint8], pixel_m: int) -> Path:

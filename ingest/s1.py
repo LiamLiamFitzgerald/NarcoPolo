@@ -5,12 +5,13 @@ and caches its answer as returned under raw/s1_catalogue/<key>.json. One pass = 
 same platform and absolute orbit. select_passes picks the calm passes from ERA5 plus a few rough ones and
 writes every pass, downloaded or not, to raw/s1_passes.json (spec, Resolved ambiguities). fetch_scene runs
 one openEO batch job (sigma0-ellipsoid, EPSG:32629 10 m on the region grid) and converts linear sigma0 to
-int16 dB x 100: format conversion only. Names not in the spec are TODO(P2) here until P1 moves them to
-config `ingest:` (question #261).
+int16 dB x 100: format conversion only. Endpoints and product type come from config `ingest:`
+(s1_openeo_url, s1_catalogue_url, s1_product_type), accepted on #261.
 """
 
 import json
 import math
+import sys
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -22,7 +23,7 @@ import netCDF4
 import numpy as np
 import pandas as pd
 import shapely
-from pyproj import Transformer
+from pyproj import Geod, Transformer
 from shapely.geometry import shape
 from shapely.ops import unary_union
 
@@ -33,9 +34,6 @@ from ingest.cache import cached, record, request_key
 COLLECTION = "SENTINEL1_GRD"  # docs/specs/P2.md pseudo-codebase
 COEFFICIENT = "sigma0-ellipsoid"  # docs/specs/P2.md pseudo-codebase
 BANDS = ["VV", "VH"]
-OPENEO_URL = "https://openeo.dataspace.copernicus.eu"  # TODO(P2): config ingest:, question #261
-CATALOGUE_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"  # TODO(P2): #261
-PRODUCT_TYPE = "IW_GRDH_1S"  # TODO(P2): #261; IW GRD high resolution, dual pol
 LICENCE = (  # TODO(P2): #261
     "Copernicus Sentinel data, free and open (Legal Notice on the use of Copernicus Sentinel Data and "
     "Service Information); attribution 'Contains modified Copernicus Sentinel data <year>'"
@@ -49,7 +47,7 @@ _conn_lock = threading.Lock()  # ingest/run fetches passes in parallel (#33): on
 
 def list_passes(bbox: _stub.Bbox, start: date, end: date) -> pd.DataFrame:
     """Every IW GRD pass over bbox starting in [start, end] (UTC days):
-    pass_id, time, orbit_dir, rel_orbit, footprint (WGS84 WKT), end_time."""
+    pass_id, time, orbit_dir, rel_orbit, footprint (WGS84 WKT), end_time, heading_deg (NaN if one slice)."""
     rows: dict[str, dict] = {}
     for p in _products(bbox, start, end):
         a = {x["Name"]: x["Value"] for x in p["Attributes"]}
@@ -74,14 +72,30 @@ def list_passes(bbox: _stub.Bbox, start: date, end: date) -> pd.DataFrame:
             "end_time": pd.Series(
                 [max(r["end_time"]) for r in rows.values()], dtype="datetime64[ns, UTC]"
             ),
+            "heading_deg": pd.Series(
+                [_heading(r["time"], r["geoms"]) for r in rows.values()], dtype="float64"
+            ),
         }
     )
     return out.sort_values("time", ignore_index=True)
 
 
+def _heading(times: list[pd.Timestamp], geoms: list[Any]) -> float:
+    """Platform heading (deg clockwise from north) measured from the pass itself: the WGS84 bearing from the
+    first slice's centre to the last's, in acquisition order (#291). NaN for a one-slice pass: unknown."""
+    order = sorted(range(len(times)), key=lambda i: times[i])
+    first, last = geoms[order[0]].centroid, geoms[order[-1]].centroid
+    if len(order) < 2 or times[order[0]] == times[order[-1]] or first.equals(last):
+        return math.nan
+    az, _, _ = Geod(ellps="WGS84").inv(first.x, first.y, last.x, last.y)
+    return float(az) % 360.0
+
+
 def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
-    """passes + calm_share + downloaded: a pass is downloaded if >= s1_calm_share of the ERA5 sea points it
-    covers inside the region are calm at the nearest hour, plus s1_rough_passes rough ones spread over time."""
+    """passes (sorted by time) + calm_share + downloaded: a pass is downloaded if >= s1_calm_share of the ERA5 sea
+    points it covers inside the region are calm at the nearest hour, plus s1_rough_passes rough ones spread over
+    time. A pass that can't be scored is never chosen; its reason goes to raw/s1_passes.json and stderr (#347)."""
+    passes = passes.sort_values("time", kind="stable", ignore_index=True)
     cfg = _stub.config()
     cov, ing = cfg["coverage"], cfg["ingest"]
     lon0, lat0, lon1, lat1 = _stub.region(cfg)
@@ -98,16 +112,26 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
     lon2, lat2 = np.meshgrid(lon, lat)
     in_region = (lon2 >= lon0) & (lon2 <= lon1) & (lat2 >= lat0) & (lat2 <= lat1)
     calm = (np.hypot(u, v) < cov["calm_wind_ms"]) & (hs < cov["calm_hs_m"])
-    shares = []
-    for time, footprint in zip(passes["time"].tolist(), passes["footprint"].tolist(), strict=True):
+    shares, reasons = [], []
+    for pid, time, footprint in zip(
+        passes["pass_id"].tolist(),
+        passes["time"].tolist(),
+        passes["footprint"].tolist(),
+        strict=True,
+    ):
         when = pd.Timestamp(time)
         k = int(np.abs((hours - when).total_seconds()).argmin()) if len(hours) else -1
+        sea = None
         if k < 0 or abs((hours[k] - when).total_seconds()) > 1800:
-            shares.append(math.nan)  # no ERA5 hour for this pass: unknown, never calm or rough
-            continue
-        sea = in_region & shapely.contains_xy(shapely.from_wkt(str(footprint)), lon2, lat2)
-        sea &= ~np.isnan(hs[k])  # no wave value = land point
-        shares.append(float(calm[k][sea].mean()) if sea.any() else math.nan)
+            reason = "no ERA5 hour within 30 min of the pass"  # unknown, never calm or rough
+        else:
+            sea = in_region & shapely.contains_xy(shapely.from_wkt(str(footprint)), lon2, lat2)
+            sea &= ~np.isnan(hs[k])  # no wave value = land point
+            reason = None if sea.any() else "footprint holds no ERA5 sea point inside the region"
+        shares.append(math.nan if reason or sea is None else float(calm[k][sea].mean()))
+        reasons.append(reason)
+        if reason:
+            print(f"s1: {pid} not scored: {reason}", file=sys.stderr, flush=True)
     share = pd.Series(shares, index=passes.index, dtype=float)
     down = (share >= ing["s1_calm_share"]).to_numpy(copy=True)
     rough = np.flatnonzero(share.notna().to_numpy() & ~down)
@@ -116,7 +140,7 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
         rough = rough[np.unique(np.round(np.linspace(0, len(rough) - 1, n)).astype(int))]
     down[rough] = True
     out = passes.assign(calm_share=share, downloaded=down)
-    _write_passes(out)
+    _write_passes(out, reasons)
     return out
 
 
@@ -159,19 +183,28 @@ def fetch_scene(pass_: Mapping[str, Any]) -> Path:
         "relative_orbit": int(pass_["rel_orbit"]),
         "footprint": str(pass_["footprint"]),
         "footprint_crs": "EPSG:4326",
-        # openEO gives no annotation metadata (issue 6)
+        # openEO gives no annotation metadata (issue 6); heading is measured from the pass instead
         "incidence_min": None,
         "incidence_max": None,
         "prf_hz": None,
         "slant_range_m": None,
         "satellite_speed_ms": None,
-        "heading_deg": None,
+        "heading_deg": _float_or_none(pass_.get("heading_deg")),  # measured from the slices (#291)
     }
     meta_path = path.with_suffix(".json")
     meta_path.write_text(json.dumps(meta, indent=1))
     record(req, path, LICENCE)
     record({**req, "part": "metadata"}, meta_path, LICENCE)
     return path
+
+
+def _float_or_none(v: Any) -> float | None:
+    """A finite number rounded to 0.01, else None (unknown stays null in the metadata, never 0)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return round(f, 2) if math.isfinite(f) else None
 
 
 def _catalogue(url: str, params: dict | None) -> dict:
@@ -188,9 +221,11 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
     lon0, lat0, lon1, lat1 = (float(v) for v in bbox)
     ring = f"{lon0} {lat0},{lon1} {lat0},{lon1} {lat1},{lon0} {lat1},{lon0} {lat0}"
     stop = end + timedelta(days=1)  # our windows are inclusive
+    ing = _stub.config()["ingest"]
+    catalogue, product_type = ing["s1_catalogue_url"], ing["s1_product_type"]
     flt = (
         "Collection/Name eq 'SENTINEL-1' and Attributes/OData.CSC.StringAttribute/any("
-        f"att:att/Name eq 'productType' and att/OData.CSC.StringAttribute/Value eq '{PRODUCT_TYPE}') "
+        f"att:att/Name eq 'productType' and att/OData.CSC.StringAttribute/Value eq '{product_type}') "
         f"and OData.CSC.Intersects(area=geography'SRID=4326;POLYGON(({ring}))') "
         f"and ContentDate/Start ge {start.isoformat()}T00:00:00.000Z "
         f"and ContentDate/Start lt {stop.isoformat()}T00:00:00.000Z"
@@ -201,10 +236,10 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
         "$top": 1000,
         "$orderby": "ContentDate/Start asc",
     }
-    req = {"source": "s1_catalogue", "url": CATALOGUE_URL, "params": params}
+    req = {"source": "s1_catalogue", "url": catalogue, "params": params}
     if (hit := cached(req)) is not None:
         return json.loads(hit.read_text())
-    products, url, query = [], CATALOGUE_URL, params
+    products, url, query = [], catalogue, params
     while url:
         page = _catalogue(url, query)
         products += page["value"]
@@ -216,17 +251,18 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
     return products
 
 
-def _write_passes(out: pd.DataFrame) -> None:
-    """raw/s1_passes.json: every pass in the window with its downloaded flag; rewritten only on change."""
+def _write_passes(out: pd.DataFrame, reasons: list[str | None]) -> None:
+    """raw/s1_passes.json: every pass in the window with its downloaded flag and, when it couldn't be scored,
+    why (skip_reason); rewritten only on change."""
     rows = [
         {
             "pass_id": str(r["pass_id"]), "time": pd.Timestamp(r["time"]).isoformat(),
             "orbit_dir": str(r["orbit_dir"]), "rel_orbit": int(r["rel_orbit"]),
             "footprint": str(r["footprint"]),
             "calm_share": None if math.isnan(r["calm_share"]) else float(r["calm_share"]),
-            "downloaded": bool(r["downloaded"]),
+            "downloaded": bool(r["downloaded"]), "skip_reason": why,
         }
-        for r in out.to_dict("records")
+        for r, why in zip(out.to_dict("records"), reasons, strict=True)
     ]  # fmt: skip
     text = json.dumps(rows, indent=1)
     path = raw_root() / "s1_passes.json"
@@ -256,7 +292,9 @@ def _connection() -> Any:
         if _conn is None:
             import openeo
 
-            _conn = openeo.connect(OPENEO_URL).authenticate_oidc(store_refresh_token=False)
+            _conn = openeo.connect(_stub.config()["ingest"]["s1_openeo_url"]).authenticate_oidc(
+                store_refresh_token=False
+            )
         return _conn
 
 
