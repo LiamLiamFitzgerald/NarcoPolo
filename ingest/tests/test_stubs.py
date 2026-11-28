@@ -1,4 +1,4 @@
-"""Every offline stub (era5 and osm are real: tests/test_era5.py, test_osm.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
+"""Every offline stub (era5, osm are real; static is real once its URLs are configured: tests/test_*.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
 
 import json
 import socket
