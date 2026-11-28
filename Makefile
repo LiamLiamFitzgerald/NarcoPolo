@@ -6,7 +6,7 @@ fetch:  ## the only command that uses the network
 sim:  ## synthetic region with known truth, every stage file
 	uv run python -m sim
 
-all:  ## reference -> coverage -> detect -> match -> aggregate -> forecast -> detectors -> fuse -> patrol -> export
+all:  ## reference -> exposure -> detect -> match -> aggregate -> forecast -> detectors -> fuse -> patrol -> export
 	uv run python -m scripts.run_all
 
 validate:  ## reports/validation.json

@@ -9,7 +9,7 @@
                 "AGENTS.md", "CLAUDE.md", "README.md", ".gitignore", ".env.example", "flake.nix", "flake.lock"]
     },
     "P2": {"name": "Ingest", "paths": ["ingest/"]},
-    "P3": {"name": "Reference and coverage", "paths": ["reference/", "coverage/"]},
+    "P3": {"name": "Reference and exposure", "paths": ["reference/", "exposure/", "coverage/"]},
     "P4": {"name": "Detect and match", "paths": ["detect/", "match/"]},
     "P5": {"name": "Aggregate and forecast", "paths": ["aggregate/", "forecast/"]},
     "P6": {"name": "Detectors and fuse", "paths": ["detectors/", "fuse/"]},

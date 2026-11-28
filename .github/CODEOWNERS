@@ -18,8 +18,11 @@
 /README.md @LiamLiamFitzgerald
 /.gitignore @LiamLiamFitzgerald
 /.env.example @LiamLiamFitzgerald
+/flake.nix @LiamLiamFitzgerald
+/flake.lock @LiamLiamFitzgerald
 /ingest/** @JDonoghue-UL
 /reference/** @Coneill2026
+/exposure/** @Coneill2026
 /coverage/** @Coneill2026
 /detect/** @DandarGaming
 /match/** @DandarGaming

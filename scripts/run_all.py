@@ -4,7 +4,7 @@ stage files and writes its outputs through core.io (DECISIONS.md, 2026-11-27 18:
 
 import importlib
 
-STEPS = ["reference", "coverage", "detect", "match", "aggregate", "forecast", "detectors", "fuse", "patrol", "export"]
+STEPS = ["reference", "exposure", "detect", "match", "aggregate", "forecast", "detectors", "fuse", "patrol", "export"]
 
 
 def main(steps: list[str] = STEPS) -> None:
