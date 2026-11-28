@@ -128,11 +128,27 @@ def fisheries(observed, expected, travel=None, piers=None, closed=None) -> pd.Da
     return out[COLUMNS]
 
 
-def _gated(observed, expected, travel, piers) -> pd.DataFrame | None:
+def closed_cells(cells, areas) -> pd.DataFrame | None:
+    """in_closed_area per fine cell (#322): True where the cell centre lies inside any closure or protected area of
+    reference/closed_areas, False elsewhere; None (NA for every cell) when the layer or the cell geometry is
+    missing, since unknown is never "outside". Areas are matched by cell centre, as P3's cell layers are."""
+    if areas is None or cells is None or "geometry" not in getattr(cells, "columns", ()):
+        return None
+    fine = cells[cells["level"] == FINE] if "level" in cells.columns else cells
+    if not len(areas):
+        return pd.DataFrame({"cell_id": fine["cell_id"].astype(str), "in_closed_area": False})
+    union = areas.geometry.union_all()
+    inside = fine.geometry.centroid.within(union).to_numpy(bool)
+    return pd.DataFrame(
+        {"cell_id": fine["cell_id"].astype(str).to_numpy(), "in_closed_area": inside}
+    )
+
+
+def _gated(observed, expected, travel, piers, cells=None, areas=None) -> pd.DataFrame | None:
     """fuse/fisheries for the zero-arg run, or None until it can exist: core/schemas must declare it (#346) and
-    observed must hold dark_medium rows (#344, #345). Closed areas: none until #322 defines the layer (NA)."""
+    observed must hold dark_medium rows (#344, #345). Closed areas from reference/closed_areas (#322), NA without."""
     from core.schemas import SCHEMAS
 
     if "fuse/fisheries" not in SCHEMAS or not (observed["event_type"] == "dark_medium").any():
         return None
-    return fisheries(observed, expected, travel, piers)
+    return fisheries(observed, expected, travel, piers, closed=closed_cells(cells, areas))
