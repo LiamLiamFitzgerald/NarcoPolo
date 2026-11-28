@@ -10,6 +10,7 @@ from statsmodels.stats.multitest import multipletests
 from core import io
 from core.grid import FINE, centroid, neighbours
 from fuse._common import _CFG, PARAMS, RADAR_HISTORY_DAYS, _provenance
+from fuse.learn import _add_learning_columns
 
 _SITE_COLUMNS = {
     "site_id": str, "x_m": float, "y_m": float, "n_slowdowns": int, "S": float, "p_perm": float,
@@ -427,7 +428,11 @@ def _scored_sites(
     a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
     out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
     ranked = out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable")
-    return suppress(ranked).reset_index(drop=True), slow, strongest
+    return (
+        _add_learning_columns(suppress(ranked).reset_index(drop=True), PARAMS["fdr_q"]),
+        slow,
+        strongest,
+    )
 
 
 def _road_travel(travel: pd.DataFrame | None, piers: pd.DataFrame | None) -> pd.DataFrame:
