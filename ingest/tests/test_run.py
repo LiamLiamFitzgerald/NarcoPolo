@@ -256,13 +256,16 @@ def test_report_names_every_file_with_size(fakes, capsys):
 
 
 def test_real_fetchers_with_offline_fakes(simraw, raw, monkeypatch, fake_gfw):
-    """The real era5/osm/gfw modules behind fake CDS, Overpass and GFW clients; s1 and static as merged."""
+    """The real era5/osm/gfw modules behind fake CDS, Overpass and GFW clients; s1 with an empty catalogue, static as merged."""
     with netCDF4.Dataset(simraw / "era5.nc") as s:
         last: Any = netCDF4.num2date(s["time"][:].max(), s["time"].units)
     end = date(last.year, last.month, last.day)
     cds = FakeCDS(simraw / "era5.nc")
     monkeypatch.setattr(era5, "_client", lambda: cds)
     monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
+    monkeypatch.setattr(
+        s1, "_catalogue", lambda url, params: {"value": []}
+    )  # no pass in the window
     monkeypatch.setattr(run, "_today", lambda: end + timedelta(days=1))
     small = {**CFG, "ship_history_days": 3}  # keep the fake GFW call count small
     run.fetch_all(small)
