@@ -43,6 +43,17 @@ coverage:
   storm_hours: 24
   storm_lookback_h: 72       # ... in the 72 h before the pass
 
+# P2 ingest (#215, #221): proposed by P2; values from docs/specs/P2.md where noted, the rest TODO(P2)
+ingest:
+  era5_dataset: reanalysis-era5-single-levels            # TODO(P2): CDS catalogue id, see #216
+  overpass_url: https://overpass-api.de/api/interpreter  # TODO(P2): see #216
+  road_buffer_m: 200          # docs/specs/P2.md step 8: highway=* within 200 m = road access
+  inshore_layers: {}          # TODO(P2): {layer_name: {url, licence}}: BIM / Marine Institute under-12 m net, pot, dredge (data.gov.ie)
+  survey_extent: null         # TODO(P2): {url, licence}: survey extent polygon (shared.md issue 7)
+  infomar_bathy: null         # TODO(P2): {url, licence}: licence must include INFOMAR's CC BY 4.0 attribution line
+  s1_calm_share: 0.5          # docs/specs/P2.md: download a pass if >= 50% of the region cells it covers are calm
+  s1_rough_passes: 5          # docs/specs/P2.md: plus 5 rough passes for P1's recall curve
+
 validate:
   injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
   injection_brightness_db: [3, 6, 10, 15]  # TODO(P1): not in the spec; spans P4's threshold on the simulator
