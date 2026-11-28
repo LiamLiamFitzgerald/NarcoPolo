@@ -1,8 +1,10 @@
 """2 km cells and their static layers (docs/specs/P3.md). Every series is indexed by cell_id, like build_cells' output.
 
-Thresholds are keyword arguments with the spec's defaults until P3's config keys land (#85)."""
+Thresholds come from config.yaml `reference:`; a keyword argument overrides one (tests)."""
 
 import re
+from functools import cache
+from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
@@ -10,11 +12,18 @@ import pandas as pd
 from shapely.geometry import Polygon, box
 from shapely.geometry.base import BaseGeometry
 
+from core.config import load
 from core.crs import to_utm
 from core.grid import COARSE, FINE, _origin, cell_id, parent
 
 _PRESENCE_COLS = ["cell_id", "date", "vessel_type", "speed_bin", "hours"]
 _FISHING = "fishing"  # GFW vessel_type of fishing vessels; lanes count every other type
+
+
+@cache
+def _ref() -> dict:
+    """config.yaml `reference:` (thresholds; docs/specs/P3.md Parameters)."""
+    return dict(load(Path(__file__).resolve().parent.parent / "config.yaml")[0]["reference"])
 
 
 def _grid(bounds: tuple[float, float, float, float]) -> gpd.GeoDataFrame:
@@ -33,10 +42,11 @@ def _grid(bounds: tuple[float, float, float, float]) -> gpd.GeoDataFrame:
 
 
 def build_cells(
-    region: BaseGeometry, coastline: BaseGeometry, min_sea_frac: float = 0.2
+    region: BaseGeometry, coastline: BaseGeometry, min_sea_frac: float | None = None
 ) -> gpd.GeoDataFrame:
     """2 km cells of `region` (UTM polygon) with sea_frac = sea area / full cell area; keeps sea_frac >= min_sea_frac.
     `coastline` is the land polygon."""
+    min_sea_frac = _ref()["min_sea_frac"] if min_sea_frac is None else min_sea_frac
     g = _grid(region.bounds)
     sea = region.difference(coastline)
     g["sea_frac"] = g.intersection(sea).area / (FINE * FINE)
@@ -101,8 +111,11 @@ def _per_cell(cells: gpd.GeoDataFrame, hours: pd.Series) -> pd.Series:
     return hours.reindex(cells.index).fillna(0.0)
 
 
-def lanes(cells: gpd.GeoDataFrame, presence2km: pd.DataFrame, pct: float = 90) -> pd.Series:
+def lanes(
+    cells: gpd.GeoDataFrame, presence2km: pd.DataFrame, pct: float | None = None
+) -> pd.Series:
     """Non-fishing hours above the pct-th percentile of non-empty cells."""
+    pct = _ref()["lane_pct"] if pct is None else pct
     if presence2km.empty:
         return pd.Series(False, index=cells.index, name="lane")
     p = presence2km[presence2km["vessel_type"] != _FISHING]
@@ -124,11 +137,13 @@ def _bin_low(label: str) -> float:
 def anchorages(
     cells: gpd.GeoDataFrame,
     presence2km: pd.DataFrame,
-    share: float = 0.5,
-    top_pct: float = 25,
+    share: float | None = None,
+    top_pct: float | None = None,
 ) -> pd.Series:
     """Share of the cell's hours in GFW's slowest speed bin above `share`, and total hours in the top `top_pct`%
     of non-empty cells."""
+    share = _ref()["anchorage_share"] if share is None else share
+    top_pct = _ref()["anchorage_top_pct"] if top_pct is None else top_pct
     if presence2km.empty:
         return pd.Series(False, index=cells.index, name="anchorage")
     slowest = min(presence2km["speed_bin"].unique(), key=_bin_low)
@@ -143,18 +158,22 @@ def anchorages(
 
 
 def port_zones(
-    cells: gpd.GeoDataFrame, harbours: gpd.GeoDataFrame, buffer_m: float = 5000
+    cells: gpd.GeoDataFrame, harbours: gpd.GeoDataFrame, buffer_m: float | None = None
 ) -> pd.Series:
     """Cells touching a buffer around any port or harbour point."""
+    buffer_m = _ref()["port_buffer_m"] if buffer_m is None else buffer_m
     if harbours.empty:
         return pd.Series(False, index=cells.index, name="port_zone")
     zone = harbours.buffer(buffer_m).union_all()
     return pd.Series(cells.intersects(zone).to_numpy(), index=cells.index, name="port_zone")
 
 
-def exclusion(port_zone: pd.Series, anchorage: pd.Series, grow_cells: int = 1) -> pd.Series:
+def exclusion(
+    port_zone: pd.Series, anchorage: pd.Series, grow_cells: int | None = None
+) -> pd.Series:
     """port_zone or anchorage, grown by `grow_cells` cells in every direction (diagonals included).
     Both series are indexed by 2 km cell_id."""
+    grow_cells = int(_ref()["exclusion_grow_cells"]) if grow_cells is None else grow_cells
     hit = port_zone | anchorage
     out = hit.copy()
     present = set(hit.index)
