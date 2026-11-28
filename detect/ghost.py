@@ -27,15 +27,20 @@ def ghost_offset_m(meta: dict[str, Any]) -> float | tuple[float, float]:
 
 
 def azimuth_heading(meta: dict[str, Any]) -> float:
-    """Flight direction in degrees clockwise from grid north: heading_deg, else from orbit direction (issue 6)."""
-    if meta.get("heading_deg") is not None:
-        return float(meta["heading_deg"])
-    key = {"ascending": "heading_ascending_deg", "descending": "heading_descending_deg"}[
-        str(meta["orbit_direction"]).lower()
-    ]
-    if CFG[key] is None:
+    """Flight direction in degrees clockwise from grid north: heading_deg, else from orbit direction (issue 6).
+
+    A null or NaN heading_deg (P2 leaves it null on a one-slice pass, #291) falls back to the orbit direction.
+    """
+    h = meta.get("heading_deg")
+    if h is not None and np.isfinite(float(h)):
+        return float(h)
+    key = {"ascending": "heading_ascending_deg", "descending": "heading_descending_deg"}.get(
+        str(meta.get("orbit_direction")).lower()
+    )
+    if key is None or CFG[key] is None:
         raise ValueError(
-            f"no heading_deg in scene meta and config {key} is unset (TODO(P4) question)"
+            f"pass {meta.get('pass_id')}: no heading_deg and no heading for orbit direction "
+            f"{meta.get('orbit_direction')!r}"
         )
     return float(CFG[key])
 

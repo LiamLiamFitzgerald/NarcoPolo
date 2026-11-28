@@ -25,9 +25,10 @@ _SPEC: dict[str, Any] = {
     "ghost_db": 20,
     "ghost_tol_m": 200,
     "ghost_band_m": [4000, 8000],  # used when PRF is missing (issue 6)
-    # TODO(P4): Sentinel-1 heading per orbit direction is not in the spec (issue 6). Question issue to open.
-    "heading_ascending_deg": None,
-    "heading_descending_deg": None,
+    # Fallback heading per orbit direction when a pass has no heading_deg (issue 6; one-slice passes, #291).
+    # Values P2 measured from the real CDSE catalogue (slice-centre bearings, #291 comment). TODO(P1): config keys.
+    "heading_ascending_deg": 350.0,
+    "heading_descending_deg": 190.3,
     "ais_window_min": 30,
     "match_gate_m": 500,
 }

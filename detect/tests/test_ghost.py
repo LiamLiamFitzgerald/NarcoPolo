@@ -15,8 +15,14 @@ def test_offset_formula_and_band():
 
 def test_heading_from_meta_or_clear_error():
     assert azimuth_heading({"heading_deg": 350}) == 350.0
-    with pytest.raises(ValueError, match="TODO"):
-        azimuth_heading({"orbit_direction": "ASCENDING"})
+    with pytest.raises(ValueError, match="orbit direction"):
+        azimuth_heading({"orbit_direction": None})
+
+
+@pytest.mark.parametrize("h", [None, float("nan")])
+def test_one_slice_pass_falls_back_to_orbit_direction(h):  # #291: P2 leaves heading_deg null
+    assert azimuth_heading({"heading_deg": h, "orbit_direction": "ASCENDING"}) == 350.0
+    assert azimuth_heading({"heading_deg": h, "orbit_direction": "descending"}) == 190.3
 
 
 def _ghost_hits(offset_from_meta: bool):
