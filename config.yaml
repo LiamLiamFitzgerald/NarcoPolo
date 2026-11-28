@@ -96,6 +96,12 @@ validate:
   fixed_target_p_fa: 1.0e-6  # TODO(P1) #334: candidate CFAR p_fa on the median-ratio image (a lower threshold than p4.p_fa)
   persistence_radius_m: 50   # #334: a candidate this close to a fixed target is on it (GFW's persistence radius, the cited start)
   pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
+  quick:                     # #343: `make validate-quick`; the report says mode "quick" so it is never shown as the full result
+    null_runs: 20            # TODO(P1): demo-speed value, not a calibrated choice (full: the spec's 200)
+    n_folds_slowdown: 4      # TODO(P1): demo-speed value, not a calibrated choice (full: split.n_folds_slowdown)
+    n_folds_small: 2         # TODO(P1): demo-speed value, not a calibrated choice (full: split.n_folds_small)
+    policy_seeds: 1          # TODO(P1): demo-speed value, not a calibrated choice (full: learn.n_seeds_quick)
+    visible_worlds: 0        # TODO(P1): demo-speed value, not a calibrated choice (full: 1; 0 skips recovery_visible_pickups)
 
 detect_prob:                 # #349: small-boat detection-probability curve, fitted by validate.detect_prob on injected boats (coefficients go to reports/detect_prob.json, never here)
   form: [log_length_m, wind_ms, incidence_deg]  # #349: logit p = b0 + b1 log(length_m) + b2 wind_ms + b3 incidence_deg; a term missing from the data is dropped and named in the report
