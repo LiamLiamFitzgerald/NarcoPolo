@@ -239,23 +239,40 @@ def _plan_asset(
     theta: pd.Series | None = None,
     exploit: pd.Series | None = None,
     exact_max_nodes: int = 0,
+    fish: pd.DataFrame | None = None,
+    mix: int = 0,
 ) -> list[dict]:
     """theta (by site_id) replaces S as node weights (bandit, learning L5): the Thompson draw is the one
     exploration method (D3, #176). A stop is 'exploit' if it is also on the route planned with the `exploit`
     weights (posterior means), else 'explore', which is marked `exploration` for the snapshot and dashboard.
-    Without theta (no bandit state), the route is the greedy fill on S."""
+    Without theta (no bandit state), the route is the greedy fill on S.
+
+    Mission mix (#316, #338): at `mix` % fisheries the fisheries candidates `fish` (site_id, x_m, y_m, w, flag)
+    join the drop-off candidates, with drop-off weights x (100 - mix) / 100 and fisheries weights w x mix / 100.
+    A lens with a zero share adds no nodes, so mix 0 is exactly the drop-off plan."""
     cand = _greedy_inputs(sites).reset_index(drop=True)
+    if mix >= 100:
+        cand = cand.iloc[0:0]
+    f = fish.reset_index(drop=True) if fish is not None and mix > 0 else _NO_FISH
+    nd = len(cand)
+    ids = [*cand["site_id"], *f["site_id"]]
+    flagged = [*cand["bh_flag"], *f["flag"]]
     nodes = [
         {"x_m": base[0], "y_m": base[1]},
         *({"x_m": r.x_m, "y_m": r.y_m} for r in cand.itertuples()),
+        *({"x_m": r.x_m, "y_m": r.y_m} for r in f.itertuples()),
     ]
     hours = hours_fn(nodes)
+    k_drop, k_fish = (100 - mix) / 100, mix / 100
+
+    def weights(drop: np.ndarray) -> np.ndarray:
+        return np.array([0.0, *(drop * k_drop), *(f["w"].to_numpy(float) * k_fish)])
 
     if theta is not None:
         exact = len(nodes) <= exact_max_nodes
 
         def solve(w: pd.Series) -> list[int]:
-            S = np.array([0.0, *w.loc[cand["site_id"]]])
+            S = weights(w.loc[cand["site_id"]].to_numpy(float))
             if exact:
                 return _exact(S, hours, budget_h, dwell_h)
             return two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours)
@@ -263,7 +280,7 @@ def _plan_asset(
         route = solve(theta)
         on_mean = set(solve(exploit if exploit is not None else theta))
     else:
-        S = np.array([0.0, *cand["S"]])
+        S = weights(cand["S"].to_numpy(float))
         route, on_mean = two_opt(_greedy([0, 0], S, hours, budget_h, dwell_h), hours), set()
 
     stops, t = [], start
@@ -271,7 +288,7 @@ def _plan_asset(
         if k:
             t += pd.Timedelta(hours=float(hours[route[k - 1], i]) + (dwell_h if k > 1 else 0))
         stop = {
-            "id": "base" if i == 0 else cand["site_id"][i - 1],
+            "id": "base" if i == 0 else ids[i - 1],
             "arrival_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "dwell_h": 0 if i == 0 else dwell_h,
             "x_m": nodes[i]["x_m"],
@@ -281,15 +298,73 @@ def _plan_asset(
             stop["stand_in"] = (
                 True  # base position or start time is a simulated stand-in (issue 103)
             )
-        if i and not cand["bh_flag"][i - 1]:
+        if i and not flagged[i - 1]:
             stop["not_significant"] = True
-        if i and theta is not None:
+        if i > nd:  # a fisheries candidate: the bandit has no posterior for it
+            stop["lens"] = "fisheries"
+        elif i and theta is not None:
             stop["theta"] = float(theta[stop["id"]])
             stop["reason"] = "exploit" if i in on_mean else "explore"
             if stop["reason"] == "explore":
                 stop["exploration"] = True
         stops.append(stop)
     return stops
+
+
+_NO_FISH = pd.DataFrame({"site_id": [], "x_m": [], "y_m": [], "w": [], "flag": []})
+
+
+def _fisheries_inputs(t) -> pd.DataFrame | None:
+    """Fisheries candidates for the mission mixes (#321, #338): fuse/fisheries' latest week <= T, flagged
+    first, then by y_fish, the top patrol.top_sites (the same choice as export's fisheries cards), at their
+    2 km cell centres. w = rank(y_fish) / (n + 1), ties averaged: bandit.prior's rank rule, in (0, 1).
+    None until core.schemas declares the file and P6 has written it."""
+    if "fuse/fisheries" not in SCHEMAS or not io.stage_path("fuse/fisheries").exists():
+        return None
+    fish = io.read_stage("fuse/fisheries")
+    weeks = pd.to_datetime(fish["week"]).dt.date
+    if not (weeks <= t).any():
+        return None
+    fish = fish[weeks == weeks[weeks <= t].max()]
+    fish = fish.sort_values(["flag", "y_fish"], ascending=[False, False], kind="stable")
+    fish = fish.head(TOP_SITES).reset_index(drop=True)
+    centre = io.read_stage("reference/cells").set_index("cell_id").geometry.centroid
+    c = centre.loc[fish["cell_id"]]
+    return pd.DataFrame(
+        {
+            "site_id": fish["cell_id"].astype(str),
+            "x_m": c.x.to_numpy(),
+            "y_m": c.y.to_numpy(),
+            "w": (fish["y_fish"].rank(method="average") / (len(fish) + 1)).to_numpy(),
+            "flag": fish["flag"].astype(bool).to_numpy(),
+        }
+    )
+
+
+def _mixes(cfg: Mapping[str, Any]) -> list[int]:
+    return [int(m) for m in cfg.get("patrol", {}).get("mission_mixes", [0])]
+
+
+def _mixes_path() -> Path:
+    """P7-only plain JSON with the plans for mixes other than 0 % (not a stage file): export copies them
+    into meta.mission_mix; plan.json keeps only the 0 % plan, the one patrol/plan's contract allows."""
+    return _data_root() / "patrol" / "plan_mixes.json"
+
+
+def _write_mixes(asset: str, plans: dict[int, list[dict]], t) -> None:
+    """{"T": T, "plans": {"25": {"ship": [...], "aircraft": [...]}, ...}}. No fisheries data, no file, so
+    a mix plan from an older run is never shown as this week's."""
+    path = _mixes_path()
+    if not plans:
+        path.unlink(missing_ok=True)
+        return
+    old = json.loads(path.read_text()) if path.exists() else {}
+    keep = old.get("plans", {}) if old.get("T") == t.isoformat() else {}
+    keep = {m: p for m, p in keep.items() if int(m) in plans}
+    for m, stops in plans.items():
+        keep.setdefault(str(m), {})[asset] = stops
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"T": t.isoformat(), "plans": keep}, indent=1))
 
 
 def _provenance(name: str) -> Literal["simulated", "real"]:
@@ -408,33 +483,34 @@ def _bandit(cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int) -> dict[str,
     }
 
 
+def _asset_plan(asset: str, hours_fn, budget_h: float, dwell_h: float) -> dict:
+    """One asset's 0 % plan into patrol/plan.json, and its plan for every other mission mix (#338)."""
+    cfg, _ = load(io.CONFIG_PATH)
+    (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
+    t = io.read_snapshot()["T"]
+    seed = int(cfg["seed"]) + iso_week(t)[1]
+    sites = io.read_stage("fuse/sites")
+    kw: dict[str, Any] = {
+        "budget_h": budget_h, "dwell_h": dwell_h, "start": start,
+        "stand_in": base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
+    }  # fmt: skip
+    fish = _fisheries_inputs(t)
+    mixes = [m for m in _mixes(cfg) if m] if fish is not None and len(fish) else []
+    _write_mixes(
+        asset, {m: _plan_asset(sites, base, hours_fn, fish=fish, mix=m, **kw) for m in mixes}, t
+    )
+    return _write(asset, _plan_asset(sites, base, hours_fn, **kw))
+
+
 def ship_plan() -> dict:
     """Ship route over the top sites, weighted by the bandit's Thompson draw; merged into patrol/plan.json."""
-    cfg, _ = load(io.CONFIG_PATH)
     sea = _sea(io.read_stage("reference/cells"))
-    (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
-    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
-    sites = io.read_stage("fuse/sites")
-    stops = _plan_asset(
-        sites, base, lambda n: sea_hours(n, sea, SHIP_KN),
-        budget_h=SHIP_BUDGET_H, dwell_h=SHIP_DWELL_H, start=start,
-        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
-    )  # fmt: skip
-    return _write("ship", stops)
+    return _asset_plan("ship", lambda n: sea_hours(n, sea, SHIP_KN), SHIP_BUDGET_H, SHIP_DWELL_H)
 
 
 def aircraft_plan() -> dict:
     """The same planner and the same draw (same seed) with straight-line distances."""
-    cfg, _ = load(io.CONFIG_PATH)
-    (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
-    seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
-    sites = io.read_stage("fuse/sites")
-    stops = _plan_asset(
-        sites, base, lambda n: air_hours(n, AIR_KN),
-        budget_h=AIR_BUDGET_H, dwell_h=AIR_DWELL_H, start=start,
-        stand_in=base_stand_in or start_stand_in, **_bandit(cfg, sites, seed),
-    )  # fmt: skip
-    return _write("aircraft", stops)
+    return _asset_plan("aircraft", lambda n: air_hours(n, AIR_KN), AIR_BUDGET_H, AIR_DWELL_H)
 
 
 def run() -> None:

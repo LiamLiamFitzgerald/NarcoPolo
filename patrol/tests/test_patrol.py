@@ -349,3 +349,74 @@ def test_learn_counts_each_answer_once_and_never_from_the_plan_week():
         later["b"]["alpha"] == pytest.approx(0.81 + 1) and later["b"]["last_visit_week"] == 202648
     )
     assert _learn(FLAT, None, "2026-W49", 0.9) == FLAT  # no outcomes file: nothing changes
+
+
+# Mission mixes (#316, #338)
+def _fish_nodes(n):
+    """n fisheries candidates on a second line at y = 1 km, y_fish rank weights like _fisheries_inputs."""
+    return pd.DataFrame(
+        {
+            "site_id": [f"f{i}" for i in range(n)],
+            "x_m": [(i + 1) * 1500.0 for i in range(n)],
+            "y_m": 1000.0,
+            "w": [(n - i) / (n + 1) for i in range(n)],
+            "flag": [i < 2 for i in range(n)],
+        }
+    )
+
+
+def _trip_h(stops):
+    t = pd.to_datetime([s["arrival_utc"] for s in stops])
+    return (t[-1] - t[0]).total_seconds() / 3600
+
+
+def test_mix_zero_is_exactly_todays_plan():
+    sites, fish = _sites(20, flagged=5), _fish_nodes(6)
+    kw = {"budget_h": 6, "dwell_h": 1, "start": START}
+    assert _plan_asset(sites, (0.0, 0.0), _open_sea, fish=fish, mix=0, **kw) == _plan_asset(
+        sites, (0.0, 0.0), _open_sea, **kw
+    )
+    mean = pd.Series(sites["S"].to_numpy(), index=sites["site_id"])
+    theta = mean.copy()
+    theta["s12"] = 100.0
+    kw |= {"theta": theta, "exploit": mean}
+    assert _plan_asset(sites, (0.0, 0.0), _open_sea, fish=fish, mix=0, **kw) == _plan_asset(
+        sites, (0.0, 0.0), _open_sea, **kw
+    )
+
+
+def test_mixes_shift_stops_to_fisheries_and_every_plan_stays_in_budget():
+    sites, fish = _sites(20, flagged=5), _fish_nodes(6)
+    lens = {}
+    for m in (0, 25, 50, 75, 100):
+        stops = _plan_asset(
+            sites, (0.0, 0.0), _open_sea, budget_h=6, dwell_h=1, start=START, fish=fish, mix=m
+        )
+        assert _trip_h(stops) <= 6 and stops[0]["id"] == stops[-1]["id"] == "base"
+        lens[m] = [s.get("lens", "dropoff") for s in stops[1:-1]]
+        fish_stops = [s for s in stops if s.get("lens") == "fisheries"]
+        assert all("theta" not in s and "reason" not in s for s in fish_stops)
+        assert all(
+            s.get("not_significant", False) == (s["id"] not in ("f0", "f1")) for s in fish_stops
+        )
+    assert set(lens[0]) == {"dropoff"} and set(lens[100]) == {"fisheries"}
+    assert lens[25].count("fisheries") <= lens[75].count("fisheries")
+
+
+def test_simulator_mix_plans_exist_only_with_fisheries_data_and_stay_in_budget(world):
+    from core.schemas import SCHEMAS
+
+    root, _plan = world
+    path = root / "data" / "patrol" / "plan_mixes.json"
+    has_fish = "fuse/fisheries" in SCHEMAS and io.stage_path("fuse/fisheries").exists()
+    assert path.exists() == has_fish
+    if not has_fish:
+        return
+    mixes = json.loads(path.read_text())
+    assert mixes["T"] == io.read_snapshot()["T"].isoformat()
+    want = [m for m in load(io.CONFIG_PATH)[0]["patrol"]["mission_mixes"] if m]
+    assert sorted(int(m) for m in mixes["plans"]) == sorted(want)
+    for p in mixes["plans"].values():
+        assert set(p) == {"ship", "aircraft"}
+        assert _trip_h(p["ship"]) <= 24 and _trip_h(p["aircraft"]) <= 4
+    assert any(s.get("lens") == "fisheries" for s in mixes["plans"]["100"]["ship"])
