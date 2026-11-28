@@ -4,7 +4,13 @@ import json
 
 from core import io
 
-_STAGES = ("reference/cells", "reference/land", "reference/piers", "reference/travel_hours")
+_STAGES = (
+    "reference/cells",
+    "reference/land",
+    "reference/piers",
+    "reference/travel_hours",
+    "reference/presence_2km",
+)
 
 
 def _raw_is_real() -> bool:
@@ -23,7 +29,8 @@ def _raw_is_real() -> bool:
 
 def run() -> None:
     """make all. Simulator (or ingest stubs): `make sim` already wrote the reference files; check them and stop.
-    Real raw/: build cells, land, piers, travel times and the rasters from raw/ and write them through core.io."""
+    Real raw/: build cells, land, piers, travel times, the 2 km presence (#208) and the rasters from raw/ and write
+    them through core.io."""
     if not _raw_is_real():
         for name in _STAGES:
             io.read_stage(name)
@@ -35,5 +42,6 @@ def run() -> None:
     io.write_stage("reference/land", r.land, "real")
     io.write_stage("reference/piers", r.piers, "real")
     io.write_stage("reference/travel_hours", r.travel, "real")
+    io.write_stage("reference/presence_2km", r.presence, "real")
     for name, (array, pixel_m) in r.rasters.items():
         _real.write_raster(name, array, pixel_m)
