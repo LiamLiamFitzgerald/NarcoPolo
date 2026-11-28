@@ -292,7 +292,7 @@ def _strongest(slow: pd.DataFrame, u_small: pd.Series, agree: pd.Series, nbrs) -
     ambiguities), the lag in days after that slowdown and the slowdown's own row (for the reasons)."""
     rows = {}
     for cid, g in slow[slow["L"] > 0].groupby("cell_id"):
-        s = g.loc[g["L"].idxmax()]
+        s = g.nlargest(1, "L").iloc[0]  # first row with the highest L, as idxmax
         m, d0 = _window(s, u_small, nbrs, PARAMS["link_days"])
         if not m.any():
             continue
