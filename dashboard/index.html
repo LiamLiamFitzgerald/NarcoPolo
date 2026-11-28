@@ -355,6 +355,61 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 .dot { fill: var(--ink); }
 .hatch-bg-svg { fill: var(--hatch-bg); } .hatch-line-svg { stroke: var(--hatch-line); } .lane-line-svg { stroke: var(--lane-line); }
 
+
+/* screens and navigation (#318) */
+.tabs { display: flex; gap: var(--sp-1); padding: 0 var(--sp-4); overflow-x: auto; border-bottom: 1px solid var(--md-outline-variant); scrollbar-width: none; }
+.tabs a { position: relative; flex: none; padding: var(--sp-3) var(--sp-4); font: var(--t-title-small); color: var(--md-on-surface-variant); text-decoration: none;
+  border-radius: var(--shape-sm) var(--shape-sm) 0 0; transition: color var(--dur-medium) var(--ease), background-color var(--dur-medium) var(--ease); }
+.tabs a:hover { background: var(--md-surface-container); color: var(--md-on-surface); }
+.tabs a[aria-current="page"] { color: var(--md-primary); }
+.tabs a[aria-current="page"]::after { content: ""; position: absolute; left: var(--sp-3); right: var(--sp-3); bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--md-primary); }
+.screen { animation: fade-in var(--dur-medium) var(--ease-decel); }
+.screen-title { font: var(--t-headline-small); margin: var(--sp-6) var(--sp-4) 0; }
+.screen .figures { padding: var(--sp-4) var(--sp-4) 0; }
+.layout.single { grid-template-columns: minmax(0, 1fr); }
+
+/* site cards on This week (#313) */
+.top3 { display: grid; gap: var(--sp-3); }
+.site-card { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--shape-lg);
+  background: var(--md-surface-container-lowest); box-shadow: var(--elev-1); transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease);
+  animation: fade-up var(--dur-medium) var(--ease-decel) both; }
+.site-card:hover { box-shadow: var(--elev-3); transform: translateY(-1px); }
+.site-card.selected { outline: 2px solid var(--md-primary); }
+.site-card .why { font: var(--t-body-medium); margin-top: var(--sp-1); }
+.site-card .facts { font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
+.site-card .actions { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-2); }
+.lens-chip { display: inline-flex; align-items: center; gap: var(--sp-1); padding: 0 var(--sp-2); min-height: 22px; border-radius: var(--shape-full);
+  font: var(--t-label-medium); background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.lens-chip.fisheries { background: var(--md-tertiary-container); color: var(--md-on-tertiary-container); }
+.kicker { font: var(--t-label-medium); color: var(--md-primary); text-transform: uppercase; letter-spacing: 0.6px; }
+.route-line { display: flex; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) 0; border-bottom: 1px solid var(--md-outline-variant); }
+.route-line:last-of-type { border-bottom: 0; }
+.limits { margin: 0; padding-left: var(--sp-5); display: grid; gap: var(--sp-2); }
+.limits li::marker { color: var(--md-primary); }
+.print-head, .print-only { display: none; }
+
+/* the Friday briefing on paper (#319): This week only, light, flat, one A4 page */
+@page { size: A4; margin: 12mm; }
+@media print {
+  body { background: none; font-size: 11px; }
+  .appbar, .tabs, .skip, .footer, .map-tools, #toggles, .tip, dialog, .screen:not([data-screen="this-week"]), .site-card .actions, #play, #prev, #next, .toolbar, .chart-card .seg { display: none !important; }
+  .screen[data-screen="this-week"] { display: block !important; }
+  .print-head, .print-only { display: block; margin: 0 0 var(--sp-2); }
+  .card, .figure, .site-card, .chart-card { box-shadow: none !important; border: 1px solid var(--md-outline-variant); break-inside: avoid; }
+  .layout { display: block; padding: var(--sp-2) 0; }
+  .map-card { margin-bottom: var(--sp-2); padding: var(--sp-3); }
+  #legend { margin-top: var(--sp-2); padding: var(--sp-2); }
+  .panels { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: var(--sp-2); }
+  .panels .card { padding: var(--sp-3); } .panels h2 { margin-bottom: var(--sp-2); font: var(--t-title-small); }
+  .top3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--sp-2); }
+  .site-card { grid-template-columns: minmax(0, 1fr); padding: var(--sp-2); gap: var(--sp-1); }
+  .site-card .lead { display: none; } .site-card .why, .site-card .facts { font: var(--t-body-small); }
+  #route .tonal-btn, #route p { display: none; } .route-line { display: block; padding: var(--sp-1) 0; } .route-line strong { margin-right: var(--sp-1); }
+  .figures { grid-template-columns: repeat(5, 1fr); padding: 0; } .figure .value { font: var(--t-title-large); }
+  .screen-title { margin: 0 0 var(--sp-2); font: var(--t-title-large); }
+  * { animation: none !important; transition: none !important; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
   .route.draw { stroke-dasharray: none; stroke-dashoffset: 0; }
@@ -365,50 +420,86 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 </style>
 </head>
 <body>
-<a class="skip" href="#main">Skip to the map and sites</a>
+<a class="skip" href="#main">Skip to the briefing</a>
 <header class="appbar" id="appbar">
   <h1 class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>NarcoPolo</h1>
   <span id="banner" data-label="none" role="status">Loading snapshot…</span>
   <span class="spacer"></span>
+  <div id="lens" class="seg compact" role="radiogroup" aria-label="Lens"></div>
+  <button id="print" class="icon-btn state" type="button" aria-label="Print or save the briefing as PDF" disabled></button>
   <button id="about" class="icon-btn state" type="button" aria-label="About this snapshot" disabled></button>
   <div id="theme" class="seg compact" role="radiogroup" aria-label="Theme"></div>
 </header>
-<section id="figures" class="figures page" aria-label="Headline figures"><div class="figure skeleton"></div><div class="figure skeleton"></div><div class="figure skeleton"></div></section>
+<nav id="nav" class="tabs page" aria-label="Screens">
+  <a href="#this-week" data-screen="this-week">This week</a>
+  <a href="#dropoff" data-screen="dropoff">Drop-off watch</a>
+  <a href="#fisheries" data-screen="fisheries">Fisheries watch</a>
+  <a href="#plan" data-screen="plan">Patrol plan</a>
+  <a href="#limits" data-screen="limits">What we couldn't see</a>
+</nav>
 <div id="alert" class="alert" role="alert" hidden></div>
-<main id="main" class="layout page">
-  <div class="col-main">
-    <section class="card map-card rise" style="--i: 0" aria-label="Map">
-      <div class="toolbar"><div id="map" class="seg" role="radiogroup" aria-label="Heat map"></div></div>
-      <div class="toolbar">
-        <button id="prev" class="icon-btn state" type="button" aria-label="Previous week" disabled></button>
-        <div id="week" class="chips" role="radiogroup" aria-label="Week"></div>
-        <button id="next" class="icon-btn state" type="button" aria-label="Next week" disabled></button>
-        <button id="play" class="tonal-btn state" type="button" aria-pressed="false" disabled></button>
-      </div>
-      <div class="map-wrap" id="mapWrap" tabindex="0" aria-label="Map: drag or use the arrow keys to pan, + and - to zoom">
-        <svg id="svg" viewBox="0 0 900 260" role="group" aria-label="Map of the study area"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
-        <div class="map-tools">
-          <button id="zin" class="state" type="button" aria-label="Zoom in"></button>
-          <button id="zout" class="state" type="button" aria-label="Zoom out"></button>
-          <button id="zreset" class="state" type="button" aria-label="Show the whole map"></button>
+<div class="print-head" aria-hidden="true"><strong>NarcoPolo weekly briefing</strong> <span id="printMeta"></span></div>
+<main id="main" class="page">
+  <section class="screen" data-screen="this-week" aria-labelledby="h-week">
+    <h2 class="screen-title" id="h-week">Where should the ship and aircraft go this week?</h2>
+    <div id="figures" class="figures" aria-label="Headline figures"><div class="figure skeleton"></div><div class="figure skeleton"></div><div class="figure skeleton"></div></div>
+    <div class="layout">
+      <section class="card map-card rise" style="--i: 0" aria-label="Map">
+        <div class="toolbar"><div id="map" class="seg" role="radiogroup" aria-label="Heat map"></div></div>
+        <div class="toolbar">
+          <button id="prev" class="icon-btn state" type="button" aria-label="Previous week" disabled></button>
+          <div id="week" class="chips" role="radiogroup" aria-label="Week"></div>
+          <button id="next" class="icon-btn state" type="button" aria-label="Next week" disabled></button>
+          <button id="play" class="tonal-btn state" type="button" aria-pressed="false" disabled></button>
         </div>
-        <div class="scale" aria-hidden="true"><div class="pill"><svg class="north" viewBox="0 0 24 24"><path d="M12 2l5 12h-4v8h-2v-8H7z"/></svg><div><div id="scaleLabel"></div><div id="scaleBar" class="bar"></div></div></div></div>
+        <div class="map-wrap" id="mapWrap" tabindex="0" aria-label="Map: drag or use the arrow keys to pan, + and - to zoom">
+          <svg id="svg" viewBox="0 0 900 260" role="group" aria-label="Map of the study area"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
+          <div class="map-tools">
+            <button id="zin" class="state" type="button" aria-label="Zoom in"></button>
+            <button id="zout" class="state" type="button" aria-label="Zoom out"></button>
+            <button id="zreset" class="state" type="button" aria-label="Show the whole map"></button>
+          </div>
+          <div class="scale" aria-hidden="true"><div class="pill"><svg class="north" viewBox="0 0 24 24"><path d="M12 2l5 12h-4v8h-2v-8H7z"/></svg><div><div id="scaleLabel"></div><div id="scaleBar" class="bar"></div></div></div></div>
+        </div>
+        <div id="legend" class="outlined"><div class="skeleton"></div></div>
+        <div id="toggles" class="chips" role="group" aria-label="Overlays"></div>
+      </section>
+      <div class="panels">
+        <section class="card rise" style="--i: 1" aria-labelledby="h-top"><h2 id="h-top">Top 3 this week</h2><div id="top3" class="top3"><div class="skeleton"></div></div></section>
+        <section class="card rise" style="--i: 2" aria-labelledby="h-route"><h2 id="h-route">This week's route</h2><div id="route"><div class="skeleton"></div></div></section>
       </div>
-      <div id="legend" class="outlined"><div class="skeleton"></div></div>
-      <div id="toggles" class="chips" role="group" aria-label="Overlays"></div>
-    </section>
-    <section class="card rise" style="--i: 1" aria-labelledby="trendsTitle">
-      <div class="card-head"><h2 id="trendsTitle">This month at sea</h2><span class="muted" id="trendsNote"></span></div>
-      <div id="trends" class="chart-grid two"><div class="skeleton"></div></div>
-    </section>
-  </div>
-  <aside class="panels">
-    <section class="card wide rise" style="--i: 2"><h2>Sites worth checking</h2><ol id="sites" class="list"><li class="skeleton"></li><li class="skeleton"></li></ol>
-      <button id="more" class="tonal-btn state" type="button" hidden></button></section>
-    <section class="card rise" style="--i: 3"><h2>Patrol plan</h2><div id="plan"><div class="skeleton"></div></div></section>
-    <section class="card rise" style="--i: 4"><h2>Piers worth watching</h2><div id="piers"><div class="skeleton"></div></div></section>
-    <section class="card rise" style="--i: 5"><h2>How far to trust this</h2><div id="validation"><div class="skeleton"></div></div></section>
-  </aside>
+    </div>
+    <p class="print-only" id="printLimits"></p>
+  </section>
+  <section class="screen" data-screen="dropoff" aria-labelledby="h-drop" hidden>
+    <h2 class="screen-title" id="h-drop">Which sites and piers fit a drop-off?</h2>
+    <div class="layout">
+      <section class="card"><h2>Sites worth checking</h2><ol id="sites" class="list"><li class="skeleton"></li><li class="skeleton"></li></ol>
+        <button id="more" class="tonal-btn state" type="button" hidden></button></section>
+      <div class="panels"><section class="card"><h2>Piers worth watching</h2><div id="piers"><div class="skeleton"></div></div></section></div>
+    </div>
+  </section>
+  <section class="screen" data-screen="fisheries" aria-labelledby="h-fish" hidden>
+    <h2 class="screen-title" id="h-fish">Where is dark fishing above normal?</h2>
+    <div class="layout single"><section class="card" id="fisheries"></section></div>
+  </section>
+  <section class="screen" data-screen="plan" aria-labelledby="h-plan" hidden>
+    <h2 class="screen-title" id="h-plan">What route, in what order, and why?</h2>
+    <div class="layout single"><section class="card"><h2>Patrol plan</h2><div id="plan"><div class="skeleton"></div></div></section></div>
+  </section>
+  <section class="screen" data-screen="limits" aria-labelledby="h-limits" hidden>
+    <h2 class="screen-title" id="h-limits">How much should we trust this week?</h2>
+    <div class="layout">
+      <div class="col-main">
+        <section class="card" aria-labelledby="h-lim"><h2 id="h-lim">What this system cannot see</h2><ul id="limitsList" class="limits"></ul></section>
+        <section class="card" aria-labelledby="trendsTitle">
+          <div class="card-head"><h2 id="trendsTitle">This month at sea</h2><span class="muted" id="trendsNote"></span></div>
+          <div id="trends" class="chart-grid two"><div class="skeleton"></div></div>
+        </section>
+      </div>
+      <div class="panels"><section class="card"><h2>How far to trust this</h2><div id="validation"><div class="skeleton"></div></div></section></div>
+    </div>
+  </section>
 </main>
 <footer id="footer" class="footer page"></footer>
 <div id="tip" class="tip" role="tooltip" hidden></div>
@@ -440,6 +531,61 @@ const REPLAY_MS = 1500; // one week per step when replaying
 const KM_PER_DEG_LAT = 111.2; // mean length of a degree of latitude, for the scale bar only
 const reduced = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+// phrases:start
+// Every sentence a reader sees on the briefing screens, in one place, so it can be checked and translated (#315).
+// Fixed vocabulary: "worth checking", "unusual", "consistent with a drop-off". A test bans the words that claim
+// more than the system knows.
+const PHRASES = {
+  lens_dropoff: "Drop-off watch", lens_fisheries: "Fisheries watch", lens_both: "Both",
+  top1: "Top of this week's shortlist", topN: "Worth checking this week",
+  ratio_more: "About {x}× more small boats than normal this week", ratio_fewer: "About {x}× fewer small boats than normal this week",
+  ratio_same: "About as many small boats as normal this week", not_observed: "No satellite look this week",
+  signals: "{n} independent signal(s) agree", no_signals: "No independent signal agrees yet",
+  seen: "seen {n} time(s) in the history", followup_unobserved: "follow-up not observed on {n} day(s)", piers: "piers to watch: {list}",
+  show_on_map: "Show on map", in_detail: "Why, in detail",
+  no_sites: "No sites this week.", fisheries_lens_empty: "No sites in Fisheries watch yet. Switch to Drop-off watch or Both.",
+  fisheries_na_title: "Fisheries watch is not available yet",
+  fisheries_na_body: "It needs two things the pipeline does not produce yet: dark fishing activity compared with the normal level for the week (issue 321), and the closed and protected areas (issue 322). Until then this lens shows no sites, rather than drop-off sites under another name.",
+  fisheries_will_show: "When it is ready, this screen will show areas with dark fishing above normal, closed or protected areas, and the harbours where catches would likely land.",
+  route_ship: "Ship", route_aircraft: "Aircraft", route_stops: "{n} stops · {h} h of {b} h · leaves {time} UTC",
+  route_none: "No trip worth making within the time budget", route_from_lens: "Every stop this week comes from Drop-off watch.",
+  route_more: "Full route and timings",
+  limits: [
+    "Pick-ups that happen between two radar passes are missed: passes come every one to three days, a pick-up can take hours.",
+    "Small boats in rough seas are missed, so rough passes count as no satellite look for small boats.",
+    "Sentinel-1 radar misses most vessels under 15 m (Paolo et al. 2024): a quiet area is not proof that nothing was there.",
+    "The system runs about five days behind real time, because the ship and weather feeds arrive late.",
+    "Site significance flags are switched off until the new test lands (issue 269): a site is top of the shortlist, never a certainty.",
+    "Places, not people: no vessel or person is named anywhere, and a person makes every tasking decision.",
+  ],
+  limits_stand_in: "On simulated data the base port and start time are stand-ins until they are set in config.yaml.",
+  print_meta: "{label} data · as of {T} · week {week} · lens: {lens}",
+};
+// phrases:end
+const t = (key, vars = {}) => String(PHRASES[key]).replace(/\{(\w+)\}/g, (_, k) => String(vars[k] ?? ""));
+
+// Lens (#313): which workflow the briefing shows. Each agency opens on its own (a link with lens=..., remembered).
+const LENSES = ["dropoff", "fisheries", "both"];
+function initialLens() {
+  const m = location.hash.match(/lens=(\w+)/);
+  if (m && LENSES.includes(m[1])) return m[1];
+  try { const v = localStorage.getItem("np-lens"); if (v && LENSES.includes(v)) return v; } catch (e) { /* no storage */ }
+  return "dropoff";
+}
+view.lens = initialLens();
+const inLens = s => view.lens === "both" || (s.lens ?? "dropoff") === view.lens;
+
+// Screens (#318): one question each, one link each.
+const SCREENS = ["this-week", "dropoff", "fisheries", "plan", "limits"];
+function route() {
+  const want = location.hash.slice(1).split("&")[0], name = SCREENS.includes(want) ? want : "this-week";
+  for (const sec of document.querySelectorAll(".screen")) sec.hidden = sec.dataset.screen !== name;
+  for (const a of document.querySelectorAll("#nav a")) a.setAttribute("aria-current", a.dataset.screen === name ? "page" : "false");
+  if (name === "this-week" && ext) drawScale();
+}
+function go(name) { if (location.hash.slice(1).split("&")[0] === name) route(); else location.hash = name; }
+addEventListener("hashchange", route);
+
 // Icons: simple geometric paths drawn for this page, 24 x 24 grid, currentColor.
 const ICONS = {
   light: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4zM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1zM16.3 6.3l2.1-2.1 1.4 1.4-2.1 2.1z",
@@ -455,6 +601,7 @@ const ICONS = {
   plus: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z",
   minus: "M19 13H5v-2h14z",
   reset: "M12 5V1L7 6l5 5V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z",
+  print: "M19 8H5a3 3 0 0 0-3 3v6h4v4h12v-4h4v-6a3 3 0 0 0-3-3zm-3 11H8v-5h8zm3-7a1 1 0 1 1 0-2 1 1 0 0 1 0 2zM18 3H6v4h12z",
   locate: "M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 3h-2.1A7 7 0 0 0 13 5.1V3h-2v2.1A7 7 0 0 0 5.1 11H3v2h2.1a7 7 0 0 0 5.9 5.9V21h2v-2.1a7 7 0 0 0 5.9-5.9H21zm-9 6a5 5 0 1 1 0-10 5 5 0 0 1 0 10z",
 };
 const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
@@ -685,13 +832,20 @@ function drawLegend(name, week) {
     "Colours are see-through while it is on; turn it off for exact colours."));
 }
 
+// Words before numbers (#315): observed versus expected reads as "about 2.3x more small boats than normal".
+function cellTip(name, c) {
+  if (name !== "obs_vs_exp" || c.ratio == null) return `${MAPS[name].long}: ${Number(c[name]).toFixed(3)}`;
+  if (c.ratio.toFixed(1) === "1.0") return t("ratio_same");
+  return c.ratio > 1 ? t("ratio_more", { x: c.ratio.toFixed(1) }) : t("ratio_fewer", { x: (1 / c.ratio).toFixed(1) });
+}
+
 function drawHeatmap(name, week) {
   hatchUnobserved();
   const g = group("heat");
   for (const c of snap.cells.weeks[week]) {
     const hatched = hatchedValue(name, c);
     const r = el("rect", { ...cellRect(c.cell_id), class: hatched ? "cell hatched" : "cell" }, g,
-      hatched ? "Not observed this week" : `${MAPS[name].long}: ${Number(c[name]).toFixed(3)}`);
+      hatched ? t("not_observed") : cellTip(name, c));
     if (!hatched) r.style.fill = colour(name, c[name]);
   }
   drawLegend(name, week);
@@ -768,7 +922,8 @@ function drawOverlays(first = false) {
 }
 
 // The sites the patrol planner chose from (meta.top_sites, in D1 order); the map and the list draw these, not every site.
-const candidates = () => [...snap.sites].sort(siteOrder).slice(0, snap.meta.top_sites);
+const candidates = () => [...snap.sites].filter(inLens).sort(siteOrder).slice(0, snap.meta.top_sites);
+const pierLabel = id => { const p = snap.piers.find(q => q.id === id); return p ? p.name ?? p.id : id; };
 
 // D1 (#176): p_site ranks sites (highest first), S breaks ties; sites without p_site come after, by S
 function siteOrder(a, b) {
@@ -784,12 +939,69 @@ function selectSite(id, { fromMap = false } = {}) {
   const s = snap.sites.find(q => q.id === id);
   if (!s) return;
   if (candidates().findIndex(q => q.id === id) >= TOP_LIST && !view.more) view.more = true;
-  drawOverlays(); drawSiteList();
+  drawOverlays(); drawSiteList(); drawTop3();
   const li = document.querySelector(`#sites li[data-id="${CSS.escape(id)}"]`);
   if (li) {
     if (fromMap) { li.querySelector("details").open = true; li.scrollIntoView({ block: "nearest", behavior: reduced() ? "auto" : "smooth" }); }
   }
-  if (!fromMap) panTo(s.lon, s.lat);
+  if (!fromMap) { go("this-week"); panTo(s.lon, s.lat); }
+}
+
+// A site card for This week and Fisheries watch (#313): plain reason first, numbers behind "Why, in detail".
+function siteCard(s, i) {
+  const lens = s.lens ?? "dropoff", nm = s.agreement_merged;
+  const facts = [nm == null ? null : nm ? t("signals", { n: nm }) : t("no_signals"), t("seen", { n: s.recurrence }),
+    s.followup_unobserved ? t("followup_unobserved", { n: s.followup_unobserved }) : null,
+    s.top_piers.length ? t("piers", { list: s.top_piers.map(pierLabel).join(", ") }) : null].filter(Boolean).join(" · ");
+  const map = h("button", { type: "button", className: "link-btn state" });
+  map.innerHTML = icon("locate"); map.append(t("show_on_map"));
+  map.onclick = () => selectSite(s.id);
+  const more = h("button", { type: "button", className: "link-btn state" }, t("in_detail"));
+  more.onclick = () => { selectSite(s.id, { fromMap: true }); go("dropoff"); };
+  const card = h("article", { className: `site-card${s.id === selected ? " selected" : ""}` },
+    h("div", { className: "lead" }, String(i + 1)),
+    h("div", {}, h("div", { className: "kicker" }, i ? t("topN") : t("top1")),
+      h("div", { className: "headline" }, h("span", { className: `lens-chip ${lens}` }, t(`lens_${lens}`)), h("span", { className: "muted" }, s.id)),
+      h("div", { className: "why" }, s.reasons[0] ?? ""), h("div", { className: "facts" }, facts), h("div", { className: "actions" }, map, more)));
+  card.dataset.id = s.id;
+  card.style.animationDelay = `${i * 60}ms`;
+  return card;
+}
+
+function drawTop3() {
+  const box = document.getElementById("top3"), list = candidates().slice(0, TOP_LIST);
+  box.replaceChildren(...(list.length ? list.map(siteCard) : [empty(view.lens === "fisheries" ? t("fisheries_lens_empty") : t("no_sites"))]));
+}
+
+function drawRoute() {
+  const box = document.getElementById("route"), f = snap.meta.figures ?? {};
+  const lines = Object.entries(snap.plan).map(([a, st]) => h("div", { className: "route-line" }, h("strong", {}, t(`route_${a}`)),
+    h("span", { className: "muted" }, st.length > 2
+      ? t("route_stops", { n: st.length - 2, h: fmt(f[`${a}_h`], 1), b: f[`${a}_budget_h`] ?? "–", time: st[0].arrival_utc.slice(11, 16) })
+      : t("route_none"))));
+  const btn = h("button", { type: "button", className: "tonal-btn state" }, t("route_more"));
+  btn.onclick = () => go("plan");
+  box.replaceChildren(...lines, h("p", { className: "muted" }, t("route_from_lens")), btn);
+}
+
+function drawFisheries() {
+  const box = document.getElementById("fisheries"), sites = snap.sites.filter(s => s.lens === "fisheries").sort(siteOrder);
+  if (sites.length) { box.replaceChildren(h("h2", {}, t("lens_fisheries")), h("div", { className: "top3" }, ...sites.slice(0, snap.meta.top_sites).map(siteCard))); return; }
+  const e = empty(t("fisheries_na_body"), "info");
+  box.replaceChildren(h("h2", {}, t("fisheries_na_title")), e, h("p", { className: "muted" }, t("fisheries_will_show")));
+}
+
+function drawLimits() {
+  const items = [...PHRASES.limits, ...(Object.values(snap.plan).some(st => st[0]?.stand_in) ? [t("limits_stand_in")] : [])];
+  document.getElementById("limitsList").replaceChildren(...items.map(x => h("li", {}, x)));
+  document.getElementById("printLimits").textContent = PHRASES.limits.slice(0, 4).join(" ");
+}
+
+function setLens(l) {
+  view.lens = l;
+  try { localStorage.setItem("np-lens", l); } catch (e) { /* this visit only */ }
+  if (!snap) return;
+  drawOverlays(); drawSiteList(); drawTop3();
 }
 
 function drawSiteList() {
@@ -1208,6 +1420,14 @@ function setupControls() {
   radioGroup(document.getElementById("theme"), [["light", "", "light"], ["dark", "", "dark"], ["auto", "", "auto"]],
     document.documentElement.dataset.pick, setTheme);
   for (const b of document.querySelectorAll("#theme button")) b.setAttribute("aria-label", `${b.dataset.value} theme`);
+  radioGroup(document.getElementById("lens"), LENSES.map(l => [l, t(`lens_${l}`)]), view.lens, setLens);
+  document.getElementById("print").innerHTML = icon("print");
+  document.getElementById("print").onclick = () => print();
+  // The briefing prints light, flat and on one page, whatever the screen theme (#319).
+  let modeBefore = null;
+  addEventListener("beforeprint", () => { modeBefore = document.documentElement.dataset.mode; document.documentElement.dataset.mode = "light"; });
+  addEventListener("afterprint", () => { if (modeBefore) document.documentElement.dataset.mode = modeBefore; });
+  route();
   matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (document.documentElement.dataset.pick === "auto") setTheme("auto"); });
   radioGroup(document.getElementById("map"), Object.entries(MAPS).map(([k, m]) => [k, m.title]), view.map,
     k => { view.map = k; if (snap) { fadeHeat(() => drawHeatmap(view.map, view.week)); } });
@@ -1247,7 +1467,8 @@ function setupControls() {
 
 function enableControls() {
   selectWeek = radioGroup(document.getElementById("week"), snap.meta.weeks.map(w => [w, w]), view.week, onWeekChange, "chip");
-  for (const b of document.querySelectorAll("#map button, #toggles button, #prev, #next, #play, #about")) b.disabled = false;
+  for (const b of document.querySelectorAll("#map button, #toggles button, #prev, #next, #play, #about, #print")) b.disabled = false;
+  document.getElementById("printMeta").textContent = t("print_meta", { label: snap.meta.data_label, T: snap.meta.T, week: snap.meta.week, lens: t(`lens_${view.lens}`) });
   document.getElementById("t-backdrop").hidden = !backdrop();
   seeThrough();
   document.getElementById("prev").onclick = () => { setReplay(false); stepWeek(-1); };
@@ -1272,7 +1493,7 @@ function showError() {
   a.append(h("div", {}, h("strong", {}, "No snapshot found. "), "Run ", h("code", {}, "make sim"), " and ", h("code", {}, "make all"), ", then reload this page."));
   a.hidden = false;
   document.getElementById("figures").hidden = true;
-  for (const id of ["legend", "sites", "plan", "piers", "validation", "trends"]) document.getElementById(id).replaceChildren(empty("Waiting for a snapshot.", "info"));
+  for (const id of ["legend", "sites", "plan", "piers", "validation", "trends", "top3", "route", "fisheries"]) document.getElementById(id).replaceChildren(empty("Waiting for a snapshot.", "info"));
 }
 
 (async () => {
@@ -1281,7 +1502,8 @@ function showError() {
   catch (e) { showError(); return; }
   view.week = snap.meta.week;
   setExtent(); enableControls(); drawBasemap(); drawBanner(); drawFigures(); drawHeatmap(view.map, view.week);
-  drawOverlays(true); drawSiteList(); drawPlan(); drawPiers(); drawValidation(); drawTrends(); drawFooter();
+  drawOverlays(true); drawSiteList(); drawTop3(); drawRoute(); drawPlan(); drawPiers(); drawFisheries(); drawValidation(); drawTrends(); drawLimits(); drawFooter();
+  route();
 })();
 </script>
 </body>
