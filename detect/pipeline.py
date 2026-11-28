@@ -1,5 +1,6 @@
 """Per-pass detection and the full run to detect/detections.parquet."""
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +13,9 @@ from detect._common import CFG, cell_ids
 from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
 from detect.ghost import azimuth_heading, ghost_offset_m, is_ghost
 from detect.pboat import features, predict_pboat
-from detect.scene import apply_masks, load_scene
+from detect.scene import _earlier_median, apply_masks, load_scene
+
+log = logging.getLogger(__name__)
 
 
 def _read_masks(meta: dict[str, Any], shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
@@ -39,6 +42,24 @@ def _ratio_db_at(img: np.ndarray, mu_b: np.ndarray, rows: pd.Series, cols: pd.Se
     return np.array(out)
 
 
+def _suppress_fixed(
+    vv: np.ndarray, vh: np.ndarray, meta: dict[str, Any], raw: Path, n: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """This pass over the median of its n earlier same-orbit passes (#341): rocks, buoys and fish farms divide out,
+    a boat new on this pass does not. Without n earlier passes the plain image is used (logged), never NaN: the
+    pass's cells still count as observed in coverage/exposure, so an empty image would read as no boats."""
+    med = _earlier_median(meta | {"shape": vv.shape}, raw, n)
+    if med is None:
+        log.warning(
+            "pass %s: fewer than %d earlier passes, no fixed-target suppression",
+            meta.get("pass_id"),
+            n,
+        )
+        return vv, vh
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return vv / med[0], vh / med[1]
+
+
 def run_pass(
     pass_id: str,
     img: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None = None,
@@ -53,6 +74,9 @@ def run_pass(
     root: the raw/ directory (default core.io.raw_root()).
     """
     vv, vh, meta = img if img is not None else load_scene(pass_id, root or io.raw_root())
+    ghost_img = vv  # the ghost rule looks for bright targets in the plain image
+    if img is None and (n := CFG["fixed_target_history"]):
+        vv, vh = _suppress_fixed(vv, vh, meta, root or io.raw_root(), int(n))
     land, static = masks if masks is not None else _read_masks(meta, vv.shape)
     a = alpha(CFG["enl"], CFG["p_fa"])
     per_pol = {}
@@ -67,7 +91,7 @@ def run_pass(
         m, mu, _ = per_pol[pol]
         cands.loc[miss, col] = _ratio_db_at(m, mu, cands.loc[miss, "row"], cands.loc[miss, "col"])
     heading, offset = azimuth_heading(meta), ghost_offset_m(meta)
-    cands["ghost"] = [is_ghost(c, vv, heading, offset) for _, c in cands.iterrows()]
+    cands["ghost"] = [is_ghost(c, ghost_img, heading, offset) for _, c in cands.iterrows()]
     cands["size_class"] = size_class(cands["n_px"].to_numpy()) if len(cands) else []
     cands["n_px"] = cands["n_px"].astype(int)
     cands["pol_agree"] = cands["pol_agree"].astype(bool)

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from scipy import ndimage
 
 from detect._common import CFG
@@ -58,6 +59,36 @@ def load_scene(
     if not np.isfinite(vv).any():
         raise ValueError(f"{tif}: every pixel is nodata")
     return vv, vh, meta
+
+
+def _earlier_median(
+    meta: dict[str, Any], raw_dir: Path, n: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Per-pixel median (VV, VH) of the n latest scenes of the same relative orbit strictly before this pass
+    (#341, fixed-target suppression). Only scenes on this scene's exact grid window count. None if fewer than n:
+    never this pass itself or a later one."""
+    t = pd.Timestamp(meta["start_time"])
+    earlier = []
+    for js in sorted((raw_dir / "s1").glob("*.json")):
+        m = json.loads(js.read_text())
+        if (
+            m.get("relative_orbit") == meta.get("relative_orbit")
+            and pd.Timestamp(m["start_time"]) < t
+        ):
+            earlier.append((pd.Timestamp(m["start_time"]), m["pass_id"]))
+    stack: list[tuple[np.ndarray, np.ndarray]] = []
+    for _, pid in sorted(earlier, reverse=True):
+        vv, vh, m = load_scene(pid, raw_dir)
+        if (m["x_left"], m["y_top"]) == (meta["x_left"], meta["y_top"]) and vv.shape == meta[
+            "shape"
+        ]:
+            stack.append((vv.astype(np.float32), vh.astype(np.float32)))
+        if len(stack) == n:
+            return (
+                np.nanmedian([a for a, _ in stack], axis=0),
+                np.nanmedian([b for _, b in stack], axis=0),
+            )
+    return None
 
 
 def apply_masks(img: np.ndarray, land: np.ndarray, static: np.ndarray) -> np.ndarray:

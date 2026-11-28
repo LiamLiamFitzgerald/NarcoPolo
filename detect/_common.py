@@ -15,6 +15,11 @@ _SPEC: dict[str, Any] = {
     "land_buffer_m": 300,
     "cfar_outer": 41,
     "cfar_guard": 11,
+    # #341 fixed-target suppression: divide each real pass by the median of this many earlier passes of the same
+    # relative orbit before CFAR. None = off: the ratio image's tail is heavier than the gamma tail alpha() assumes
+    # (P1's simulator: open-sea false alarms ~0 -> 1.02 per km2 per pass), so it needs its own threshold first.
+    # TODO(P1): config key.
+    "fixed_target_history": None,
     "p_fa": 1e-7,  # then calibrated on injection and null tests
     "enl": 4.4,  # spec: estimate_enl default, also the simulator's L (issue 8)
     "cluster_px": [1, 200],
