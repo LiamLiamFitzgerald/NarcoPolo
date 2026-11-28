@@ -9,6 +9,7 @@ from scipy import stats
 from statsmodels.stats.multitest import multipletests
 
 from core import io
+from core.expected import scoring_rows
 from core.grid import neighbours
 from core.observed import Observed
 from detectors._common import PARAMS, _provenance
@@ -173,7 +174,7 @@ def _slow_hours(m: pd.DataFrame, events: pd.DataFrame) -> np.ndarray:
     """Slow presence-hours per slowdown row: sum of duration_min / 60 over its events; NaN when any duration is
     null (GFW gives none) or the cell-day had no event. TODO(P6): real source of slow hours, question #131."""
     ev = events[events["event_type"] == "slowdown"]
-    ev = ev.assign(date=ev["time_utc"].dt.date, h=ev["duration_min"] / 60)
+    ev = ev.assign(date=pd.to_datetime(ev["time_utc"], utc=True).dt.date, h=ev["duration_min"] / 60)
     g = ev.groupby(["cell_id", "date"])["h"]
     hours = g.sum().where(g.count() == g.size()).rename("hours").reset_index()
     keys = m[["cell_id"]].assign(date=pd.to_datetime(m["date"]).dt.date)
@@ -225,19 +226,24 @@ def _weekly_y(m: pd.DataFrame) -> np.ndarray:
     return ((sums["count"] + 0.5) / (sums["mu"] + 0.5)).to_numpy()
 
 
-def score_cells(observed, expected, layers, events, T, exposure=None) -> pd.DataFrame:
+def score_cells(observed, expected, layers, events, T, exposure=None, start=None) -> pd.DataFrame:
     """Pure: the fuse/cells frame from input frames, no file I/O (validate.null_test calls it on shifted frames).
     observed rows (E > 0) in the evaluation window only; CUSUM runs over all observed history so a build-up before
-    the window still counts. exposure (coverage/exposure) gives post_storm; without it that fact is unknown."""
+    the window still counts. exposure (coverage/exposure) gives post_storm; without it that fact is unknown.
+    start: first scored day; None = the evaluation window (the Monday three ISO weeks before T's). fuse passes the
+    radar-history start for the lag link (#269), whose slowdowns reach back T - 89 days."""
     obs = Observed(observed).observed_rows()
-    # Live forecast only (fold 0, #74 item 6; the simulator writes 0 too, #172). Backtest folds would duplicate
-    # cell-days.
-    exp = expected[expected["fold"] == 0]
+    # One forecast row per cell-day: live (fold 0) where it exists, else the out-of-sample backtest fold for that
+    # date (#269, core.expected), so CUSUM and the radar-history link have expectations before the live window.
+    exp = scoring_rows(expected)
     m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
-    start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
+    if start is None:
+        start = T - timedelta(
+            days=T.weekday() + 21
+        )  # Monday of the ISO week three weeks before T's
     m = m[pd.to_datetime(m["date"]).between(pd.Timestamp(start), pd.Timestamp(T))].reset_index(
         drop=True
     )

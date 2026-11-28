@@ -1,4 +1,6 @@
 import json
+import struct
+import zlib
 from datetime import UTC, date, datetime
 
 import numpy as np
@@ -11,8 +13,12 @@ from core.config import load
 from core.crs import to_utm
 from core.schemas import check_json
 from export import (
+    _backdrop,
+    _basemap,
+    _daily,
     _legends,
     _provenance,
+    _scan,
     _weeks,
     basemap,
     build_snapshot,
@@ -23,6 +29,29 @@ from export import (
 from sim.simulate import simulate
 
 WEEK = "2026-W48"  # Monday 2026-11-23 to Sunday 2026-11-29
+
+
+def _png(w: int = 4, h: int = 2) -> bytes:
+    """A valid 8-bit greyscale PNG, w x h, a left-to-right gradient."""
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+    rows = b"".join(b"\x00" + bytes(255 * x // max(w - 1, 1) for x in range(w)) for _ in range(h))
+    ihdr = struct.pack(">IIBBBBB", w, h, 8, 0, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", ihdr)
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+
+
+BACKDROP_META = {
+    "bounds": [-10.6, 51.1, -7.9, 51.95],
+    "crs": "EPSG:4326",
+    "from": "2026-08-30",
+    "to": "2026-11-27",
+    "n_scenes": 30,
+    "attribution": "Contains modified Copernicus Sentinel data 2026",
+}
 
 
 def _t(day: str) -> pd.Timestamp:
@@ -145,11 +174,16 @@ def world(tmp_path_factory):
     stop = lambda i, t, x, y: {"id": i, "arrival_utc": t, "dwell_h": 1.0, "x_m": x, "y_m": y}
     plan = {  # what patrol writes
         "ship": [stop("base", "2026-11-27T06:00:00Z", s.x_m - 9000, s.y_m),
-                 {**stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m), "exploration": True},
+                 {**stop(s.site_id, "2026-11-27T08:00:00Z", s.x_m, s.y_m), "exploration": True, "reason": "explore"},
                  stop("base", "2026-11-27T10:00:00Z", s.x_m - 9000, s.y_m)],
         "aircraft": [],
     }  # fmt: skip
     io.write_json_stage("patrol/plan", plan, "simulated")
+    ref = io.stage_path(
+        "reference/cells"
+    ).parent  # the radar backdrop P3 will write (contract #263)
+    (ref / "radar_backdrop.png").write_bytes(_png())
+    (ref / "radar_backdrop.json").write_text(json.dumps(BACKDROP_META))
     (root / "reports").mkdir()
     (root / "reports" / "validation.json").write_text(json.dumps({"brier": 0.1, "recall": []}))
     yield root, build_snapshot()
@@ -174,6 +208,7 @@ def test_snapshot_has_the_spec_keys_and_a_data_driven_label(world):
     assert snap["meta"]["data_label"] == "simulated"  # from the stamps, not typed in
     assert snap["meta"]["weeks"] == ["2026-W45", "2026-W46", "2026-W47", "2026-W48"]
     assert snap["meta"]["T"] == "2026-11-27"
+    assert snap["meta"]["top_sites"] == 15  # patrol.top_sites in config.yaml
     assert snap["validation"]["brier"] == 0.1
 
 
@@ -210,6 +245,8 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
     assert all(inside(p) for p in snap["piers"])
     assert all(inside(s) for s in snap["plan"]["ship"])
     assert [s.get("exploration", False) for s in snap["plan"]["ship"]] == [False, True, False]
+    # the bandit marks its exploration visits with reason "explore" (D3); the dashboard needs it
+    assert [s.get("reason") for s in snap["plan"]["ship"]] == [None, "explore", None]
     pj = io.read_stage("fuse/piers").set_index("pier_id")["P_j"]
     assert snap["piers"] and all(
         p["P_j"] == pytest.approx(pj[p["id"]], abs=1e-4) for p in snap["piers"]
@@ -264,3 +301,104 @@ def test_snapshot_carries_legends_and_the_overlay_layers(world):
     assert set(snap["cells"]["layers"]["inshore"]) <= geom
     breaks = snap["cells"]["legends"]["normal"]["breaks"]
     assert breaks == sorted(set(breaks)) and len(breaks) >= 2
+
+
+def test_backdrop_is_an_embedded_png_with_its_bounds_and_attribution():
+    bd = _backdrop(_png(), BACKDROP_META)
+    assert bd["image"].startswith("data:image/png;base64,")
+    assert bd["bounds"] == BACKDROP_META["bounds"] and "Copernicus" in bd["attribution"]
+    assert (bd["from"], bd["to"]) == ("2026-08-30", "2026-11-27")
+    with pytest.raises(ValueError, match="PNG"):
+        _backdrop(b"GIF89a....", BACKDROP_META)
+    with pytest.raises(ValueError, match="1 MB"):
+        _backdrop(_png()[:8] + bytes(1_000_001), BACKDROP_META)
+    with pytest.raises(ValueError, match="bounds"):
+        _backdrop(_png(), {**BACKDROP_META, "bounds": [1, 2, 3]})
+
+
+def test_the_image_is_not_text_so_the_identity_scan_skips_it_but_not_the_rest():
+    snap = {
+        "basemap": {"backdrop": {"image": "data:image/png;base64,+123456789+", "attribution": "x"}}
+    }
+    with pytest.raises(ValueError):
+        scan_identities(snap)  # base64 can contain a 9-digit run by chance
+    _scan(snap)  # the export scan ignores the pixels
+    with pytest.raises(ValueError):
+        _scan({**snap, "sites": [{"reasons": ["id 123456789"]}]})  # but still scans everything else
+
+
+def test_snapshot_embeds_the_radar_backdrop_when_p3_has_written_it(world):
+    _, snap = world
+    bd = snap["basemap"]["backdrop"]
+    assert (
+        bd["image"].startswith("data:image/png;base64,") and bd["bounds"] == BACKDROP_META["bounds"]
+    )
+    check_json("export/snapshot", snap)  # still exactly the seven top-level keys
+
+
+def test_basemap_draws_land_when_the_land_layer_exists_and_only_the_outline_otherwise():
+    x, y = (float(v) for v in to_utm(-9.0, 51.5))
+    sea = Polygon([(x, y), (x + 10_000, y), (x + 10_000, y + 5_000), (x, y + 5_000)])
+    land = Polygon(
+        [(x, y + 5_000), (x + 10_000, y + 5_000), (x + 10_000, y + 9_000), (x, y + 9_000)]
+    )
+    assert [f["properties"]["kind"] for f in _basemap(sea, None)["features"]] == ["study_area"]
+    fc = _basemap(sea, land)
+    assert [f["properties"]["kind"] for f in fc["features"]] == ["study_area", "land"]
+    lon, lat = fc["features"][1]["geometry"]["coordinates"][0][0]
+    assert abs(lon + 9.0) < 1e-3 and 51.5 < lat < 51.6  # land north of the sea, in WGS 84
+
+
+def test_snapshot_basemap_has_the_simulated_land(world):
+    _, snap = world
+    kinds = [f["properties"]["kind"] for f in snap["basemap"]["features"]]
+    assert kinds == ["study_area", "land"]  # the simulator writes reference/land (#133)
+    # the land lies along the simulated grid (which starts at x0, a little west of region_bbox)
+    boxes = list(snap["cells"]["geometry"].values())
+    west, east = min(b[0] for b in boxes), max(b[2] for b in boxes)
+    ring = snap["basemap"]["features"][1]["geometry"]["coordinates"][0]
+    assert all(west - 0.01 <= lon <= east + 0.01 for lon, _ in ring)
+
+
+def test_daily_series_matches_a_hand_count_and_leaves_unobserved_days_empty():
+    # day 1: one pass covers c1 (calm, small-boat exposure) and c2 (covered but rough); c3, c4 not covered.
+    # fuse/cells: c1 unusual (U 0.95, flagged), c2 not. Day 2: no pass and no rows: every value is None.
+    ex = pd.DataFrame({"cell_id": ["c1", "c2"], "pass_id": ["p1", "p1"], "time_utc": [_t("2026-11-23")] * 2,
+                       "covered_frac": [0.5, 0.3], "exposure_small": [0.5, 0.0]})  # fmt: skip
+    fz = pd.DataFrame({"cell_id": ["c1", "c2"], "date": [date(2026, 11, 23)] * 2, "U": [0.95, 0.5],
+                       "bh_flag": [True, False]})  # fmt: skip
+    d1, d2 = _daily(fz, ex, ["c1", "c2", "c3", "c4"], [date(2026, 11, 23), date(2026, 11, 24)])
+    assert d1 == {"date": "2026-11-23", "passes": 1, "covered_share": 0.5, "calm_share": 0.25,
+                  "unusual_cells": 1, "flagged_cells": 1}  # fmt: skip
+    assert d2 == {"date": "2026-11-24", "passes": 0, "covered_share": None, "calm_share": None,
+                  "unusual_cells": None, "flagged_cells": None}  # fmt: skip
+
+
+def test_snapshot_carries_chart_data_inside_the_existing_keys(world):
+    _, snap = world
+    check_json("export/snapshot", snap)  # still exactly the seven top-level keys
+    fig = snap["meta"]["figures"]
+    assert fig["sites"] == len(snap["sites"]) and fig["flagged"] == sum(
+        s["bh_flag"] for s in snap["sites"]
+    )
+    assert fig["ship_h"] == 4.0 and fig["ship_budget_h"] == 24.0  # the fixture plan: 06:00 to 10:00
+    assert 0 <= fig["observed_share"] <= 1
+    assert [s["at_h"] for s in snap["plan"]["ship"]] == [0.0, 2.0, 4.0]
+    daily = snap["cells"]["daily"]
+    assert daily[0]["date"] == "2026-11-02" and daily[-1]["date"] == "2026-11-27"  # W45 Monday to T
+    assert all(d["covered_share"] is None for d in daily if d["passes"] == 0)  # no pass is not 0
+
+
+def test_site_links_add_up_to_the_score_and_p_site_is_passed_on(world):
+    _, snap = world
+    sites = io.read_stage("fuse/sites")
+    p_site = dict(zip(sites["site_id"], sites["p_site"], strict=True)) if "p_site" in sites else {}
+    for s in snap["sites"]:
+        if s[
+            "links"
+        ]:  # S = sum of L with a 30-day half-life (Measures), so the weights add up to S
+            assert sum(k["weight"] for k in s["links"]) == pytest.approx(s["S"], rel=1e-3, abs=1e-3)
+        want = p_site.get(s["id"])  # optional column: the simulator may not write it
+        assert s["p_site"] == (
+            None if want is None or np.isnan(want) else pytest.approx(want, abs=1e-4)
+        )

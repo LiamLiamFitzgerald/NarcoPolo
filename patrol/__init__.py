@@ -49,10 +49,29 @@ def _data_root() -> Path:
     return io.stage_path("aggregate/observed").parent.parent  # NARCO_DATA, default data/
 
 
+def _sea_from_raster() -> _Sea | None:
+    """reference/sea_250m.tif (1 = sea, north-up, origin (x0, y0)), which reference.run writes on real
+    data; None where it does not exist (the simulator writes none)."""
+    path = io.raster_path("reference/sea_250m")
+    if not path.exists():
+        return None
+    import rasterio
+
+    with rasterio.open(path) as src:
+        # row 0 of the file is the northern edge; _Sea's row 0 is the southern one
+        return _Sea(
+            np.flipud(src.read(1)).astype(bool), src.bounds.left, src.bounds.bottom, src.res[0]
+        )
+
+
+def _sea(cells: pd.DataFrame) -> _Sea:
+    """The sea grid for ship routes: the real raster if there is one, else one built from the cells."""
+    return _sea_from_raster() or _sea_from_cells(cells)
+
+
 def _sea_from_cells(cells: pd.DataFrame) -> _Sea:
-    """Sea grid at 250 m from the 2 km cells of reference/layers.gpkg.
-    shortcut: the spec reads reference/sea_250m.tif (MCP_Geometric); no raster or reader exists yet
-    (issue 89). Switch to the raster when it does."""
+    """Sea grid at 250 m from the 2 km cells of reference/layers.gpkg, for the simulator, which writes
+    no sea raster. shortcut: it is the study area, not the real coast; real data uses the raster."""
     fine = cells[cells["level"] == FINE]
     c = fine.geometry.centroid
     ix, iy = cell_index(c.x, c.y, FINE)
@@ -283,30 +302,33 @@ def _provenance(name: str) -> Literal["simulated", "real"]:
 
 
 def _base(cfg: Mapping[str, Any]) -> tuple[tuple[float, float], bool]:
-    """((x_m, y_m), stand_in). The base is `base_port` {lon, lat} in config.yaml (the spec: Haulbowline,
-    Cork Harbour). It is not there yet (issue 103), and P7 does not guess a position: simulated data uses
-    the first road-access pier as a stand-in, real data refuses to run."""
-    bp = cfg.get("base_port")
+    """((x_m, y_m), stand_in). The base is `patrol.base_port` {lon, lat} in config.yaml (a top-level
+    `base_port` is read too): the spec's Haulbowline, Cork Harbour (decision on issue 103, to be checked on
+    a map before the pitch). Without it P7 does not guess: simulated data uses the first road-access pier as
+    a stand-in, real data refuses to run."""
+    bp = cfg.get("patrol", {}).get("base_port") or cfg.get("base_port")
     if bp:
         x, y = to_utm(bp["lon"], bp["lat"])
         return (float(x), float(y)), False
     if _provenance("reference/piers") == "real":
-        raise ValueError("base_port {lon, lat} is not in config.yaml: see issue 103")
+        raise ValueError("patrol.base_port {lon, lat} is not in config.yaml: see issue 103")
     piers = io.read_stage("reference/piers")
     p = piers[piers["road_access"]].sort_values("pier_id").geometry.iloc[0]
     return (float(p.x), float(p.y)), True
 
 
 def _start(cfg: Mapping[str, Any]) -> tuple[pd.Timestamp, bool]:
-    """(start, stand_in). The plan starts `patrol_start_hour_utc` hours into the day after T; the spec
-    gives no start time (issue 103), so simulated data starts at 00:00 as a stand-in and real data refuses."""
-    hour = cfg.get("patrol_start_hour_utc")
+    """(start, stand_in). The plan starts `patrol.start_hour_utc` hours into the day after T (decision on
+    issue 103). Without it simulated data starts at 00:00 as a stand-in and real data refuses."""
+    hour = cfg.get("patrol", {}).get("start_hour_utc")
     stand_in = hour is None
     if stand_in:
         if _provenance("fuse/sites") == "real":
-            raise ValueError("patrol_start_hour_utc is not in config.yaml: see issue 103")
+            raise ValueError("patrol.start_hour_utc is not in config.yaml: see issue 103")
         hour = 0
-    start = pd.Timestamp(io.read_snapshot()["T"], tz="UTC") + pd.Timedelta(days=1, hours=hour)
+    start = pd.Timestamp(io.read_snapshot()["T"], tz="UTC") + pd.Timedelta(
+        days=1, hours=float(hour)
+    )
     return start, stand_in
 
 
@@ -340,7 +362,7 @@ def _bandit(cfg: Mapping[str, Any], sites: pd.DataFrame, seed: int) -> dict[str,
 def ship_plan() -> dict:
     """Ship route over the top sites, weighted by the bandit's Thompson draw; merged into patrol/plan.json."""
     cfg, _ = load(io.CONFIG_PATH)
-    sea = _sea_from_cells(io.read_stage("reference/cells"))
+    sea = _sea(io.read_stage("reference/cells"))
     (base, base_stand_in), (start, start_stand_in) = _base(cfg), _start(cfg)
     seed = int(cfg["seed"]) + iso_week(io.read_snapshot()["T"])[1]
     sites = io.read_stage("fuse/sites")

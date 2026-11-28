@@ -1,10 +1,13 @@
 import json
 
+import pytest
+
 from core.config import load
 from core.io import CONFIG_PATH
 from validate.train import fit_site_model, model_path
 
 
+@pytest.mark.slow
 def test_model_file_matches_what_fuse_reads(tmp_path, monkeypatch):
     monkeypatch.setenv("NARCO_DATA", str(tmp_path))
     m = fit_site_model(["fixed"], [1, 2])

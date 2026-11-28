@@ -29,7 +29,8 @@ extend-exclude = ["scripts", ".claude"]  # tooling scripts, not pipeline code
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "--import-mode=importlib"  # test files in different modules may share a name
+addopts = "--import-mode=importlib -m 'not slow'"  # test files in different modules may share a name; slow tests opt in
+markers = ["slow: takes 10 s or more (whole simulated seasons); skipped by default, run with `uv run pytest -m slow`"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"

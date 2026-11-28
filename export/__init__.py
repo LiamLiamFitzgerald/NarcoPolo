@@ -1,6 +1,7 @@
 """Snapshot export (P7): freeze the plan, heat maps, sites, piers and validation into one JSON file.
 The dashboard only draws what is written here (docs/specs/P7.md)."""
 
+import base64
 import json
 import os
 import re
@@ -27,6 +28,7 @@ _INPUTS = (
     "fuse/sites",
     "fuse/cells",
     "fuse/piers",
+    "fuse/links",
     "forecast/expected",
     "coverage/exposure",
     "reference/cells",
@@ -131,6 +133,23 @@ def basemap(coastline: BaseGeometry) -> dict:
     }
 
 
+def _basemap(study_area: BaseGeometry, land: BaseGeometry | None) -> dict:
+    """The study-area outline, and the land (#133) when reference/land exists: on real data that is the
+    real coast of Ireland from the OSM coastline; the simulator writes a straight one."""
+    fc = basemap(study_area)
+    fc["features"][0]["properties"] = {"kind": "study_area"}
+    if land is not None:
+        fc["features"].append({**basemap(land)["features"][0], "properties": {"kind": "land"}})
+    return fc
+
+
+def _read_land() -> BaseGeometry | None:
+    try:
+        return unary_union(list(io.read_stage("reference/land").geometry))
+    except ValueError:  # the layer is optional (#133): no stamp means no land layer was written
+        return None
+
+
 def data_label(provenance: Iterable[str]) -> str:
     """'simulated', 'real' or 'mixed' from the stage files' provenance; never typed in by hand."""
     kinds = set(provenance)
@@ -144,6 +163,46 @@ def scan_identities(snapshot: dict) -> None:
     hit = _IDENTITY.search(json.dumps(snapshot))
     if hit:
         raise ValueError(f"possible vessel identifier in snapshot: {hit.group(0)!r}")
+
+
+def _scan(snapshot: dict) -> None:
+    """scan_identities on everything but the backdrop's pixels: base64 is not text, and a 9-digit run
+    can appear in it by chance. Its bounds and attribution are still scanned."""
+    bd = snapshot.get("basemap", {}).get("backdrop")
+    if bd:
+        snapshot = {**snapshot, "basemap": {**snapshot["basemap"], "backdrop": {**bd, "image": ""}}}
+    scan_identities(snapshot)
+
+
+_PNG = b"\x89PNG\r\n\x1a\n"
+_BACKDROP_MAX = 1_000_000  # bytes (contract #263); the snapshot must stay under 5 MB
+
+
+def _backdrop(png: bytes, meta: dict) -> dict:
+    """The Sentinel-1 radar backdrop as a data URI the dashboard can draw offline."""
+    if not png.startswith(_PNG):
+        raise ValueError("radar backdrop is not a PNG")
+    if len(png) > _BACKDROP_MAX:
+        raise ValueError("radar backdrop is over 1 MB")
+    if len(meta.get("bounds", [])) != 4:
+        raise ValueError("radar backdrop needs bounds [lon_min, lat_min, lon_max, lat_max]")
+    return {
+        "image": "data:image/png;base64," + base64.b64encode(png).decode(),
+        "bounds": [float(v) for v in meta["bounds"]],
+        "attribution": str(meta.get("attribution", "Contains modified Copernicus Sentinel data")),
+        "from": meta.get("from"),
+        "to": meta.get("to"),
+    }
+
+
+def _read_backdrop() -> dict | None:
+    """reference/radar_backdrop.png and .json if P3 has written them (contract #263), else None.
+    shortcut: reads the files directly; switch to the core.io reader once P1 adds it in #263."""
+    ref = io.stage_path("reference/cells").parent
+    png, meta = ref / "radar_backdrop.png", ref / "radar_backdrop.json"
+    if not (png.exists() and meta.exists()):
+        return None
+    return _backdrop(png.read_bytes(), json.loads(meta.read_text()))
 
 
 def _legends(weeks: dict[str, list[dict]]) -> dict:
@@ -172,7 +231,82 @@ def _lonlat(x: Any, y: Any) -> dict:
     return {"lon": round(float(lon), 5), "lat": round(float(lat), 5)}
 
 
-def _sites(df: pd.DataFrame) -> list[dict]:
+_UNUSUAL_U = (
+    0.9  # the spec's "U >= 0.9" agreement threshold, reused for the daily count of unusual cells
+)
+_HALF_LIFE_D = 30  # S is the sum of L with a 30-day half-life (docs/shared.md, Measures)
+
+
+def _links(df: pd.DataFrame) -> dict[str, list[dict]]:
+    """Per site, the link scores behind S, oldest first, each with its decayed weight (they add up to S)."""
+    out: dict[str, list[dict]] = {}
+    for r in df.sort_values("age_days", ascending=False).to_dict("records"):
+        w = float(r["L"]) * 0.5 ** (float(r["age_days"]) / _HALF_LIFE_D)
+        out.setdefault(str(r["site_id"]), []).append(
+            {"age_days": _num(r["age_days"]), "L": _num(r["L"]), "weight": _num(w)}
+        )
+    return out
+
+
+def _daily(
+    cells: pd.DataFrame, exposure: pd.DataFrame, fine_ids: list[str], days: list[date]
+) -> list[dict]:
+    """Per day, for the charts: radar passes, share of the 2 km sea cells covered at all and on calm passes
+    (usable for small boats), and the number of cells rated unusual (U >= 0.9) and flagged. A day with no
+    pass, or no scored cells, gets None, never 0 (Design principle 4)."""
+    n = len(fine_ids)
+    ex = exposure[exposure["cell_id"].isin(fine_ids)]
+    ex = ex.assign(day=ex["time_utc"].dt.date)
+    fz = cells.assign(day=pd.to_datetime(cells["date"]).dt.date)
+    out = []
+    for d in days:
+        e, c = ex[ex["day"] == d], fz[fz["day"] == d]
+        passes = int(e["pass_id"].nunique())
+        out.append(
+            {
+                "date": d.isoformat(),
+                "passes": passes,
+                "covered_share": _num(e.loc[e["covered_frac"] > 0, "cell_id"].nunique() / n)
+                if passes
+                else None,
+                "calm_share": _num(e.loc[e["exposure_small"] > 0, "cell_id"].nunique() / n)
+                if passes
+                else None,
+                "unusual_cells": int(c.loc[c["U"] >= _UNUSUAL_U, "cell_id"].nunique())
+                if len(c)
+                else None,
+                "flagged_cells": int(c.loc[c["bh_flag"], "cell_id"].nunique()) if len(c) else None,
+            }
+        )
+    return out
+
+
+def _hours(stops: list[dict]) -> float | None:
+    if len(stops) < 2:
+        return None
+    span = pd.Timestamp(stops[-1]["arrival_utc"]) - pd.Timestamp(stops[0]["arrival_utc"])
+    return _num(span.total_seconds() / 3600)
+
+
+def _figures(sites: list[dict], week_rows: list[dict], plan: dict, cfg: Any) -> dict:
+    """Headline numbers for the dashboard's figures strip, so the browser computes none of them."""
+    p = cfg.get("patrol", {})
+    return {
+        "sites": len(sites),
+        "flagged": sum(s["bh_flag"] for s in sites),
+        "candidates": min(int(p.get("top_sites", 15)), len(sites)),
+        "ship_h": _hours(plan.get("ship", [])),
+        "ship_budget_h": float(p.get("ship_budget_h", 24)),  # spec defaults
+        "aircraft_h": _hours(plan.get("aircraft", [])),
+        "aircraft_budget_h": float(p.get("aircraft_budget_h", 4)),
+        "observed_share": _num(sum(r["observed"] for r in week_rows) / len(week_rows))
+        if week_rows
+        else None,
+    }
+
+
+def _sites(df: pd.DataFrame, links: dict[str, list[dict]] | None = None) -> list[dict]:
+    links = links or {}
     return [
         {
             "id": r["site_id"],
@@ -187,6 +321,9 @@ def _sites(df: pd.DataFrame) -> list[dict]:
             if pd.isna(r.get("agreement_merged"))
             else int(r["agreement_merged"]),
             "followup_unobserved": int(r["followup_unobserved"]),
+            # D1 (#176): the dashboard ranks sites by p_site; None where the site model gave none
+            "p_site": _num(r.get("p_site")),
+            "links": links.get(str(r["site_id"]), []),
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],
         }
@@ -209,15 +346,22 @@ def _piers(df: pd.DataFrame, scores: pd.DataFrame) -> list[dict]:
 
 
 def _plan(plan: dict) -> dict:
-    """Stops get WGS 84 positions for the map; x_m and y_m stay in patrol/plan.json."""
+    """Stops get WGS 84 positions for the map (x_m and y_m stay in patrol/plan.json) and `at_h`, hours
+    from the asset's first stop, so the schedule chart needs no date arithmetic in the browser."""
+    t0 = {a: pd.Timestamp(st[0]["arrival_utc"]) for a, st in plan.items() if st}
     return {
         asset: [
             {
                 "id": s["id"],
                 "arrival_utc": s["arrival_utc"],
+                "at_h": _num((pd.Timestamp(s["arrival_utc"]) - t0[asset]).total_seconds() / 3600),
                 "dwell_h": s["dwell_h"],
                 **_lonlat(s["x_m"], s["y_m"]),
-                **{k: s[k] for k in ("exploration", "not_significant", "stand_in") if k in s},
+                **{
+                    k: s[k]
+                    for k in ("exploration", "not_significant", "stand_in", "reason")
+                    if k in s
+                },
             }
             for s in stops
         ]
@@ -248,6 +392,10 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
     )
     label = data_label(_provenance(n) for n in _INPUTS)
 
+    year, wk = weeks[0].split("-W")
+    first = date.fromisocalendar(int(year), int(wk), 1)
+    plan = _plan(io.read_json_stage("patrol/plan"))
+    sites = _sites(f["fuse/sites"], _links(f["fuse/links"]))
     cell_weeks = {
         w: heatmap_values(f["forecast/expected"], f["fuse/cells"], f["coverage/exposure"], w)
         for w in weeks
@@ -258,11 +406,17 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "generated_utc": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "region": dict(cfg["region_bbox"]),
             "T": t.isoformat(),
+            "top_sites": int(cfg.get("patrol", {}).get("top_sites", 15)),  # the spec's default
+            "figures": _figures(sites, cell_weeks[weeks[-1]], plan, cfg),
             "week": weeks[-1],
             "weeks": weeks,
             "config_hash": cfg_hash,
         },
-        "basemap": basemap(unary_union(list(fine.geometry))),
+        "basemap": {
+            **_basemap(unary_union(list(fine.geometry)), _read_land()),
+            # a GeoJSON foreign member, so the snapshot keeps exactly its seven top-level keys
+            **({"backdrop": bd} if (bd := _read_backdrop()) else {}),
+        },
         "cells": {
             "geometry": geometry,
             "weeks": cell_weeks,
@@ -274,13 +428,20 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             },
             # Not a top-level key: core.schemas.check_json requires exactly the seven spec keys.
             "legends": _legends(cell_weeks),
+            # per day from the first shown Monday to T, for the trend and coverage charts
+            "daily": _daily(
+                f["fuse/cells"],
+                f["coverage/exposure"],
+                list(fine["cell_id"]),
+                [first + timedelta(days=k) for k in range((t - first).days + 1)],
+            ),
         },
-        "sites": _sites(f["fuse/sites"]),
+        "sites": sites,
         "piers": _piers(f["reference/piers"], f["fuse/piers"]),
-        "plan": _plan(io.read_json_stage("patrol/plan")),
+        "plan": plan,
         "validation": json.loads(vpath.read_text()) if vpath.exists() else None,  # not run yet
     }
-    scan_identities(snap)
+    _scan(snap)
     # the stamp only decides which config keys make the file stale: a mixed snapshot uses the
     # simulated set, which is a superset of the real one
     io.write_json_stage("export/snapshot", snap, "real" if label == "real" else "simulated")

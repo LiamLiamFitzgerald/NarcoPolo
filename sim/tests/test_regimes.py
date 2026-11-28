@@ -10,6 +10,8 @@ from core.config import load
 from sim import patrol_outcome
 from sim.simulate import simulate
 
+pytestmark = pytest.mark.slow  # shared setup >= 12 s (28 Nov); run with `pytest -m slow`
+
 DAYS = 60  # a short season keeps the suite fast; two_sites still has two halves
 
 

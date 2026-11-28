@@ -126,6 +126,7 @@ def test_simulator_recovery_finds_the_planted_site_and_the_rates(sim_world):
         assert 0.8 <= ratio <= 1.2, event_type
 
 
+@pytest.mark.slow
 def test_run_writes_a_report_with_every_key(sim_world, monkeypatch):
     # fuse is real since #184, so the report's null test now runs fuse on shifted data; 2 runs keep this test
     # quick (make validate keeps the spec's 200; validate/tests/test_null.py tests the null test itself)
@@ -138,6 +139,9 @@ def test_run_writes_a_report_with_every_key(sim_world, monkeypatch):
     # L6 runs whole simulated seasons through the real pipeline (tens of minutes); validate/tests/test_policy.py
     # covers it, and this test checks the report's keys and blocks, so the policy block is left out here
     monkeypatch.setattr(validate.checks, "policy_block", lambda: None)
+    monkeypatch.setattr(
+        validate.checks, "visible_recovery", lambda: {"planted_site_rank": None}
+    )  # test_recovery covers it
     path = run()
     rep = json.loads(path.read_text())
     assert {"recall", "injection", "skill", "calibration", "brier", "null"} <= set(rep)

@@ -63,6 +63,7 @@ def season_env(tmp_path_factory):
     mp.undo()
 
 
+@pytest.mark.slow
 def test_every_agent_backtests_on_the_simulator(season_env):
     out = pd.concat([backtest_agent(a, "fixed", [1]) for a in AGENTS], ignore_index=True)
     assert list(out.columns) == BACKTEST_COLUMNS and len(out) == len(AGENTS)
@@ -72,6 +73,7 @@ def test_every_agent_backtests_on_the_simulator(season_env):
         backtest_agent("link", "fixed", [1])  # R3: site-level, not backtested here
 
 
+@pytest.mark.slow
 def test_report_has_metrics_kappa_and_merged_groups(season_env):
     path = signals.write_signals_report([1])
     rep = json.loads(path.read_text())

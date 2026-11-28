@@ -19,6 +19,7 @@ from patrol import (
     _plan_asset,
     _Sea,
     _sea_from_cells,
+    _sea_from_raster,
     _start,
     air_hours,
     aircraft_plan,
@@ -53,6 +54,34 @@ def test_air_hours_recovers_known_distance():
 def test_sea_hours_open_water_is_a_straight_line():
     h = sea_hours([_node(0, 0), _node(10, 0)], _sea(np.ones((3, 11))))
     assert h[0, 1] == pytest.approx(10 * RES / KN12_M_PER_H) and h[0, 1] == h[1, 0]
+
+
+def test_sea_grid_comes_from_the_real_raster_when_it_exists(tmp_path, monkeypatch):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    assert (
+        _sea_from_raster() is None
+    )  # the simulator writes no raster: patrol falls back to the cells
+    x0, y0 = 380_000.0, 5_660_000.0
+    south_up = np.ones((3, 5), np.uint8)
+    south_up[0:2, 2] = 0  # the same headland as above: land in column 2 on the two southern rows
+    path = io.raster_path("reference/sea_250m")
+    path.parent.mkdir(parents=True)
+    with rasterio.open(  # a north-up GeoTIFF with its origin at (x0, y0), like reference.run writes
+        path, "w", driver="GTiff", height=3, width=5, count=1, dtype="uint8",
+        crs="EPSG:32629", transform=from_origin(x0, y0 + 3 * RES, RES, RES),
+    ) as dst:  # fmt: skip
+        dst.write(south_up[::-1], 1)
+    sea = _sea_from_raster()
+    assert sea is not None and (sea.x0, sea.y0, sea.res) == (x0, y0, RES)
+    assert (sea.mask == south_up.astype(bool)).all()  # row 0 is the southern edge again
+    nodes = [
+        {"x_m": x0 + 0.5 * RES, "y_m": y0 + 0.5 * RES},
+        {"x_m": x0 + 4.5 * RES, "y_m": y0 + 0.5 * RES},
+    ]
+    assert sea_hours(nodes, sea)[0, 1] == pytest.approx(4 * np.sqrt(2) * RES / KN12_M_PER_H)
 
 
 def test_sea_hours_goes_round_a_headland_not_over_it():
@@ -212,10 +241,11 @@ def test_patrol_plan_feeds_the_export(world):
 def test_base_and_start_come_from_config_never_from_a_guess(world, monkeypatch):
     import patrol
 
-    (x, y), stand_in = _base({"base_port": {"lon": -8.0, "lat": 51.5}})
+    (x, y), stand_in = _base({"patrol": {"base_port": {"lon": -8.0, "lat": 51.5}}})
+    assert _base({"base_port": {"lon": -8.0, "lat": 51.5}})[0] == (x, y)  # top-level form read too
     ex, ey = to_utm(-8.0, 51.5)
     assert (x, y) == pytest.approx((float(ex), float(ey))) and not stand_in
-    start, stand_in = _start({"patrol_start_hour_utc": 6})
+    start, stand_in = _start({"patrol": {"start_hour_utc": 6}})
     assert start == pd.Timestamp("2026-11-28 06:00", tz="UTC") and not stand_in
     # no config: simulated data gets a stand-in (the first road pier), flagged as such
     (px, py), stand_in = _base({})

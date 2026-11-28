@@ -132,6 +132,7 @@ def test_no_identity_or_verdict_in_outputs(sim_out, tmp_path):
     assert res.returncode == 0
 
 
+@pytest.mark.slow
 def test_pure_run_is_deterministic_and_touches_no_files(sim_out):
     from fuse.link import _run
 
@@ -155,3 +156,30 @@ def test_pure_run_is_deterministic_and_touches_no_files(sim_out):
     pd.testing.assert_frame_equal(a, b)
     assert before == after
     assert not any(re.search(r"smuggl", " ".join(r), re.IGNORECASE) for r in a["reasons"])
+
+
+def test_reasons_quote_the_live_forecast_mu_only():
+    """#198: the expected count in a reason comes from fold == 0; a backtest or no-fold row for the same cell-day
+    must not be quoted instead."""
+    day = pd.Timestamp("2026-11-01")
+    obs = pd.DataFrame(
+        {"cell_id": ["b"], "level": [2000], "date": [day], "event_type": ["dark_small"], "count": [1.8],
+         "exposure": [1.0]}
+    )  # fmt: skip
+    exp = pd.DataFrame(
+        {"cell_id": ["b"] * 3, "date": [day] * 3, "event_type": ["dark_small"] * 3, "mu": [5.0, 7.0, 0.1],
+         "fold": pd.array([None, 1, 0], dtype="Int64")}
+    )  # fmt: skip
+    strongest = pd.DataFrame(
+        {
+            "agreement": [2],
+            "small_cell": ["b"],
+            "small_date": [day],
+            "lag_days": [1],
+            "event_id": ["e"],
+        },
+        index=["a"],
+    )
+    out, *_ = _finish(_sites({}), pd.DataFrame(), strongest, obs, exp, None, None, None)
+    text = " ".join(out.at[0, "reasons"])
+    assert "where 0.1 were expected" in text

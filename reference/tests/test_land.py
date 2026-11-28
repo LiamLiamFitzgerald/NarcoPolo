@@ -38,10 +38,17 @@ def test_an_island_ring_drawn_counter_clockwise_is_land_inside():
     assert g.area == pytest.approx(2000 * 2000) and g.contains(Point(5000, 5000))
 
 
+def test_a_coastline_ending_a_hair_inside_the_edge_still_cuts_the_region():
+    # a lon/lat round trip leaves ends ~1e-10 m inside the region's edge; the region must still be cut
+    out = land(_lines(LineString([(6e-11, 6_000), (10_000 - 6e-11, 6_000)])), REGION)
+    assert _one(out).area == pytest.approx(10_000 * 4_000)
+
+
 def test_no_coastline_means_no_land():
     assert _one(land(_lines(LineString([(-5, -5), (-1, -1)])), REGION)).is_empty
 
 
+@pytest.mark.slow
 def test_simulator_land_reproduces_the_planted_sea_fractions(tmp_path, monkeypatch):
     """Known answer: build_cells on the land from raw/coastline.gpkg gives the simulator's own sea_frac."""
     monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
