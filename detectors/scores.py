@@ -230,9 +230,9 @@ def score_cells(observed, expected, layers, events, T, exposure=None) -> pd.Data
     observed rows (E > 0) in the evaluation window only; CUSUM runs over all observed history so a build-up before
     the window still counts. exposure (coverage/exposure) gives post_storm; without it that fact is unknown."""
     obs = Observed(observed).observed_rows()
-    # Live forecast only (fold 0, #74 item 6; the simulator's truth rows have fold NA). Backtest folds would
-    # duplicate cell-days.
-    exp = expected[expected["fold"].fillna(0) == 0]
+    # Live forecast only (fold 0, #74 item 6; the simulator writes 0 too, #172). Backtest folds would duplicate
+    # cell-days.
+    exp = expected[expected["fold"] == 0]
     m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
