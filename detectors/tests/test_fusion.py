@@ -110,9 +110,24 @@ def test_backtest_fold_rows_never_duplicate_a_cell_day(cells):
     pd.testing.assert_frame_equal(again, c)  # fold 1 rows are ignored, not mixed in
 
 
-def test_planted_drop_cell_days_are_top_decile_with_agreement(cells):
-    c, _ = cells
-    truth = pd.read_parquet(io.truth_path())
+@pytest.fixture(scope="module")
+def planted(tmp_path_factory):
+    """Seed 1 has planted drops inside the evaluation window; since drops come at irregular times (#163), the
+    default seed's last drop falls before it (#197)."""
+    tmp = tmp_path_factory.mktemp("p6p")
+    mp = pytest.MonkeyPatch()
+    mp.setenv("NARCO_DATA", str(tmp / "data"))
+    mp.setenv("NARCO_RAW", str(tmp / "raw"))
+    simulate(load(io.CONFIG_PATH)[0], 1)
+    import detectors
+
+    detectors.run()
+    yield io.read_stage("fuse/cells"), pd.read_parquet(io.truth_path())
+    mp.undo()
+
+
+def test_planted_drop_cell_days_are_top_decile_with_agreement(planted):
+    c, truth = planted
     drops = truth[truth["kind"] == "drop"].assign(date=lambda t: t["time_utc"].dt.date)
     slow = c[c["event_type"] == "slowdown"].assign(date=lambda t: pd.to_datetime(t["date"]).dt.date)
     hit = slow.merge(drops[["cell_id", "date"]], on=["cell_id", "date"])
