@@ -463,3 +463,81 @@ def test_headline_figures_match_a_hand_count_on_the_simulator(world):
     assert fig["aircraft_h"] is None  # the fixture plan has no aircraft stops: unknown, not 0 h
     week = snap["cells"]["weeks"][snap["meta"]["week"]]
     assert fig["observed_share"] == pytest.approx(sum(c["observed"] for c in week) / len(week))
+
+
+# Radar backdrop from raw/s1 (#387), on hand-built scenes
+def _scene(root, sid, when, x0, value, simulated=True):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    (root / "s1").mkdir(parents=True, exist_ok=True)
+    with rasterio.open(  # 20 x 20 px at 10 m, VV then VH, dB x 100 like raw/s1
+        root / "s1" / f"{sid}.tif", "w", driver="GTiff", height=20, width=20, count=2, dtype="int16",
+        crs="EPSG:32629", transform=from_origin(x0, 5_700_200.0, 10.0, 10.0),
+    ) as dst:  # fmt: skip
+        dst.write(np.full((2, 20, 20), value, np.int16))
+    (root / "s1" / f"{sid}.json").write_text(json.dumps({"scene_id": sid, "start_time": when}))
+    m = root / "manifest.json"
+    man = json.loads(m.read_text()) if m.exists() else {"files": {}}
+    man["files"][f"s1/{sid}.tif"] = {"request": {"simulated": simulated}}
+    m.write_text(json.dumps(man))
+
+
+def _decode(png):
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(png) as mem, mem.open() as src:
+        return src.read()
+
+
+def test_raw_backdrop_latest_scene_wins_and_uncovered_is_transparent(tmp_path):
+    from export import _raw_backdrop
+
+    # a: x 500000-500200 (old, dark); b: x 500100-500300 (new, bright); c is after T and never shown
+    _scene(tmp_path, "a", "2026-11-20T06:00:00Z", 500_000.0, -2500)
+    _scene(tmp_path, "b", "2026-11-26T06:00:00Z", 500_100.0, -1500)
+    _scene(tmp_path, "c", "2026-11-29T06:00:00Z", 500_000.0, -1000)
+    png, meta = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    grey, alpha = _decode(png)
+    assert png.startswith(b"\x89PNG") and len(png) < 1_000_000
+    assert (meta["from"], meta["to"]) == ("2026-11-20", "2026-11-26")  # c is after T
+    assert grey.shape[1] == 30  # 300 m at the scenes' 10 m
+    assert alpha.min() == 255 and alpha.max() == 255  # this footprint is fully covered
+    left, right = grey[10, 2], grey[10, -3]
+    assert left == 0 and right == 255  # the dark old scene, then the bright newer one on top
+    assert grey[10, 15] == 255  # the overlap shows the latest scene
+    lon0, lat0, lon1, lat1 = meta["bounds"]
+    assert lon0 < lon1 and lat0 < lat1 and abs(lon0 + 9.0) < 0.01 and 51.4 < lat0 < 51.5
+    assert meta["attribution"].startswith(
+        "Simulated"
+    )  # the manifest says so; never a Copernicus credit
+
+
+def test_raw_backdrop_leaves_gaps_transparent_and_credits_real_scenes(tmp_path):
+    from export import _raw_backdrop
+
+    _scene(tmp_path, "a", "2026-11-20T06:00:00Z", 500_000.0, -2500, simulated=False)
+    _scene(tmp_path, "b", "2026-11-21T06:00:00Z", 500_400.0, -1500, simulated=False)  # a 200 m gap
+    png, meta = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    _, alpha = _decode(png)
+    assert alpha[10, 30] == 0 and alpha[10, 5] == 255  # not looked at: transparent, not black
+    assert meta["attribution"] == "Contains modified Copernicus Sentinel data 2026"
+    assert _raw_backdrop(tmp_path, date(2026, 11, 1)) is None  # no scene up to T: no backdrop
+
+
+def test_simulator_scenes_make_a_labelled_backdrop_up_to_T(world):
+    # #387: the simulator writes raw/s1 like P2 does; the composite covers its scenes up to T and says it is simulated
+    from export import _raw_backdrop, _scenes
+
+    t = io.read_snapshot()["T"]
+    scenes = _scenes(io.raw_root(), t)
+    assert scenes and all(when.date() <= t for when, _ in scenes)
+    png, meta = _raw_backdrop(io.raw_root(), t)
+    bd = _backdrop(png, meta)  # the same checks as P3's file: a PNG under 1 MB with 4 bounds
+    assert (
+        bd["attribution"].startswith("Simulated") and bd["to"] == scenes[-1][0].date().isoformat()
+    )
+    region = load(io.CONFIG_PATH)[0]["region_bbox"]
+    lon0, lat0, lon1, lat1 = bd["bounds"]
+    assert region["lon_min"] - 0.5 < lon0 < lon1 < region["lon_max"] + 0.5
+    assert region["lat_min"] - 0.5 < lat0 < lat1 < region["lat_max"] + 0.5
