@@ -100,6 +100,7 @@ def test_heatmap_values_recover_a_hand_computed_answer():
             "event_type": ["slowdown", "dark_small", "dark_small", "slowdown"],
             "U": [0.4, 0.9, 0.99, 0.7],
             "agreement": [1, 3, 4, 2],
+            "y_week": [1.0, 2.0, 8.0, 1.0],
         }
     )
     got = {c["cell_id"]: c for c in heatmap_values(exp, fz, ex, WEEK)}
@@ -113,7 +114,10 @@ def test_heatmap_values_recover_a_hand_computed_answer():
     for c in ("B", "C", "D"):  # unobserved: never a zero in the value fields (principle 4)
         assert not got[c]["observed"] and got[c]["normal"] is None and got[c]["exposure"] == 0.0
     assert got["B"]["unusual"] is None and got["D"]["unusual"] == 0.7
-    assert all(c["obs_vs_exp"] is None for c in got.values())  # needs y in fuse/cells (issue 87)
+    # obs_vs_exp = log2(y_week) of the week's dark_small row: A's is 2.0 -> 1.0 (its slowdown row and last
+    # week's 8.0 don't count); no dark_small row this week -> None, never 0
+    assert a["obs_vs_exp"] == 1.0
+    assert all(got[c]["obs_vs_exp"] is None for c in ("B", "C", "D"))
 
 
 def test_basemap_simplifies_in_metres_and_returns_wgs84():
@@ -206,7 +210,10 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
     assert all(inside(p) for p in snap["piers"])
     assert all(inside(s) for s in snap["plan"]["ship"])
     assert [s.get("exploration", False) for s in snap["plan"]["ship"]] == [False, True, False]
-    assert all(p["P_j"] is None for p in snap["piers"])  # not available yet (issue 88)
+    pj = io.read_stage("fuse/piers").set_index("pier_id")["P_j"]
+    assert snap["piers"] and all(
+        p["P_j"] == pytest.approx(pj[p["id"]], abs=1e-4) for p in snap["piers"]
+    )
 
 
 def test_snapshot_sites_match_the_stage_file(world):
@@ -239,7 +246,7 @@ def test_legends_are_quantile_breaks_over_observed_values_only():
     assert lg["normal"]["breaks"] == [1.0, 1.8, 2.6, 3.4, 4.2, 5.0]  # quantiles of 1..5, no zeros
     assert lg["exposure"]["breaks"] == lg["normal"]["breaks"]  # the unobserved 0.0 is left out
     assert lg["unusual"]["breaks"] == [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]
-    assert lg["obs_vs_exp"] == {"clip": 3, "breaks": []}  # no values yet (issue 87)
+    assert lg["obs_vs_exp"] == {"clip": 3, "breaks": []}  # no obs_vs_exp values in these rows
 
 
 def test_snapshot_carries_legends_and_the_overlay_layers(world):

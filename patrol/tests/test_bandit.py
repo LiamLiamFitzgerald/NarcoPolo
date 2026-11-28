@@ -9,7 +9,7 @@ import pytest
 from core.schemas import check_json
 from patrol import _exact, _greedy, _plan_asset, air_hours, bandit, sea_hours, two_opt
 from patrol.tests.test_patrol import START, _sea, _sites
-from sim.patrol import COLUMNS
+from sim.patrol import COLS
 
 N0 = 5
 
@@ -21,7 +21,7 @@ def _open_sea(nodes):
 def _outcomes(rows):
     """Hand-made rows in sim.patrol_outcome's shape, for exact counts; the end-to-end run with the
     real function is in test_patrol.py."""
-    return pd.DataFrame(rows, columns=COLUMNS)
+    return pd.DataFrame(rows, columns=COLS)
 
 
 def test_prior_uses_p_site_else_rank_of_S():

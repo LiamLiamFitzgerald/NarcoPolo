@@ -26,6 +26,7 @@ from core.time import iso_week
 _INPUTS = (
     "fuse/sites",
     "fuse/cells",
+    "fuse/piers",
     "forecast/expected",
     "coverage/exposure",
     "reference/cells",
@@ -71,7 +72,7 @@ def heatmap_values(
     """Per cell for one ISO week: the four heat-map values and `observed` (small-boat exposure > 0).
 
     normal    mean over observed days of mu / E for dark_small     (forecast/expected, coverage)
-    obs_vs_exp  always None: needs y in fuse/cells (contract issue 87)
+    obs_vs_exp  log2 of the week's y_week = (sum C + 0.5) / (sum mu + 0.5) for dark_small (fuse/cells, #87)
     unusual   weekly max of U over both event types                (fuse/cells)
     agreement the 0-4 badge of the row that gave that maximum      (fuse/cells)
     exposure  summed small-boat exposure in the week               (coverage/exposure)
@@ -96,13 +97,20 @@ def heatmap_values(
     dates = pd.to_datetime(cells["date"]).dt.date
     week_rows = cells[in_week(dates)]
     top = week_rows.loc[week_rows.groupby("cell_id")["U"].idxmax()].set_index("cell_id")
+    small_rows = week_rows[week_rows["event_type"] == "dark_small"]
+    # y_week is the same on every observed day of a cell's week (P6); a cell with no dark_small row has none
+    y_week = (
+        small_rows.groupby("cell_id")["y_week"].first()
+        if "y_week" in small_rows.columns
+        else pd.Series(dtype=float)
+    )
 
     return [
         {
             "cell_id": cid,
             "observed": bool(e > 0),
             "normal": _num(normal.get(cid)) if e > 0 else None,
-            "obs_vs_exp": None,  # TODO(P6): y in fuse/cells (contract issue 87)
+            "obs_vs_exp": _num(np.log2(y_week[cid])) if cid in y_week.index else None,
             "unusual": _num(top["U"].get(cid)),
             "agreement": None if cid not in top.index else int(top.at[cid, "agreement"]),
             "exposure": _num(e),
@@ -182,14 +190,15 @@ def _sites(df: pd.DataFrame) -> list[dict]:
     ]
 
 
-def _piers(df: pd.DataFrame) -> list[dict]:
-    """Road-access piers only. The pier score is in no stage file yet (contract issue 88)."""
+def _piers(df: pd.DataFrame, scores: pd.DataFrame) -> list[dict]:
+    """Road-access piers only, with the pier score P_j from fuse/piers (#88); None if P6 gave it none."""
+    pj = scores.set_index("pier_id")["P_j"]
     return [
         {
             "id": r["pier_id"],
             "name": r["name"],
             **_lonlat(r["geometry"].x, r["geometry"].y),
-            "P_j": None,  # TODO(P6): contract issue 88
+            "P_j": _num(pj.get(r["pier_id"])),
         }
         for r in df[df["road_access"]].to_dict("records")
     ]
@@ -263,7 +272,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "legends": _legends(cell_weeks),
         },
         "sites": _sites(f["fuse/sites"]),
-        "piers": _piers(f["reference/piers"]),
+        "piers": _piers(f["reference/piers"], f["fuse/piers"]),
         "plan": _plan(io.read_json_stage("patrol/plan")),
         "validation": json.loads(vpath.read_text()) if vpath.exists() else None,  # not run yet
     }
