@@ -193,19 +193,120 @@ def _backdrop(png: bytes, meta: dict) -> dict:
         "image": "data:image/png;base64," + base64.b64encode(png).decode(),
         "bounds": [float(v) for v in meta["bounds"]],
         "attribution": str(meta.get("attribution", "Contains modified Copernicus Sentinel data")),
+        # how the passes were combined, for the legend: P3's file is a median (#263), raw/s1 the latest pass (#387)
+        "method": str(meta.get("method", "median")),
         "from": meta.get("from"),
         "to": meta.get("to"),
     }
 
 
-def _read_backdrop() -> dict | None:
-    """reference/radar_backdrop.png and .json if P3 has written them (contract #263), else None.
-    shortcut: reads the files directly; switch to the core.io reader once P1 adds it in #263."""
+def _read_backdrop(t: date | None = None) -> dict | None:
+    """reference/radar_backdrop.png and .json if P3 has written them (contract #263); else the composite of
+    the Sentinel-1 scenes in raw/s1 up to T (#387); else None.
+    shortcut: reads P3's files directly; switch to the core.io reader once P1 adds it in #263."""
     ref = io.stage_path("reference/cells").parent
     png, meta = ref / "radar_backdrop.png", ref / "radar_backdrop.json"
-    if not (png.exists() and meta.exists()):
+    if png.exists() and meta.exists():
+        return _backdrop(png.read_bytes(), json.loads(meta.read_text()))
+    made = _raw_backdrop(io.raw_root(), t) if t is not None else None
+    return _backdrop(*made) if made else None
+
+
+# Display settings for the raw/s1 composite (#387): how it looks, not a statistic. TODO(P7) #387: confirm.
+_BACKDROP_WIDTH_PX = 1600  # widest image; halved until the PNG fits _BACKDROP_MAX
+_STRETCH_PCT = (
+    2,
+    98,
+)  # grey runs from these percentiles of the shown VV values (dB), clipped beyond
+
+
+def _scenes(root: Path, t: date) -> list[tuple[pd.Timestamp, Path]]:
+    """raw/s1/<id>.tif with their start times, up to T (never a scene after the snapshot date), oldest first."""
+    out = []
+    for meta in sorted((root / "s1").glob("*.json")):
+        when = pd.Timestamp(json.loads(meta.read_text())["start_time"])
+        if when.date() <= t and meta.with_suffix(".tif").exists():
+            out.append((when, meta.with_suffix(".tif")))
+    return sorted(out, key=lambda x: x[0])
+
+
+def _attribution(root: Path, scenes: list[tuple[pd.Timestamp, Path]]) -> str:
+    """From raw/manifest.json: simulated scenes say so; real ones carry the Copernicus credit."""
+    files = (
+        json.loads((root / "manifest.json").read_text()).get("files", {})
+        if (root / "manifest.json").exists()
+        else {}
+    )
+    sim = [
+        files.get(f"s1/{p.name}", {}).get("request", {}).get("simulated") is True for _, p in scenes
+    ]
+    if all(sim):
+        return "Simulated radar image from the simulator: not real satellite data"
+    return f"Contains modified Copernicus Sentinel data {scenes[-1][0].year}"
+
+
+def _raw_backdrop(root: Path, t: date) -> tuple[bytes, dict] | None:
+    """The VV band of every scene up to T, reprojected to WGS 84 over the scenes' joint footprint; the latest
+    scene wins per pixel. Pixels no scene covered are transparent, never black (Design principle 4).
+    Grey PNG with an alpha band, at most _BACKDROP_WIDTH_PX wide and under _BACKDROP_MAX bytes."""
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+    from rasterio.warp import Resampling, reproject, transform_bounds
+
+    scenes = _scenes(root, t)
+    if not scenes:
         return None
-    return _backdrop(png.read_bytes(), json.loads(meta.read_text()))
+    srcs = [rasterio.open(p) for _, p in scenes]
+    try:
+        crs = srcs[0].crs
+        if any(s.crs != crs for s in srcs):
+            raise ValueError("raw/s1 scenes are not all on one grid CRS")
+        b = [s.bounds for s in srcs]
+        utm = (
+            min(x.left for x in b),
+            min(x.bottom for x in b),
+            max(x.right for x in b),
+            max(x.top for x in b),
+        )
+        lon0, lat0, lon1, lat1 = transform_bounds(crs, "EPSG:4326", *utm)
+        width = min(_BACKDROP_WIDTH_PX, round((utm[2] - utm[0]) / srcs[0].res[0]))
+        while True:
+            height = max(1, round(width * (utm[3] - utm[1]) / (utm[2] - utm[0])))
+            dst = from_bounds(lon0, lat0, lon1, lat1, width, height)
+            vv = np.full((height, width), np.nan, np.float32)
+            for s in srcs:  # oldest first, so a later scene overwrites
+                tmp = np.full_like(vv, np.nan)
+                reproject(
+                    s.read(1).astype(np.float32), tmp, src_transform=s.transform, src_crs=crs,
+                    src_nodata=s.nodata, dst_transform=dst, dst_crs="EPSG:4326", dst_nodata=np.nan,
+                    resampling=Resampling.average,
+                )  # fmt: skip
+                vv = np.where(np.isfinite(tmp), tmp, vv)
+            seen = np.isfinite(vv)
+            lo, hi = np.percentile(vv[seen], _STRETCH_PCT)
+            grey = np.clip((np.nan_to_num(vv, nan=lo) - lo) / max(hi - lo, 1e-9) * 255, 0, 255)
+            with MemoryFile() as mem:
+                with mem.open(
+                    driver="PNG", width=width, height=height, count=2, dtype="uint8",
+                    transform=dst, crs="EPSG:4326",
+                ) as out:  # fmt: skip
+                    out.write(np.stack([grey.astype(np.uint8), seen.astype(np.uint8) * 255]))
+                png = mem.read()
+            if len(png) <= _BACKDROP_MAX or width <= 64:
+                break
+            width //= 2
+    finally:
+        for s in srcs:
+            s.close()
+    meta = {
+        "bounds": [lon0, lat0, lon1, lat1],
+        "attribution": _attribution(root, scenes),
+        "method": "latest",
+        "from": scenes[0][0].date().isoformat(),
+        "to": scenes[-1][0].date().isoformat(),
+    }
+    return png, meta
 
 
 def _legends(weeks: dict[str, list[dict]]) -> dict:
@@ -503,7 +604,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
         "basemap": {
             **_basemap(unary_union(list(fine.geometry)), _read_land()),
             # a GeoJSON foreign member, so the snapshot keeps exactly its seven top-level keys
-            **({"backdrop": bd} if (bd := _read_backdrop()) else {}),
+            **({"backdrop": bd} if (bd := _read_backdrop(t)) else {}),
         },
         "cells": {
             "geometry": geometry,

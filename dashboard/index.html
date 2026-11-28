@@ -32,7 +32,10 @@
   --md-surface: #f4fbfa; --md-surface-container-lowest: #ffffff; --md-surface-container-low: #eff5f4;
   --md-surface-container: #e9efee; --md-surface-container-high: #e3e9e8; --md-surface-container-highest: #dde4e3;
   --md-on-surface: #161d1d; --md-on-surface-variant: #3f4948; --md-outline: #6f7979; --md-outline-variant: #bec9c8;
-  --md-shadow: rgba(0, 0, 0, 0.3); --md-shadow-soft: rgba(0, 0, 0, 0.15); --md-scrim: rgba(0, 0, 0, 0.32);
+  --md-shadow: rgba(0, 32, 32, 0.18); --md-shadow-soft: rgba(0, 32, 32, 0.10); --md-scrim: rgba(0, 0, 0, 0.32);
+  /* #387: a third, wide ambient shadow layer and the page's soft background glows (light: tinted with the primary hue) */
+  --md-shadow-ambient: rgba(0, 48, 48, 0.16); --card-bg: #ffffff;
+  --bg-glow-1: rgba(0, 106, 106, 0.10); --bg-glow-2: rgba(37, 125, 224, 0.08);
 
   /* data: sequential (one hue, light to dark), diverging (blue - grey - red), unobserved hatching */
   --seq-0: #cce3fd; --seq-1: #84b9f3; --seq-2: #338ced; --seq-3: #1b64be; --seq-4: #0e3d7e;
@@ -58,7 +61,9 @@
   --md-surface: #0e1514; --md-surface-container-lowest: #090f0f; --md-surface-container-low: #161d1d;
   --md-surface-container: #1a2121; --md-surface-container-high: #252b2b; --md-surface-container-highest: #303636;
   --md-on-surface: #dde4e3; --md-on-surface-variant: #bec9c8; --md-outline: #899392; --md-outline-variant: #3f4948;
-  --md-shadow: rgba(0, 0, 0, 0.6); --md-shadow-soft: rgba(0, 0, 0, 0.3); --md-scrim: rgba(0, 0, 0, 0.5);
+  --md-shadow: rgba(0, 0, 0, 0.6); --md-shadow-soft: rgba(0, 0, 0, 0.35); --md-scrim: rgba(0, 0, 0, 0.5);
+  --md-shadow-ambient: rgba(0, 0, 0, 0.45); --card-bg: #161d1d;
+  --bg-glow-1: rgba(128, 213, 212, 0.07); --bg-glow-2: rgba(51, 140, 237, 0.06);
 
   /* dark mode is selected, not flipped: low values recede into the dark surface */
   --seq-0: #0e3d7e; --seq-1: #1b64be; --seq-2: #338ced; --seq-3: #84b9f3; --seq-4: #cce3fd;
@@ -89,15 +94,15 @@
   --t-label-medium: 500 12px/16px var(--font);
   --t-label-small: 500 11px/16px var(--font);
   /* shape and spacing (4 dp grid) */
-  --shape-xs: 4px; --shape-sm: 8px; --shape-md: 12px; --shape-lg: 16px; --shape-xl: 28px; --shape-full: 999px;
+  --shape-xs: 4px; --shape-sm: 8px; --shape-md: 14px; --shape-lg: 20px; --shape-xl: 28px; --shape-full: 999px;
   --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
-  /* elevation (#277): two layers each, a tight key shadow and a soft ambient one */
+  /* elevation (#277, deeper in #387): three layers each, a tight key shadow, a soft drop and a wide ambient one */
   --elev-0: none;
-  --elev-1: 0 1px 2px var(--md-shadow), 0 1px 3px 1px var(--md-shadow-soft);
-  --elev-2: 0 1px 2px var(--md-shadow), 0 2px 6px 2px var(--md-shadow-soft);
-  --elev-3: 0 1px 3px var(--md-shadow), 0 4px 8px 3px var(--md-shadow-soft);
-  --elev-4: 0 2px 3px var(--md-shadow), 0 6px 10px 4px var(--md-shadow-soft);
-  --elev-5: 0 4px 4px var(--md-shadow), 0 8px 12px 6px var(--md-shadow-soft);
+  --elev-1: 0 1px 2px var(--md-shadow), 0 4px 12px -2px var(--md-shadow-soft), 0 12px 28px -12px var(--md-shadow-ambient);
+  --elev-2: 0 1px 3px var(--md-shadow), 0 8px 20px -4px var(--md-shadow-soft), 0 20px 44px -16px var(--md-shadow-ambient);
+  --elev-3: 0 2px 4px var(--md-shadow), 0 12px 28px -6px var(--md-shadow-soft), 0 28px 60px -20px var(--md-shadow-ambient);
+  --elev-4: 0 3px 6px var(--md-shadow), 0 16px 36px -8px var(--md-shadow-soft), 0 36px 72px -24px var(--md-shadow-ambient);
+  --elev-5: 0 4px 8px var(--md-shadow), 0 24px 48px -10px var(--md-shadow-soft), 0 48px 96px -28px var(--md-shadow-ambient);
   /* motion (#278): durations and Material easings */
   --dur-short: 150ms; --dur-medium: 280ms; --dur-long: 450ms; --dur: var(--dur-short);
   --ease: cubic-bezier(0.2, 0, 0, 1); --ease-decel: cubic-bezier(0.05, 0.7, 0.1, 1); --ease-accel: cubic-bezier(0.3, 0, 0.8, 0.15);
@@ -106,7 +111,10 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; } /* component rules set display, which would otherwise beat the attribute */
 html { scroll-behavior: smooth; }
-body { margin: 0; font: var(--t-body-medium); background: var(--md-surface); color: var(--md-on-surface); -webkit-font-smoothing: antialiased; }
+body { margin: 0; font: var(--t-body-medium); color: var(--md-on-surface); -webkit-font-smoothing: antialiased; min-height: 100vh;
+  background: radial-gradient(1200px 640px at 8% -10%, var(--bg-glow-1), transparent 60%),
+    radial-gradient(900px 520px at 100% 0%, var(--bg-glow-2), transparent 60%), var(--md-surface);
+  background-attachment: fixed; }
 h2 { font: var(--t-title-medium); margin: 0 0 var(--sp-3); }
 h3 { font: var(--t-title-small); margin: var(--sp-4) 0 var(--sp-2); }
 button { font: inherit; color: inherit; }
@@ -146,9 +154,9 @@ button { font: inherit; color: inherit; }
 
 /* headline figures (#279) */
 .figures { display: grid; gap: var(--sp-3); padding: var(--sp-4) var(--sp-4) 0; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
-.figure { background: var(--md-surface-container-lowest); border-radius: var(--shape-lg); padding: var(--sp-4) var(--sp-5); box-shadow: var(--elev-1);
+.figure { background: var(--card-bg); border-radius: var(--shape-lg); padding: var(--sp-4) var(--sp-5); box-shadow: var(--elev-1);
   transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease); }
-.figure:hover { box-shadow: var(--elev-3); transform: translateY(-1px); }
+.figure:hover { box-shadow: var(--elev-3); transform: translateY(-2px); }
 .figure .label { font: var(--t-label-medium); color: var(--md-on-surface-variant); text-transform: uppercase; letter-spacing: 0.6px; }
 .figure .value { font: var(--t-display-small); color: var(--md-on-surface); margin-top: var(--sp-1); font-variant-numeric: tabular-nums; }
 .figure .value small { font: var(--t-title-medium); color: var(--md-on-surface-variant); }
@@ -187,11 +195,11 @@ button { font: inherit; color: inherit; }
 @media (max-width: 599px) { .layout, .figures { padding: var(--sp-2); gap: var(--sp-2); } .appbar { padding: var(--sp-2); } .figure .value { font: var(--t-headline-small); } }
 
 /* cards (#277): page 0, cards 1, the map card 2; cards lift a level on hover or focus */
-.card { background: var(--md-surface-container-low); border-radius: var(--shape-lg); padding: var(--sp-5); box-shadow: var(--elev-1); min-width: 0;
+.card { background: var(--card-bg); border-radius: var(--shape-lg); padding: var(--sp-5); box-shadow: var(--elev-2); min-width: 0;
   transition: box-shadow var(--dur-medium) var(--ease); }
-.card:hover, .card:focus-within { box-shadow: var(--elev-2); }
-.card.map-card { box-shadow: var(--elev-2); }
-.card.map-card:hover, .card.map-card:focus-within { box-shadow: var(--elev-3); }
+.card:hover, .card:focus-within { box-shadow: var(--elev-3); }
+.card.map-card { box-shadow: var(--elev-3); }
+.card.map-card:hover, .card.map-card:focus-within { box-shadow: var(--elev-4); }
 .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-3); }
 .card-head h2 { margin: 0; }
 .outlined { background: var(--md-surface-container-lowest); border: 1px solid var(--md-outline-variant); border-radius: var(--shape-md); box-shadow: none; }
@@ -262,7 +270,8 @@ caption { caption-side: bottom; text-align: left; padding-top: var(--sp-2); colo
 @media (min-width: 1100px) { .chart-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .chart-card { background: var(--md-surface-container-lowest); border-radius: var(--shape-md); padding: var(--sp-4); border: 1px solid var(--md-outline-variant);
   transition: box-shadow var(--dur-medium) var(--ease); min-width: 0; margin-bottom: var(--sp-3); }
-.chart-card:hover { box-shadow: var(--elev-1); }
+.chart-card { box-shadow: var(--elev-1); }
+.chart-card:hover { box-shadow: var(--elev-2); }
 .chart-card .head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-2); }
 .chart-card h3 { margin: 0; }
 .chart-card .seg { flex-wrap: nowrap; flex: none; }
@@ -371,9 +380,9 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 /* site cards on This week (#313) */
 .top3 { display: grid; gap: var(--sp-3); }
 .site-card { position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-4); border-radius: var(--shape-lg);
-  background: var(--md-surface-container-lowest); box-shadow: var(--elev-1); transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease);
+  background: var(--card-bg); box-shadow: var(--elev-2); transition: box-shadow var(--dur-medium) var(--ease), transform var(--dur-medium) var(--ease);
   animation: fade-up var(--dur-medium) var(--ease-decel) both; }
-.site-card:hover { box-shadow: var(--elev-3); transform: translateY(-1px); }
+.site-card:hover { box-shadow: var(--elev-4); transform: translateY(-2px); }
 .site-card.selected { outline: 2px solid var(--md-primary); }
 .site-card .why { font: var(--t-body-medium); margin-top: var(--sp-1); }
 .site-card .facts { font: var(--t-body-small); color: var(--md-on-surface-variant); margin-top: var(--sp-2); }
@@ -868,7 +877,7 @@ function drawLegend(name, week) {
   box.replaceChildren(head, unit, row);
   const bd = backdrop();
   if (bd && isOn("backdrop")) box.append(h("div", { className: "muted" },
-    `Radar image: ${bd.attribution}${bd.from ? `, median of the passes from ${bd.from} to ${bd.to}` : ""}. ` +
+    `Radar image: ${bd.attribution}${bd.from ? `, ${bd.method === "latest" ? "the latest pass at each point" : "median of the passes"} from ${bd.from} to ${bd.to}` : ""}. ` +
     "Colours are see-through while it is on; turn it off for exact colours."));
 }
 
