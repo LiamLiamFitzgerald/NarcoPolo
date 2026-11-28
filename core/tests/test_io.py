@@ -107,3 +107,57 @@ def test_read_provenance_without_stamp_raises():
 def test_read_cells_drops_geometry():
     cells = io.read_cells()
     assert "geometry" not in cells.columns and "cell_id" in cells.columns
+
+
+# #171: stricter types, so format drift fails at write time
+
+
+def test_dates_must_be_naive_midnight():
+    ok = frame("aggregate/observed")
+    io.write_stage("aggregate/observed", ok, "simulated")
+    for bad in (pd.Timestamp("2026-08-01 12:00"), pd.Timestamp("2026-08-01", tz="UTC")):
+        with pytest.raises(Exception, match="calendar dates"):
+            io.write_stage("aggregate/observed", ok.assign(date=[bad]), "simulated")
+
+
+def test_dates_are_stored_as_one_type_whatever_the_writer_passed():
+    from datetime import date
+
+    import pyarrow.parquet as pq
+
+    for d in (date(2026, 8, 1), pd.Timestamp("2026-08-01")):
+        io.write_stage(
+            "aggregate/observed", frame("aggregate/observed").assign(date=[d]), "simulated"
+        )
+        t = pq.read_schema(io.stage_path("aggregate/observed")).field("date").type
+        assert str(t) == "timestamp[ns]"
+
+
+def test_numeric_ids_are_rejected():
+    from pandera.errors import SchemaErrors
+
+    with pytest.raises(SchemaErrors):
+        io.write_stage(
+            "detect/detections", frame("detect/detections").assign(pass_id=[7]), "simulated"
+        )
+
+
+def test_an_empty_string_dtype_id_column_is_valid():
+    """0 rows with pandas' string dtype (what match writes when there are no events) pass the id check."""
+    empty = frame("detect/detections").iloc[0:0].astype({"pass_id": "string"})
+    io.write_stage("detect/detections", empty, "simulated")
+    assert io.read_stage("detect/detections").empty
+
+
+def test_an_empty_sites_file_keeps_its_list_types():
+    """A 0-row fuse/sites gets the same Arrow types as a non-empty one, not `null`."""
+    import pyarrow.parquet as pq
+
+    full = frame("fuse/sites")
+    io.write_stage("fuse/sites", full, "simulated")
+    want = pq.read_schema(io.stage_path("fuse/sites"))
+    io.write_stage("fuse/sites", full.iloc[0:0], "simulated")
+    got = pq.read_schema(io.stage_path("fuse/sites"))
+    for col in ("reasons", "top_piers", "site_id"):
+        assert got.field(col).type == want.field(col).type
+    assert io.read_stage("fuse/sites").empty
