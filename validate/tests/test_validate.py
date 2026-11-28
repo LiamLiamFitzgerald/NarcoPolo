@@ -119,6 +119,19 @@ def test_recall_curve_counts_every_boat_in_a_footprint(sim_world):
     )
 
 
+def test_detect_prob_report_on_the_simulator(sim_world):
+    from validate.detect_prob import _report
+
+    with pytest.warns(UserWarning, match="cannot be checked"):  # simulated small boats are 6-15 m
+        rep = json.loads(_report().read_text())
+    assert rep["dropped"] == ["incidence_deg"]  # no per-boat incidence angle in the simulator
+    assert set(rep["coef"]) == {"const", "log_length_m", "wind_ms"}
+    assert rep["coef"]["log_length_m"]["lo"] > 0 and rep["coef"]["wind_ms"]["hi"] < 0
+    assert sum(r["n"] for r in rep["recall_by_length"]) == rep["n"] > 0
+    assert rep["realism_anchor"]["status"] == "no_data"
+    assert rep["mean_p_detect"] and all(v is None for v in rep["mean_p_detect"].values())
+
+
 def test_simulator_recovery_finds_the_planted_site_and_the_rates(sim_world):
     rec = simulator_recovery()
     assert rec["planted_site_rank"] == 1

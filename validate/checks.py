@@ -40,10 +40,8 @@ def _within(truth_xy: np.ndarray, det_xy: np.ndarray, metres: float) -> np.ndarr
     return (d <= metres).any(axis=1)
 
 
-def recall_curve(
-    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
-) -> pd.DataFrame:
-    """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
+def _boat_hits(detections: pd.DataFrame, truth: pd.DataFrame) -> pd.DataFrame:
+    """True boats under 24 m inside a pass footprint, with pass_id and hit = a non-ghost detection of that pass within 300 m."""
     boats = truth[
         (truth["kind"] != "drop") & (truth["pass_index"] >= 0) & (truth["length_m"] < 24)
     ].copy()
@@ -55,6 +53,14 @@ def recall_curve(
         boats.loc[grp.index, "hit"] = _within(
             grp[["x_m", "y_m"]].to_numpy(), d[["x_m", "y_m"]].to_numpy(), 300.0
         )
+    return boats
+
+
+def recall_curve(
+    detections: pd.DataFrame, truth: pd.DataFrame, calm_by_pass: Mapping[Any, bool]
+) -> pd.DataFrame:
+    """Recall of true boats inside a pass footprint: detected = a non-ghost detection of that pass within 300 m."""
+    boats = _boat_hits(detections, truth)
     boats["sea_state"] = ["calm" if calm_by_pass[p] else "rough" for p in boats["pass_id"]]
     rows = []
     for label, lo, hi in LENGTH_BINS:
