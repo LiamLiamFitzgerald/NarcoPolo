@@ -2,6 +2,7 @@
 ship identifier cannot slip into a file after match/. Cross-file rules (every cell_id exists in the cells layer)
 and the config hash / seed stamp are checked by core.io, not here."""
 
+import numbers
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -48,15 +49,21 @@ def _is_date(s: pd.Series) -> bool:
     return bool(d.notna().all() and (d == d.dt.normalize()).all())
 
 
-def _date() -> pa.Column:
+def _date(nullable: bool = False) -> pa.Column:
+    ok = (lambda s: _is_date(s.dropna())) if nullable else _is_date
     return pa.Column(
-        checks=pa.Check(_is_date, element_wise=False, error="not calendar dates (naive, midnight)"),
-        nullable=False,
+        checks=pa.Check(ok, element_wise=False, error="not calendar dates (naive, midnight)"),
+        nullable=nullable,
     )
 
 
 def _flag() -> pa.Column:
     return pa.Column(bool, nullable=False)
+
+
+def _flag_or_na() -> pa.Column:
+    """True / False / NA, stored as pandas' nullable "boolean": unknown is never "no" (principle 4)."""
+    return pa.Column("boolean", nullable=True, coerce=True)
 
 
 def _in(*values: object) -> pa.Column:
@@ -68,6 +75,27 @@ def _str_list() -> pa.Column:
         isinstance(v, list | tuple | np.ndarray) and all(isinstance(i, str) for i in v) for v in s
     )
     return pa.Column(checks=pa.Check(ok, error="not a list of str"), nullable=False)
+
+
+def _float_list(ge: float | None = None) -> pa.Column:
+    """A list of real numbers (ints welcome, bools and NaN refused when ge is set) per row."""
+    num = lambda i: isinstance(i, numbers.Real) and not isinstance(i, bool | np.bool_)
+    ok = lambda s: all(
+        isinstance(v, list | tuple | np.ndarray)
+        and all(num(i) and (ge is None or i >= ge) for i in v)
+        for v in s
+    )
+    return pa.Column(checks=pa.Check(ok, error="not a list of numbers"), nullable=False)
+
+
+def _same_length(a: str, b: str) -> pa.Check:
+    """When column b is present, each row's list b is as long as its list a."""
+    return pa.Check(
+        lambda df: (
+            df[a].map(len) == df[b].map(len) if b in df.columns else pd.Series(True, df.index)
+        ),
+        error=f"len({b}) != len({a})",
+    )
 
 
 def _later(col: pa.Column) -> pa.Column:
@@ -86,7 +114,9 @@ def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSch
     return pa.DataFrameSchema(columns, checks=list(checks), strict=True, ordered=False)
 
 
-_event_type = _in("dark_small", "slowdown")
+_event_type = _in(
+    "dark_small", "dark_medium", "slowdown"
+)  # dark_medium: unmatched medium-size boats (#344)
 _count_needs_exposure = pa.Check(
     lambda df: ~((df["count"] > 0) & (df["exposure"] <= 0)), error="count > 0 where exposure = 0"
 )
@@ -120,6 +150,24 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "id": pa.Column(int, nullable=False),
             "geometry": pa.Column(nullable=False),
         }
+    ),
+    "reference/closed_areas": _schema(
+        {  # #322: the closed_areas layer of reference/layers.gpkg (P3 writes, P6 and P7 read); EPSG:32629
+            "area_id": _id(),
+            "name": pa.Column(
+                str, nullable=False
+            ),  # the published area name; never a person's name
+            "type": _in("closure", "protected_area"),
+            "start_date": _date(
+                nullable=True
+            ),  # UTC calendar dates where published; NaT = no date given
+            "end_date": _date(nullable=True),
+            "geometry": pa.Column(nullable=False),
+        },
+        pa.Check(
+            lambda df: ~(pd.to_datetime(df["start_date"]) > pd.to_datetime(df["end_date"])),
+            error="start_date > end_date",
+        ),
     ),
     "reference/travel_hours": _schema(
         {
@@ -271,7 +319,39 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "model_rung": _later(
                 _num(int, ge=0, le=3)
             ),  # L4: 0 statistics only ... 3 mixture of experts
-        }
+            # #320 briefing-card evidence (P6; definitions in docs/specs/P6.md), optional like the learning columns
+            "check_rare_slowdown": _later(
+                _flag()
+            ),  # strongest link's slowdown cell-day in the top top_frac
+            "check_followup_seen": _later(_flag()),  # at least one slowdown with L > 0
+            "check_outside_fishing": _later(
+                _flag_or_na()
+            ),  # inshore_frac < inshore_max; NA: no inshore map
+            "top_piers_hours": _later(
+                _float_list(ge=0)
+            ),  # sea hours to each of top_piers, same order
+        },
+        _same_length("top_piers", "top_piers_hours"),
+    ),
+    "fuse/fisheries": _schema(  # #346 / #321: one row per fisheries candidate cell and ISO week (P6 writes, P7 reads)
+        {
+            "cell_id": pa.Column(str, nullable=False),  # 2 km
+            "week": _date(),  # the Monday
+            "count": _num(ge=0),  # the week's dark_medium soft count
+            "mu": _num(ge=0),  # ... and its expected count
+            "y_fish": _num(ge=0),  # (count + 0.5) / (mu + 0.5)
+            "y_fish_lo": _num(ge=0),  # the range from the 90% interval
+            "y_fish_hi": _num(ge=0),
+            "p_mid": _prob(),  # mid-p tail of the weekly count
+            "flag": _flag(),  # BH at fdr_q across all cell-weeks
+            "in_closed_area": _flag_or_na(),  # NA where no closed-areas layer covers the cell (#322)
+            "reasons": _str_list(),
+            "top_harbours": _str_list(),  # pier ids
+            "top_harbours_hours": _float_list(ge=0),  # same length and order as top_harbours
+            "lens": _in("fisheries"),
+        },
+        _same_length("top_harbours", "top_harbours_hours"),
+        pa.Check(lambda df: df["y_fish_lo"] <= df["y_fish_hi"], error="y_fish_lo > y_fish_hi"),
     ),
     "fuse/piers": _schema(  # #88: one row per pier
         {

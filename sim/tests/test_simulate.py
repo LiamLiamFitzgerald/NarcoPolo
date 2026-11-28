@@ -7,7 +7,7 @@ import pytest
 
 from core import io
 from core.config import load
-from sim.simulate import NX, NY, _p_det, simulate
+from sim.simulate import CLOSED_AREAS, NX, NY, _p_det, simulate
 
 
 def run(tmp: Path, monkeypatch, seed: int = 20261127) -> Path:
@@ -47,7 +47,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 14  # 13 stage files + truth
+    assert first == second and len(first) == 15  # 14 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -183,6 +183,127 @@ def test_pboat_training_is_labelled_by_truth(world):  # #209
     assert not t.loc[t["label"], "ghost"].any()  # a ghost is never a boat
     vv = t.groupby("label")["peak_ratio_vv_db"].mean()
     assert vv[True] > vv[False]  # boats are brighter than false alarms
+
+
+_FISH = ("fishing_boat", "fishing_boat_ais", "illegal_fishing")
+
+
+def _closure_cells() -> set[str]:
+    a, b, c, d = CLOSED_AREAS["closure"][2]
+    return {f"2000_{i}_{j}" for i in range(a, b + 1) for j in range(c, d + 1)}
+
+
+def test_dark_medium_events_counts_and_forecast(world):  # #344, #345 stand-ins
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    ev = io.read_stage("match/events")
+    med = ev[ev["event_type"] == "dark_medium"]
+    assert len(med) > 100 and not med["matched"].any() and med["ship_key"].isna().all()
+    det = io.read_stage("detect/detections")
+    assert (det["size_class"] == "medium").sum() >= len(med)
+    truth = pd.read_parquet(data / "sim" / "truth.parquet")
+    seen = truth[truth["kind"].isin(_FISH) & truth["detected"]]
+    # every detected fishing boat without AIS is one dark_medium event; boats with AIS are matched: no event
+    assert (
+        len(med) == (seen["kind"] != "fishing_boat_ais").sum()
+        and (seen["kind"] == "fishing_boat_ais").any()
+    )
+    ex = io.read_stage("coverage/exposure")
+    assert not med["time_utc"].isin(set(ex.loc[~ex["calm"], "time_utc"])).any()  # calm passes only
+    obs, exp = io.read_stage("aggregate/observed"), io.read_stage("forecast/expected")
+    o = obs[(obs["event_type"] == "dark_medium") & (obs["level"] == 2000)]
+    small = obs[(obs["event_type"] == "dark_small") & (obs["level"] == 2000)]
+    assert (
+        o[["cell_id", "date", "exposure"]]
+        .reset_index(drop=True)
+        .equals(small[["cell_id", "date", "exposure"]].reset_index(drop=True))
+    )  # the same calm-pass exposure as dark_small
+    e = exp[exp["event_type"] == "dark_medium"]
+    assert len(e) == len(o) and (e["fold"] == 0).all() and (e["mu"] > 0).any()
+    # normal rate recovered outside the planted weeks and cells
+    m = o.merge(e, on=["cell_id", "date"])
+    ill = truth[truth["kind"] == "illegal_fishing"]
+    days = ill["time_utc"].dt.tz_convert(None).dt.normalize()
+    normal = m[
+        ~(m["cell_id"].isin(set(ill["cell_id"])) & m["date"].between(days.min(), days.max()))
+    ]
+    assert 0.8 <= normal["count"].sum() / normal["mu"].sum() <= 1.2
+
+
+def test_closed_areas_layer_and_illegal_fishing_inside_the_closure(world):  # #322, #346
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    areas = io.read_stage("reference/closed_areas")
+    assert set(areas["type"]) == {"closure", "protected_area"}
+    assert areas.loc[areas["type"] == "protected_area", "start_date"].isna().all()
+    cells = io.read_stage("reference/cells")
+    fine = cells[cells["level"] == 2000]
+    closure = areas[areas["type"] == "closure"].geometry.iloc[0]
+    inside = set(fine.loc[fine.geometry.centroid.within(closure), "cell_id"])
+    assert inside == _closure_cells()
+    near = fine.loc[fine.geometry.centroid.within(closure.buffer(1)), "inshore_frac"]
+    assert (near > 0).any() and (near == 0).any()  # inshore and offshore
+    truth = pd.read_parquet(data / "sim" / "truth.parquet")
+    ill = truth[truth["kind"] == "illegal_fishing"]
+    assert len(ill) > 100 and set(ill["cell_id"]) <= inside and ill["detected"].any()
+    weeks = (
+        ill["time_utc"].dt.tz_convert(None).dt.normalize() - pd.Timestamp("2026-08-03")
+    ).dt.days // 7
+    assert set(weeks) == {12, 13, 14}  # sim.illegal_fishing_weeks, ISO weeks from the first Monday
+    drop = truth[truth["kind"] == "drop"]
+    assert not drop["cell_id"].isin(inside).any()
+    sites = io.read_stage("fuse/sites")
+    assert not sites["site_id"].isin(inside).any()
+    normal = truth[truth["kind"] == "fishing_boat"]
+    assert len(normal) > 1000 and (truth["kind"] == "fishing_boat_ais").sum() < len(
+        normal
+    )  # mostly no AIS
+
+
+def test_fisheries_stand_in_finds_the_closure_and_not_the_drop_site(world):  # #321 known answer
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    f = io.read_stage("fuse/fisheries")
+    assert (
+        len(f) and (f["lens"] == "fisheries").all() and f["flag"].all() and (f["y_fish"] > 1).all()
+    )
+    assert f["cell_id"].head(10).isin(_closure_cells()).all() and f["in_closed_area"].head(10).all()
+    truth = pd.read_parquet(data / "sim" / "truth.parquet")
+    assert not f["cell_id"].isin(set(truth.loc[truth["kind"] == "drop", "cell_id"])).any()
+    assert (f["top_harbours"].map(len) == f["top_harbours_hours"].map(len)).all()
+
+
+@pytest.mark.slow
+def test_new_streams_leave_the_old_world_unchanged(world, tmp_path):
+    """#346: the same seed with no fishing at all gives the same drops, pick-ups, dark_small and slowdown events,
+    detections (before the fishing rows) and fuse/sites."""
+    data, mp = world
+    cfg, _ = load(io.CONFIG_PATH)
+    off = {"fishing_rate_inshore": 0, "fishing_rate_offshore": 0, "illegal_fishing_rate": 0}
+    mp.setenv("NARCO_DATA", str(tmp_path / "data"))
+    mp.setenv("NARCO_RAW", str(tmp_path / "raw"))
+    simulate({**cfg, "sim": {**cfg["sim"], **off}}, 20261127)
+    bare = {
+        n: io.read_stage(n)
+        for n in ("match/events", "detect/detections", "fuse/sites", "fuse/cells")
+    }
+    bare_truth = pd.read_parquet(io.truth_path())
+    mp.setenv("NARCO_DATA", str(data))
+    assert not bare_truth["kind"].isin(_FISH).any()
+    truth = pd.read_parquet(data / "sim" / "truth.parquet")
+    pd.testing.assert_frame_equal(
+        truth[~truth["kind"].isin(_FISH)].reset_index(drop=True), bare_truth
+    )
+    ev = io.read_stage("match/events")
+    pd.testing.assert_frame_equal(
+        ev[ev["event_type"] != "dark_medium"].reset_index(drop=True), bare["match/events"]
+    )
+    det = io.read_stage("detect/detections")
+    pd.testing.assert_frame_equal(
+        det.iloc[: len(bare["detect/detections"])], bare["detect/detections"]
+    )
+    for n in ("fuse/sites", "fuse/cells"):
+        pd.testing.assert_frame_equal(io.read_stage(n), bare[n])
 
 
 def test_slowdowns_cover_the_whole_ship_history(world):  # #273
