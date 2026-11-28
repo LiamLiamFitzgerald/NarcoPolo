@@ -343,3 +343,38 @@ def test_fetch_scene_writes_the_measured_heading(simraw, raw, monkeypatch):
     tif = s1.fetch_scene(_row(meta) | {"heading_deg": 193.456})
     assert json.loads(tif.with_suffix(".json").read_text())["heading_deg"] == 193.46
     assert s1._float_or_none(float("nan")) is None and s1._float_or_none(None) is None
+
+
+def test_select_passes_spreads_rough_by_time_not_row_order(raw, tmp_path):
+    """#347: the same passes in shuffled rows pick the same rough passes, and come back sorted by time."""
+    hours = pd.date_range("2026-11-01", periods=10, freq="D", tz="UTC") + pd.Timedelta(hours=6)
+    _era5(tmp_path / "era5.nc", hours, [0.0, -8.5, -9.5] + [-99.0] * 7)
+    passes = pd.DataFrame(
+        {"pass_id": [f"p{i}" for i in range(10)], "time": hours, "orbit_dir": "DESCENDING",
+         "rel_orbit": 1, "footprint": box(*BBOX).wkt}
+    )  # fmt: skip
+    ordered = s1.select_passes(passes, tmp_path / "era5.nc")
+    shuffled = s1.select_passes(passes.sample(frac=1, random_state=3), tmp_path / "era5.nc")
+    assert list(shuffled["pass_id"]) == list(ordered["pass_id"]) == [f"p{i}" for i in range(10)]
+    assert list(shuffled["downloaded"]) == list(ordered["downloaded"])
+
+
+def test_unscored_passes_are_recorded_with_a_reason(raw, tmp_path, capsys):
+    """#347: a pass with no ERA5 hour, or no ERA5 sea point of the region in its footprint, is never chosen,
+    and says why in raw/s1_passes.json and on stderr instead of disappearing silently."""
+    hours = pd.date_range("2026-11-01", periods=2, freq="D", tz="UTC") + pd.Timedelta(hours=6)
+    _era5(tmp_path / "era5.nc", hours, [0.0, 0.0])
+    passes = pd.DataFrame(
+        {"pass_id": ["ok", "clip", "late"],
+         "time": [hours[0], hours[1], hours[1] + pd.Timedelta(hours=5)],
+         "orbit_dir": "DESCENDING", "rel_orbit": 1,
+         "footprint": [box(*BBOX).wkt, box(-7.95, 51.9, -7.9, 51.95).wkt, box(*BBOX).wkt]}
+    )  # fmt: skip
+    out = s1.select_passes(passes, tmp_path / "era5.nc")
+    assert list(out["downloaded"]) == [True, False, False]
+    saved = {r["pass_id"]: r for r in json.loads((raw / "s1_passes.json").read_text())}
+    assert saved["ok"]["skip_reason"] is None
+    assert "sea point" in saved["clip"]["skip_reason"]
+    assert "ERA5 hour" in saved["late"]["skip_reason"]
+    err = capsys.readouterr().err
+    assert "s1: clip not scored" in err and "s1: late not scored" in err and "s1: ok " not in err
