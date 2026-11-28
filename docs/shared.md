@@ -149,6 +149,7 @@ Every stage file, its columns and the rules that must always hold. Positions are
 | `fuse/sites.parquet` learning columns (P6, optional until the learning layer lands; docs/learning.md) | `p_comb` 0–1, `comb_flag` bool, `agreement_merged` int ≥ 0, `p_site` 0–1, `model_rung` 0–3 | same rows as fuse/sites |
 | `patrol/bandit_state.json` (P7) | `{site_id: {alpha > 0, beta > 0, last_visit_week int or null}}`; plan stops may carry `theta` 0–1 and `reason` exploit/explore | one entry per site ever ranked |
 | `patrol/plan.json` (P7) | per asset: ordered stops (site or pier id, arrival time, dwell) | small |
+| `patrol/outcomes.parquet` (P7, #329) | `site_id` str (a fuse/sites id); `iso_week` str, e.g. `2026-W48`; `outcome` {found\_something, found\_nothing, not\_visited}; `entered_at` UTC datetime. One row per (site\_id, iso\_week); no vessel, person or free-text field. A missing file means no outcomes yet; `not_visited` is an answer that gives no update, never a zero. Readers use only weeks before the plan week (rule 6). Reads no config keys, so a config edit never makes real answers stale | one row per site and week answered |
 | `export/snapshot.json` (P7) | see P7 | < 5 MB |
 
 `fuse/cells.parquet` is new compared with the Plan tab: the dashboard's heat maps need per-cell scores, and P6 already computes them. P3 also writes reference/land\_mask\_10m.tif and reference/static\_mask\_10m.tif (uint8, 1 = masked, on the same 10 m grid as the radar crops); P4 reads both.

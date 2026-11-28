@@ -57,7 +57,9 @@ def test_same_seed_same_files(world, tmp_path_factory):
 def test_every_stage_file_reads_back_valid(world):
     data, mp = world
     mp.setenv("NARCO_DATA", str(data))
-    for name in io.SCHEMAS:
+    for name in io.SCHEMAS.keys() - {
+        "patrol/outcomes"
+    }:  # crew answers; the simulator has none (#329)
         assert len(io.read_stage(name)) > 0
     assert (
         io.read_stage("forecast/expected")["fold"] == 0

@@ -45,6 +45,7 @@ patrol:
   aircraft_kn: 180           # TODO(P7): spec says "confirm with the team"
   aircraft_budget_h: 4
   aircraft_dwell_h: 0.2
+  mission_mixes: [0, 25, 50, 75, 100]  # TODO(P7): example values from #316; the team picks the real presets (#338)
 
 coverage:
   calm_wind_ms: 6            # provisional until the recall curve exists
@@ -169,6 +170,7 @@ reads:
   fuse/sites: [x0, y0, region_bbox]
   fuse/piers: [x0, y0, region_bbox]
   fuse/links: [x0, y0, region_bbox]
+  patrol/outcomes: []         # #329: crew answers can't be rerun, so no config edit makes them stale
 
 # Learning layer (docs/learning.md). Values not given by a source are TODO(P1): tune on train regimes only.
 learn:

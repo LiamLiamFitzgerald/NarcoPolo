@@ -123,6 +123,9 @@ VALID = {
     "coverage/weather_daily": row(
         cell_id="2000_0_0", date="2026-11-27", wind_max_ms=7.0, hs_max_m=1.2
     ),
+    "patrol/outcomes": row(
+        site_id="s1", iso_week="2026-W48", outcome="found_nothing", entered_at=T
+    ),
 }
 
 
@@ -159,6 +162,13 @@ def test_every_schema_has_a_valid_example():
         ("reference/presence_2km", {"speed_bin": 2.0}),  # GFW's str label, not a number (#208)
         ("coverage/weather_daily", {"hs_max_m": np.nan}),  # unknown ERA5 is no row, not NaN
         ("coverage/weather_daily", {"wind_max_ms": -1.0}),
+        ("patrol/outcomes", {"outcome": "smuggling"}),  # only the three answers (#329)
+        ("patrol/outcomes", {"outcome": 0}),  # not_visited is a word, never a zero
+        ("patrol/outcomes", {"iso_week": "2026-48"}),
+        ("patrol/outcomes", {"iso_week": "2026-W54"}),
+        ("patrol/outcomes", {"iso_week": "2026-11-27"}),
+        ("patrol/outcomes", {"site_id": 7}),
+        ("patrol/outcomes", {"entered_at": pd.Timestamp("2026-11-27T12:00:00")}),  # naive time
     ],
 )
 def test_broken_rule_is_rejected(name, bad):
@@ -170,6 +180,24 @@ def test_extra_column_rejected_so_ship_ids_cannot_leak_past_match():
     for name in ("fuse/cells", "fuse/sites"):
         with pytest.raises(pa.errors.SchemaErrors):
             check(name, frame(name).assign(ship_key="abc"))
+    for extra in ("ship_key", "vessel", "note"):  # #329: no vessel, person or free-text field
+        with pytest.raises(pa.errors.SchemaErrors):
+            check("patrol/outcomes", frame("patrol/outcomes").assign(**{extra: "x"}))
+
+
+def test_patrol_outcomes_accepts_every_answer():  # #329
+    out = check(
+        "patrol/outcomes",
+        pd.DataFrame(
+            {
+                "site_id": ["s1", "s1", "s2"],
+                "iso_week": ["2026-W48", "2026-W49", "2026-W01"],
+                "outcome": pd.Categorical(["found_something", "found_nothing", "not_visited"]),
+                "entered_at": [T] * 3,
+            }
+        ),
+    )
+    assert len(out) == 3
 
 
 def test_unobserved_row_with_zero_count_is_fine_and_ints_are_coerced():
@@ -189,7 +217,9 @@ def test_learning_columns_are_optional_but_checked():
         check("fuse/sites", frame("fuse/sites", p_site=1.5))
 
 
-@pytest.mark.parametrize("name", ["reference/presence_2km", "coverage/weather_daily"])
-def test_one_row_per_key(name):  # #208
+@pytest.mark.parametrize(
+    "name", ["reference/presence_2km", "coverage/weather_daily", "patrol/outcomes"]
+)
+def test_one_row_per_key(name):  # #208, #329
     with pytest.raises(SchemaErrors):
         check(name, pd.concat([frame(name)] * 2))
