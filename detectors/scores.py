@@ -225,27 +225,29 @@ def _weekly_y(m: pd.DataFrame) -> np.ndarray:
     return ((sums["count"] + 0.5) / (sums["mu"] + 0.5)).to_numpy()
 
 
-def run_cells() -> None:
-    """aggregate/observed + forecast/expected -> fuse/cells.parquet, observed rows (E > 0) in the evaluation
-    window only. CUSUM runs over all observed history so a build-up before the window still counts."""
-    obs = Observed(io.read_stage("aggregate/observed")).observed_rows()
-    exp = io.read_stage("forecast/expected")
+def score_cells(observed, expected, layers, events, T, exposure=None) -> pd.DataFrame:
+    """Pure: the fuse/cells frame from input frames, no file I/O (validate.null_test calls it on shifted frames).
+    observed rows (E > 0) in the evaluation window only; CUSUM runs over all observed history so a build-up before
+    the window still counts. exposure (coverage/exposure) gives post_storm; without it that fact is unknown."""
+    obs = Observed(observed).observed_rows()
     # Live forecast only (fold 0, #74 item 6; the simulator's truth rows have fold NA). Backtest folds would
     # duplicate cell-days.
-    exp = exp[exp["fold"].fillna(0) == 0]
+    exp = expected[expected["fold"].fillna(0) == 0]
     m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
         m.loc[g.index, "cusum_s"] = cusum(g["count"], g["mu"], g["phi"])
-    T = io.read_snapshot()["T"]
     start = T - timedelta(days=T.weekday() + 21)  # Monday of the ISO week three weeks before T's
     m = m[pd.to_datetime(m["date"]).between(pd.Timestamp(start), pd.Timestamp(T))].reset_index(
         drop=True
     )
-    layers = io.read_stage("reference/cells")[["cell_id", "inshore_frac", "lane", "dist_coast_m"]]
-    m = m.merge(layers, on="cell_id", how="left")
-    post_storm = _first_calm_after_storm(m, io.read_stage("coverage/exposure"))
-    hours = _slow_hours(m, io.read_stage("match/events"))
+    m = m.merge(
+        layers[["cell_id", "inshore_frac", "lane", "dist_coast_m"]], on="cell_id", how="left"
+    )
+    post_storm = (
+        _first_calm_after_storm(m, exposure) if exposure is not None else np.full(len(m), np.nan)
+    )
+    hours = _slow_hours(m, events)
     small = (m["event_type"] == "dark_small").to_numpy()
     p_mid = tail_pmid(m["count"], m["mu"], m["phi"])
     scores = m[_KEY].assign(
@@ -258,4 +260,17 @@ def run_cells() -> None:
         y_week=_weekly_y(m),
     )
     scores["U"], scores["agreement"] = fuse(scores)
+    return scores
+
+
+def run_cells() -> None:
+    """aggregate/observed + forecast/expected -> fuse/cells.parquet (stage-file wrapper around score_cells)."""
+    scores = score_cells(
+        io.read_stage("aggregate/observed"),
+        io.read_stage("forecast/expected"),
+        io.read_stage("reference/cells"),
+        io.read_stage("match/events"),
+        io.read_snapshot()["T"],
+        exposure=io.read_stage("coverage/exposure"),
+    )
     io.write_stage("fuse/cells", scores, _provenance("aggregate/observed"))  # type: ignore[arg-type]
