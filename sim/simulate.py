@@ -58,9 +58,12 @@ def _make_map(cfg: Config) -> dict:
     x0, y0 = _origin()
     ix, iy = np.meshgrid(np.arange(NX), np.arange(NY), indexing="ij")
     ix, iy = ix.ravel(), iy.ravel()
-    dist = (NY - 1 - iy) * FINE + FINE / 2  # centre of the cell to the shore line
+    edge = (
+        NY - 1 - iy
+    ) * FINE + FINE / 2  # cell centre to the grid's top edge: sets the inshore band (unchanged)
+    dist = edge - (1 - SHORE_FRAC) * FINE  # cell centre to the shoreline (#245), as P3 measures it
     inshore = np.clip(
-        (5000 - (dist - FINE / 2)) / FINE, 0, 1
+        (5000 - (edge - FINE / 2)) / FINE, 0, 1
     )  # inshore grounds: within 5 km of the shore
     lane = np.isin(iy, (3, 4))
     anchorage = (ix >= 30) & (ix <= 33) & (iy >= 6) & (iy <= 8)
