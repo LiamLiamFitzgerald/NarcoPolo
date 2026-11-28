@@ -46,9 +46,10 @@ patrol:
   aircraft_budget_h: 4
   aircraft_dwell_h: 0.2
 
-# #103 (Liam, 28 Nov): plan start and base port, read by patrol. TODO(P7): check Haulbowline's position on a map before the pitch
-base_port: {lon: -8.32, lat: 51.84}   # TODO(P7) #103: approximate (from memory), Haulbowline, Cork Harbour
-patrol_start_hour_utc: 0              # TODO(P7) #103: plans start this many hours into the day after T
+# #103 (Liam, 28 Nov): plan start and base port, read by patrol. Until a human checks Haulbowline's position on a map,
+# they stay commented out, so plans keep saying "stand-in" (and real data refuses). Then uncomment both:
+# base_port: {lon: -8.32, lat: 51.84}   # TODO(P7) #103: approximate (from memory), Haulbowline, Cork Harbour
+# patrol_start_hour_utc: 0              # TODO(P7) #103: plans start this many hours into the day after T
 
 # #272 (Liam, 28 Nov): baseline per event type (D8)
 forecast:
