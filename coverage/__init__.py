@@ -196,11 +196,29 @@ def _read_passes(s1: Path) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["pass_id", "time_utc", "footprint", "downloaded"])
 
 
+def _raw_is_real() -> bool:
+    """True when raw/manifest.json lists files and none is a simulator copy ("simulated") or an ingest stub ("stub").
+    Without a manifest there is nothing real to build from."""
+    path = io.raw_root() / "manifest.json"
+    if not path.exists():
+        return False
+    files = json.loads(path.read_text()).get("files", {})
+    fake = any(
+        f.get("request", {}).get("simulated") or f.get("request", {}).get("stub")
+        for f in files.values()
+    )
+    return bool(files) and not fake
+
+
 def run() -> None:
-    """make all. On the simulator (no raw/), `make sim` already wrote coverage/exposure: check it and stop."""
-    if not (io.stage_path("coverage/exposure").parent.parent / "raw").exists():
+    """make all. Simulator (or ingest stubs): `make sim` already wrote coverage/exposure; check it and stop.
+    Real raw/: one row per 2 km cell and pass from raw/s1 metadata and raw/era5.nc (unknown weather if missing)."""
+    if not _raw_is_real():
         io.read_stage("coverage/exposure")
         return
-    raise NotImplementedError(
-        "coverage on real data: needs reference/cells from real data first (#34)"
+    raw = io.raw_root()
+    era5 = _read_era5(raw / "era5.nc") if (raw / "era5.nc").exists() else None
+    cells = gpd.GeoDataFrame(io.read_stage("reference/cells")).to_crs(32629)
+    io.write_stage(
+        "coverage/exposure", build_exposure(_read_passes(raw / "s1"), cells, era5), "real"
     )
