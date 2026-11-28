@@ -69,6 +69,7 @@ validate:
   injection_brightness_db: [3, 6, 10, 15]  # TODO(P1): not in the spec; spans P4's threshold on the simulator
   injection_n_per_pass: 10   # TODO(P1): not in the spec
   injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
+  visible_pickup_length_m: [15, 24]  # TODO(P1) #266: pick-ups the radar sees (sim p_det ~0.95 at 20 m) that match still counts as small or medium (25-50 m come out "large" and leave dark_small)
 
 # P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
 p4:
@@ -110,6 +111,7 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   det_b: 0.4              # per metre of length
   det_c: 0.5              # per m/s of wind
   small_boat_length_m: [6, 15]
+  pickup_length_m: [6, 15]       # TODO(P1) #266: pick-up boat length; = small_boat_length_m, validate's visible world overrides it
   false_alarm_per_km2_pass: 0.002
   drop_interval_days: 10
   pickup_prob: 0.8

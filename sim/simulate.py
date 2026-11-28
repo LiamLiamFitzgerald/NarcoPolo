@@ -302,7 +302,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "cell": pick_cells,
             "x_m": ccx[pick_cells] + rng.normal(0, 300, npk),
             "y_m": ccy[pick_cells] + rng.normal(0, 300, npk),
-            "length_m": rng.uniform(*s["small_boat_length_m"], npk),
+            "length_m": rng.uniform(*s["pickup_length_m"], npk),  # #266: validate overrides it
         }
     )
     boats = pd.concat([boats, pickups], ignore_index=True)

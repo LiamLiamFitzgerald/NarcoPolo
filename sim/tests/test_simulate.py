@@ -119,3 +119,30 @@ def test_new_contract_files_keep_their_invariants(world):  # #87, #88, #98
     )
     cells = io.read_stage("fuse/cells")
     assert (cells["y"] > 0).all() and (cells["y_week"] > 0).all()
+
+
+def test_pickups_use_pickup_length_m_and_only_pickups_change(tmp_path):
+    """#266: validate's visible world sets sim.pickup_length_m; the default equals small_boat_length_m."""
+    cfg, _ = load("config.yaml")
+    assert (
+        cfg["sim"]["pickup_length_m"] == cfg["sim"]["small_boat_length_m"]
+    )  # the default world is unchanged
+    mp = pytest.MonkeyPatch()
+    out = {}
+    for name, length in (("small", cfg["sim"]["pickup_length_m"]), ("big", [25, 50])):
+        mp.setenv("NARCO_DATA", str(tmp_path / name / "data"))
+        mp.setenv("NARCO_RAW", str(tmp_path / name / "raw"))
+        simulate({**cfg, "sim": {**cfg["sim"], "pickup_length_m": length}}, 20261127)
+        out[name] = pd.read_parquet(io.truth_path())
+    mp.undo()
+    small, big = out["small"], out["big"]
+    p = big[big["kind"] == "pickup"]["length_m"]
+    assert len(p) and p.between(25, 50).all()
+    keep = ["kind", "time_utc", "x_m", "y_m"]
+    pd.testing.assert_frame_equal(
+        small[keep], big[keep]
+    )  # same places and times: only pick-up size differs
+    assert (
+        big.loc[big["kind"] == "pickup", "detected"].mean()
+        > small.loc[small["kind"] == "pickup", "detected"].mean()
+    )
