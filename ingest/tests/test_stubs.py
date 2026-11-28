@@ -1,4 +1,4 @@
-"""Every offline stub (era5 is real: tests/test_era5.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
+"""Every offline stub (era5 and osm are real: tests/test_era5.py, test_osm.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
 
 import json
 import socket
@@ -117,19 +117,6 @@ def test_gfw_matches_simulator_schema(simraw, raw, fn, name):
     _recorded(raw, path)
 
 
-def test_fetch_piers_is_feature_collection(simraw, raw):
-    path = osm.fetch_piers(BBOX)
-    sim_type = json.loads((simraw / "osm_piers.geojson").read_text())["type"]
-    assert json.loads(path.read_text()) == {"type": sim_type, "features": []}
-    _recorded(raw, path)
-
-
-def test_fetch_coastline_matches_simulator(simraw, raw):
-    path = osm.fetch_coastline(BBOX)
-    _same_gpkg_shape(path, simraw / "coastline.gpkg", "coastline")
-    _recorded(raw, path)
-
-
 def test_fetch_inshore_matches_simulator(simraw, raw):
     paths = static.fetch_inshore()
     assert {p.relative_to(raw).as_posix() for p in paths} == {
@@ -148,6 +135,7 @@ def test_fetch_bathy_matches_simulator(simraw, raw):
 
 def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch):
     monkeypatch.setattr(era5, "_client", lambda: FakeCDS(simraw / "era5.nc"))
+    monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
     fetch_all(CFG)
     on_disk = {p.relative_to(raw).as_posix() for p in raw.rglob("*") if p.is_file()} - {
         "manifest.json"
