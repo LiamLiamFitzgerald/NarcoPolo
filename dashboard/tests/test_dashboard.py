@@ -61,3 +61,51 @@ def test_fallback_server_serves_the_page_and_the_snapshot(tmp_path):
         )
         assert b"drawBanner" in urllib.request.urlopen(f"{base}/index.html").read()
         srv.shutdown()
+
+
+# The Material Design theme (#249) must not break the demo rules: one offline file, colours only in
+# the token block, every theme defines every token, and the data label always has its own style.
+SIZE_BUDGET = 100_000  # bytes for index.html with no data; about 43 KB when the theme landed (#257)
+# 3-character hex needs a letter, so issue references such as #176 are not colours
+HEX = re.compile(r"#[0-9a-fA-F]{6}\b|#(?=[0-9]*[a-fA-F])[0-9a-fA-F]{3}\b")
+
+
+def _token_block() -> tuple[str, str]:
+    start, end = HTML.index("/* tokens:start"), HTML.index("/* tokens:end */")
+    return HTML[start:end], HTML[:start] + HTML[end:]
+
+
+def test_page_stays_small_and_loads_nothing_external():
+    assert len(HTML.encode()) < SIZE_BUDGET
+    assert not re.search(r"<link\b|@import|url\(\s*['\"]?https?:|<script[^>]+src=", HTML)
+
+
+def test_every_colour_lives_in_the_token_block():
+    tokens, rest = _token_block()
+    assert HEX.search(tokens)
+    assert not HEX.findall(rest), "use a token (var(--...)) instead of a colour literal"
+    assert not re.search(r"\brgba?\(|\bhsla?\(", rest)
+
+
+def test_light_and_dark_define_the_same_tokens():
+    tokens, _ = _token_block()
+    light, dark = tokens.split(':root[data-mode="dark"]')
+    names = lambda block: set(re.findall(r"(--[\w-]+)\s*:", block))
+    assert names(light) == names(dark) and len(names(light)) > 40
+
+
+def test_each_data_label_has_its_own_fixed_style():
+    for label in ("simulated", "real", "mixed"):
+        assert f'#banner[data-label="{label}"]' in HTML
+    tokens, _ = _token_block()
+    light, dark = tokens.split(':root[data-mode="dark"]')
+    for label in ("simulated", "real", "mixed"):  # the label colours are the same in both themes
+        colour = [re.findall(rf"--label-{label}:\s*(#\w+)", block) for block in (light, dark)]
+        assert colour[0] == colour[1] and len(colour[0]) == 1
+
+
+def test_motion_and_hatching_rules_are_kept():
+    assert "prefers-reduced-motion: reduce" in HTML
+    assert (
+        ".cell.hatched { fill: url(#hatch); }" in HTML
+    )  # unobserved is a pattern, never a scale step

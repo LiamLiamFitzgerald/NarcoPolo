@@ -4,69 +4,298 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NarcoPolo</title>
+<script>
+// Resolve the theme before the first paint: the viewer's choice (light, dark, auto) or the system setting.
+(() => {
+  let pick = "auto";
+  try { pick = localStorage.getItem("np-theme") || "auto"; } catch (e) { /* no storage: follow the system */ }
+  const dark = pick === "dark" || (pick === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.mode = dark ? "dark" : "light";
+  document.documentElement.dataset.pick = pick;
+})();
+</script>
 <style>
-  :root { --bg: #f4f5f7; --card: #fff; --ink: #1b1f23; --muted: #5b6570; --line: #d5d9de; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg: #14181c; --card: #1d2227; --ink: #e8ebee; --muted: #9aa4ad; --line: #343b42; }
-  }
-  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
-  #banner { padding: 8px 14px; font-weight: 600; color: #fff; background: #555; }
-  #banner.simulated { background: #a15c00; } #banner.real { background: #1a6b3a; } #banner.mixed { background: #6a2fb0; }
-  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; padding: 12px; align-items: start; }
-  @media (max-width: 980px) { main { grid-template-columns: minmax(0, 1fr); } }
-  section, .map-card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
-  h2 { font-size: 14px; margin: 0 0 6px; }
-  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 8px; }
-  .controls label { color: var(--muted); } select { font: inherit; }
-  svg { width: 100%; height: auto; display: block; background: #cfe3f1; border: 1px solid var(--line); }
-  #legend { font-size: 12px; margin-top: 8px; color: var(--muted); }
-  #legend .row { display: flex; align-items: center; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
-  #legend .sw { width: 34px; height: 14px; border: 1px solid var(--line); }
-  #legend .sw.hatch { background: repeating-linear-gradient(45deg, #ddd 0 3px, #888 3px 5px); margin-left: 14px; }
-  #legend span.lab { margin: 0 8px 0 3px; }
-  #toggles { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; margin-top: 8px; }
-  ol, ul { margin: 0; padding-left: 20px; } li { margin-bottom: 8px; }
-  .badge { letter-spacing: 1px; } .tag { font-size: 12px; color: var(--muted); }
-  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 8px; } td, th { border-bottom: 1px solid var(--line); padding: 2px 8px 2px 0; text-align: left; }
-  .muted { color: var(--muted); }
+/* tokens:start
+   Every colour in this page is defined in this block and nowhere else (a test checks it).
+   UI roles: Material 3 colour scheme generated from seed #006a6a (teal), light and dark.
+   Data colours: the dataviz reference palette (blue sequential ramp, blue/red diverging pair with a grey
+   midpoint, categorical orange and violet for overlays). Diverging midsteps are OKLab mixes between
+   the documented poles and the midpoint, at 25, 50 and 75 %. Checked: UI text >= 4.5:1, chips >= 6:1,
+   overlay pair passes CVD and normal-vision separation in both modes. */
+:root {
+  color-scheme: light;
+  --md-primary: #006a6a; --md-on-primary: #ffffff;
+  --md-primary-container: #9cf1f0; --md-on-primary-container: #002020;
+  --md-secondary-container: #cce8e7; --md-on-secondary-container: #051f1f;
+  --md-tertiary-container: #d3e4ff; --md-on-tertiary-container: #041c35;
+  --md-error: #ba1a1a; --md-error-container: #ffdad6; --md-on-error-container: #410002;
+  --md-surface: #f4fbfa; --md-surface-container-lowest: #ffffff; --md-surface-container-low: #eff5f4;
+  --md-surface-container: #e9efee; --md-surface-container-high: #e3e9e8; --md-surface-container-highest: #dde4e3;
+  --md-on-surface: #161d1d; --md-on-surface-variant: #3f4948; --md-outline: #6f7979; --md-outline-variant: #bec9c8;
+  --md-shadow: rgba(0, 0, 0, 0.3); --md-shadow-soft: rgba(0, 0, 0, 0.15); --md-scrim: rgba(0, 0, 0, 0.32);
+
+  /* data: sequential (one hue, light to dark), diverging (blue - grey - red), unobserved hatching */
+  --seq-0: #cce3fd; --seq-1: #84b9f3; --seq-2: #338ced; --seq-3: #1b64be; --seq-4: #0e3d7e;
+  --div-n4: #257de0; --div-n3: #5f9be6; --div-n2: #90b8eb; --div-n1: #bfd4ee; --div-0: #efefef;
+  --div-p1: #f5c9c5; --div-p2: #f6a29b; --div-p3: #f37872; --div-p4: #ec4647;
+  --hatch-bg: #f6f6f6; --hatch-line: #8c8c8c; --lane-line: #16355c;
+  --site: #f47230; --explore: #6a4ce2; --ink: #161d1d; --ring: #ffffff;
+  --map-bg: #e9efee; --cell-gap: #e9efee;
+
+  /* the data label never changes with the theme: a simulated demo must never look real */
+  --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
+}
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --md-primary: #80d5d4; --md-on-primary: #003737;
+  --md-primary-container: #004f4f; --md-on-primary-container: #9cf1f0;
+  --md-secondary-container: #324b4b; --md-on-secondary-container: #cce8e7;
+  --md-tertiary-container: #334863; --md-on-tertiary-container: #d3e4ff;
+  --md-error: #ffb4ab; --md-error-container: #93000a; --md-on-error-container: #ffdad6;
+  --md-surface: #0e1514; --md-surface-container-lowest: #090f0f; --md-surface-container-low: #161d1d;
+  --md-surface-container: #1a2121; --md-surface-container-high: #252b2b; --md-surface-container-highest: #303636;
+  --md-on-surface: #dde4e3; --md-on-surface-variant: #bec9c8; --md-outline: #899392; --md-outline-variant: #3f4948;
+  --md-shadow: rgba(0, 0, 0, 0.6); --md-shadow-soft: rgba(0, 0, 0, 0.3); --md-scrim: rgba(0, 0, 0, 0.5);
+
+  /* dark mode is selected, not flipped: low values recede into the dark surface */
+  --seq-0: #0e3d7e; --seq-1: #1b64be; --seq-2: #338ced; --seq-3: #84b9f3; --seq-4: #cce3fd;
+  --div-n4: #338ced; --div-n3: #3a77bd; --div-n2: #3d628e; --div-n1: #3c4d62; --div-0: #383838;
+  --div-p1: #634543; --div-p2: #8f504e; --div-p3: #bc5a59; --div-p4: #eb6263;
+  --hatch-bg: #1f1f1f; --hatch-line: #8a8a8a; --lane-line: #b3c8e8;
+  --site: #e76624; --explore: #9887ef; --ink: #dde4e3; --ring: #090f0f;
+  --map-bg: #1a2121; --cell-gap: #1a2121;
+
+  --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
+}
+/* tokens:end */
+
+:root {
+  /* type scale (Material 3), system fonts only: nothing is loaded from the internet */
+  --font: Roboto, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --t-title-large: 400 22px/28px var(--font);
+  --t-title-medium: 500 16px/24px var(--font);
+  --t-title-small: 500 14px/20px var(--font);
+  --t-body-large: 400 16px/24px var(--font);
+  --t-body-medium: 400 14px/20px var(--font);
+  --t-body-small: 400 12px/16px var(--font);
+  --t-label-large: 500 14px/20px var(--font);
+  --t-label-medium: 500 12px/16px var(--font);
+  /* shape, spacing (4 dp grid), elevation, motion */
+  --shape-xs: 4px; --shape-sm: 8px; --shape-md: 12px; --shape-lg: 16px; --shape-full: 999px;
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px;
+  --elev-1: 0 1px 2px var(--md-shadow), 0 1px 3px 1px var(--md-shadow-soft);
+  --elev-2: 0 1px 2px var(--md-shadow), 0 2px 6px 2px var(--md-shadow-soft);
+  --elev-3: 0 4px 8px 3px var(--md-shadow-soft), 0 1px 3px var(--md-shadow);
+  --ease: cubic-bezier(0.2, 0, 0, 1); --dur: 200ms;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; } /* component rules set display, which would otherwise beat the attribute */
+body { margin: 0; font: var(--t-body-medium); background: var(--md-surface); color: var(--md-on-surface); }
+h2 { font: var(--t-title-medium); margin: 0 0 var(--sp-3); }
+h3 { font: var(--t-title-small); margin: var(--sp-4) 0 var(--sp-2); }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--md-primary); outline-offset: 2px; }
+.muted { color: var(--md-on-surface-variant); }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.icon { width: 18px; height: 18px; fill: currentColor; flex: none; }
+
+/* state layer: hover and press tint every interactive element in its own content colour */
+.state { position: relative; overflow: hidden; cursor: pointer; border: 0; background: none; }
+.state::before { content: ""; position: absolute; inset: 0; background: currentColor; opacity: 0; transition: opacity var(--dur) var(--ease); pointer-events: none; }
+.state:hover::before { opacity: 0.08; }
+.state:active::before, .state:focus-visible::before { opacity: 0.12; }
+.state:disabled { cursor: default; opacity: 0.38; }
+.state:disabled::before { opacity: 0; }
+
+/* top app bar */
+.appbar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap;
+  padding: var(--sp-2) var(--sp-4); background: var(--md-surface-container); box-shadow: var(--elev-1); }
+.brand { font: var(--t-title-large); display: flex; align-items: center; gap: var(--sp-2); }
+.brand svg { width: 28px; height: 28px; fill: var(--md-primary); }
+.spacer { flex: 1; }
+#banner { display: inline-flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) var(--sp-3); border-radius: var(--shape-sm);
+  font: var(--t-label-large); color: var(--label-on); background: var(--label-none); }
+#banner[data-label="simulated"] { background: var(--label-simulated); }
+#banner[data-label="real"] { background: var(--label-real); }
+#banner[data-label="mixed"] { background: var(--label-mixed); }
+#banner .sub { font: var(--t-label-medium); opacity: 0.9; }
+.icon-btn { width: 40px; height: 40px; border-radius: var(--shape-full); display: inline-grid; place-items: center; color: var(--md-on-surface-variant); }
+
+/* segmented buttons (heat map, theme) and chips (weeks, overlays) */
+.seg { display: inline-flex; border: 1px solid var(--md-outline); border-radius: var(--shape-full); overflow: hidden; max-width: 100%; flex-wrap: wrap; }
+.seg button { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-4); font: var(--t-label-large);
+  color: var(--md-on-surface); border-left: 1px solid var(--md-outline); }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-checked="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+.seg.compact button { padding: 0 var(--sp-3); min-height: 36px; }
+.chips { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 32px; padding: 0 var(--sp-3); border-radius: var(--shape-sm);
+  border: 1px solid var(--md-outline); font: var(--t-label-large); color: var(--md-on-surface-variant); }
+.chip[aria-checked="true"], .chip[aria-pressed="true"] { background: var(--md-secondary-container); color: var(--md-on-secondary-container); border-color: transparent; }
+.chip svg { width: 18px; height: 18px; }
+.tag { display: inline-flex; align-items: center; padding: 0 var(--sp-2); min-height: 20px; border-radius: var(--shape-xs);
+  font: var(--t-label-medium); background: var(--md-surface-container-highest); color: var(--md-on-surface-variant); }
+.tag.explore { background: var(--md-tertiary-container); color: var(--md-on-tertiary-container); }
+.tonal-btn { display: inline-flex; align-items: center; gap: var(--sp-2); min-height: 40px; padding: 0 var(--sp-6) 0 var(--sp-4);
+  border-radius: var(--shape-full); font: var(--t-label-large); background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+
+/* layout by window size class: compact < 600, medium 600 to 839, expanded >= 840 */
+.layout { display: grid; gap: var(--sp-4); padding: var(--sp-4); grid-template-columns: minmax(0, 1fr); align-items: start; }
+.panels { display: grid; gap: var(--sp-4); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 600px) { .panels { grid-template-columns: repeat(2, minmax(0, 1fr)); } .panels .wide { grid-column: 1 / -1; } }
+@media (min-width: 840px) { .layout { grid-template-columns: minmax(0, 1fr) 400px; } .panels { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 599px) { .layout { padding: var(--sp-2); gap: var(--sp-2); } .appbar { padding: var(--sp-2); } }
+
+.card { background: var(--md-surface-container-low); border-radius: var(--shape-md); padding: var(--sp-4); box-shadow: var(--elev-1); min-width: 0; }
+.outlined { background: var(--md-surface-container-lowest); border: 1px solid var(--md-outline-variant); border-radius: var(--shape-sm); box-shadow: none; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2) var(--sp-3); margin-bottom: var(--sp-3); }
+.map-wrap { border-radius: var(--shape-sm); overflow: hidden; background: var(--map-bg); }
+svg#svg { width: 100%; height: auto; display: block; }
+#legend { margin-top: var(--sp-3); padding: var(--sp-3); font: var(--t-body-small); color: var(--md-on-surface-variant); }
+#legend .title { font: var(--t-label-large); color: var(--md-on-surface); }
+#legend .row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); margin-top: var(--sp-2); }
+#legend .key { display: inline-flex; align-items: center; gap: var(--sp-1); }
+.sw { width: 28px; height: 14px; border-radius: 2px; display: inline-block; }
+.sw.hatch, .hatch-bg { background: repeating-linear-gradient(45deg, var(--hatch-bg) 0 3px, var(--hatch-line) 3px 4.5px); }
+#toggles { margin-top: var(--sp-3); }
+
+/* lists, timeline, tables */
+.list { list-style: none; margin: 0; padding: 0; }
+.list > li { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--sp-3); padding: var(--sp-3) 0; border-top: 1px solid var(--md-outline-variant); }
+.list > li:first-child { border-top: 0; }
+.lead { width: 40px; height: 40px; border-radius: var(--shape-full); display: grid; place-items: center; font: var(--t-label-large);
+  background: var(--md-primary-container); color: var(--md-on-primary-container); }
+.headline { font: var(--t-title-small); display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.supporting { color: var(--md-on-surface-variant); margin-top: var(--sp-1); }
+.badge { letter-spacing: 1px; color: var(--md-on-surface-variant); }
+details { margin-top: var(--sp-2); }
+summary { cursor: pointer; font: var(--t-label-large); color: var(--md-primary); border-radius: var(--shape-xs); width: fit-content; }
+details ul { margin: var(--sp-2) 0 0; padding-left: var(--sp-4); color: var(--md-on-surface-variant); }
+details p { margin: var(--sp-2) 0 0; color: var(--md-on-surface-variant); font: var(--t-body-small); }
+.timeline { list-style: none; margin: 0; padding: 0; }
+.timeline li { position: relative; padding: 0 0 var(--sp-3) var(--sp-6); }
+.timeline li::before { content: ""; position: absolute; left: 6px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--md-primary); }
+.timeline li::after { content: ""; position: absolute; left: 9px; top: 18px; bottom: 0; width: 2px; background: var(--md-outline-variant); }
+.timeline li:last-child::after { display: none; }
+.timeline .time { font: var(--t-label-medium); color: var(--md-on-surface-variant); font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; margin: var(--sp-2) 0 var(--sp-4); }
+table { border-collapse: collapse; width: 100%; font: var(--t-body-small); }
+th { font: var(--t-label-medium); color: var(--md-on-surface-variant); text-align: left; padding: var(--sp-2); border-bottom: 1px solid var(--md-outline); }
+td { padding: var(--sp-2); border-bottom: 1px solid var(--md-outline-variant); }
+th.num { text-align: right; }
+caption { caption-side: bottom; text-align: left; padding-top: var(--sp-2); color: var(--md-on-surface-variant); font: var(--t-body-small); }
+
+/* states: empty, error, loading */
+.empty { display: flex; gap: var(--sp-3); align-items: center; padding: var(--sp-3); border-radius: var(--shape-sm);
+  background: var(--md-surface-container); color: var(--md-on-surface-variant); }
+.alert { display: flex; gap: var(--sp-3); align-items: flex-start; margin: var(--sp-4) var(--sp-4) 0; padding: var(--sp-4); border-radius: var(--shape-md);
+  background: var(--md-error-container); color: var(--md-on-error-container); }
+.alert code { font-weight: 700; }
+.skeleton { border-radius: var(--shape-sm); background: var(--md-surface-container-high); min-height: 20px; margin: var(--sp-2) 0; animation: pulse 1.6s var(--ease) infinite; }
+@keyframes pulse { 50% { opacity: 0.5; } }
+dialog { border: 0; border-radius: var(--shape-lg); padding: var(--sp-6); max-width: min(520px, 92vw); background: var(--md-surface-container-high);
+  color: var(--md-on-surface); box-shadow: var(--elev-3); }
+dialog::backdrop { background: var(--md-scrim); }
+dialog dl { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-2) var(--sp-4); margin: var(--sp-4) 0; }
+dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overflow-wrap: anywhere; }
+
+/* map marks read their colours from the tokens, so a theme change needs no redraw */
+.cell { stroke: var(--cell-gap); stroke-width: 0.5; }
+.cell.hatched { fill: url(#hatch); }
+.basemap { fill: none; stroke: var(--md-outline); stroke-width: 1; }
+.inshore { fill: none; stroke: var(--md-primary); stroke-width: 0.8; }
+.lane { fill: url(#lane); opacity: 0.5; }
+.exclusion { fill: url(#lane); stroke: var(--md-on-surface-variant); stroke-dasharray: 3 2; opacity: 0.8; }
+.route { fill: none; stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+.route.aircraft { stroke-dasharray: 7 5; }
+.stop { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.stop.explore { stroke: var(--explore); stroke-width: 3; stroke-dasharray: 3 2; }
+.site { fill: none; stroke: var(--site); stroke-width: 2.5; paint-order: stroke; }
+.site.flagged { fill: var(--site); fill-opacity: 0.8; }
+.site-ring { fill: none; stroke: var(--ring); stroke-width: 5; }
+.site-edge { fill: none; stroke: var(--ink); stroke-width: 0.8; }
+.pier { fill: var(--ink); stroke: var(--ring); stroke-width: 1.5; }
+.diamond { fill: none; stroke: var(--ink); stroke-width: 1.5; }
+.dot { fill: var(--ink); }
+.hatch-bg-svg { fill: var(--hatch-bg); } .hatch-line-svg { stroke: var(--hatch-line); } .lane-line-svg { stroke: var(--lane-line); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before { transition: none !important; animation: none !important; }
+}
 </style>
 </head>
 <body>
-<div id="banner">loading…</div>
-<main>
-  <div class="map-card">
-    <div class="controls">
-      <label>Heat map <select id="map"></select></label>
-      <label>Week <select id="week"></select></label>
+<header class="appbar">
+  <div class="brand"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z"/></svg>NarcoPolo</div>
+  <span id="banner" data-label="none" role="status">Loading snapshot…</span>
+  <span class="spacer"></span>
+  <button id="about" class="icon-btn state" type="button" aria-label="About this snapshot" disabled></button>
+  <div id="theme" class="seg compact" role="radiogroup" aria-label="Theme"></div>
+</header>
+<div id="alert" class="alert" role="alert" hidden></div>
+<main class="layout">
+  <section class="card" aria-label="Map">
+    <div class="toolbar"><div id="map" class="seg" role="radiogroup" aria-label="Heat map"></div></div>
+    <div class="toolbar">
+      <button id="prev" class="icon-btn state" type="button" aria-label="Previous week" disabled></button>
+      <div id="week" class="chips" role="radiogroup" aria-label="Week"></div>
+      <button id="next" class="icon-btn state" type="button" aria-label="Next week" disabled></button>
+      <button id="play" class="tonal-btn state" type="button" aria-pressed="false" disabled></button>
     </div>
-    <svg id="svg"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
-    <div id="legend"></div>
-    <div id="toggles"></div>
-  </div>
-  <aside>
-    <section><h2>Sites worth checking</h2><ol id="sites"></ol><button id="more" type="button"></button></section>
-    <section><h2>Patrol plan</h2><div id="plan"></div></section>
-    <section><h2>How far to trust this</h2><div id="validation"></div></section>
+    <div class="map-wrap">
+      <svg id="svg" viewBox="0 0 900 260" role="img" aria-label="Map of the study area"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
+    </div>
+    <div id="legend" class="outlined"><div class="skeleton"></div></div>
+    <div id="toggles" class="chips" role="group" aria-label="Overlays"></div>
+  </section>
+  <aside class="panels">
+    <section class="card wide"><h2>Sites worth checking</h2><ol id="sites" class="list"><li class="skeleton"></li><li class="skeleton"></li></ol>
+      <button id="more" class="tonal-btn state" type="button" hidden></button></section>
+    <section class="card"><h2>Patrol plan</h2><div id="plan"><div class="skeleton"></div></div></section>
+    <section class="card"><h2>How far to trust this</h2><div id="validation"><div class="skeleton"></div></div></section>
   </aside>
 </main>
+<dialog id="aboutDlg" aria-labelledby="aboutTitle">
+  <h2 id="aboutTitle">About this snapshot</h2>
+  <dl id="aboutList"></dl>
+  <button id="aboutClose" class="tonal-btn state" type="button">Close</button>
+</dialog>
 <script>
 // Plain JavaScript, inline SVG, no network. The browser only draws, sorts and formats: every number
-// and every colour-scale break comes from the snapshot (docs/specs/P7.md).
+// and every colour-scale break comes from the snapshot, every colour from the tokens (docs/specs/P7.md).
 const NS = "http://www.w3.org/2000/svg", W = 900;
 const MAPS = {
-  normal: { title: "Normal small-boat activity", unit: "expected boats per unit of coverage (weekly mean of μ ÷ E)", div: false },
-  obs_vs_exp: { title: "Observed versus expected", unit: "log₂(observed ÷ expected), clipped at ±3 (8× more or less)", div: true },
-  unusual: { title: "Unusual score", unit: "U from 0 to 1 (weekly maximum, either event type)", div: false },
-  exposure: { title: "Blind spots", unit: "small-boat coverage summed over the week's passes", div: false },
+  normal: { title: "Normal activity", long: "Normal small-boat activity", unit: "expected boats per unit of coverage (weekly mean of μ ÷ E)", div: false },
+  obs_vs_exp: { title: "Observed vs expected", long: "Observed versus expected", unit: "log₂(observed ÷ expected), clipped at ±3 (8× more or less)", div: true },
+  unusual: { title: "Unusual score", long: "Unusual score", unit: "U from 0 to 1 (weekly maximum, either event type)", div: false },
+  exposure: { title: "Blind spots", long: "Blind spots", unit: "small-boat coverage summed over the week's passes", div: false },
 };
 const OVERLAYS = [
-  ["inshore", "Inshore fishing grounds"], ["lane", "Shipping lanes, exclusion zones"], ["sites", "Drop sites"],
+  ["inshore", "Inshore grounds"], ["lane", "Lanes and exclusion zones"], ["sites", "Drop sites"],
   ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
 ];
-let snap, ext, H;
+let snap, ext, H, timer = null;
 const view = { map: "normal", week: null, more: false };
 const TOP_LIST = 3; // Design principle 13: a weekly top 3, the rest one click away
 const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
+const REPLAY_MS = 1500; // one week per step when replaying
+
+// Icons: simple geometric paths drawn for this page, 24 x 24 grid, currentColor.
+const ICONS = {
+  light: "M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10zM11 1h2v3h-2zm0 19h2v3h-2zM1 11h3v2H1zm19 0h3v2h-3zM4.2 5.6l1.4-1.4 2.1 2.1-1.4 1.4zm12.1 12.1 1.4-1.4 2.1 2.1-1.4 1.4zM4.2 18.4l2.1-2.1 1.4 1.4-2.1 2.1zM16.3 6.3l2.1-2.1 1.4 1.4-2.1 2.1z",
+  dark: "M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z",
+  auto: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2v16a8 8 0 0 1 0-16z",
+  info: "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm1 15h-2v-6h2zm0-8h-2V7h2z",
+  warning: "M1 21h22L12 2zm12-3h-2v-2h2zm0-4h-2v-4h2z",
+  prev: "M15.4 7.4 14 6l-6 6 6 6 1.4-1.4L10.8 12z",
+  next: "M8.6 16.6 10 18l6-6-6-6-1.4 1.4 4.6 4.6z",
+  play: "M8 5v14l11-7z",
+  pause: "M6 19h4V5H6zm8-14v14h4V5z",
+  check: "M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z",
+  empty: "M3 5h18v2H3zm0 6h12v2H3zm0 6h8v2H3z",
+};
+const icon = name => `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${ICONS[name]}"/></svg>`;
 
 async function loadSnapshot() {
   if (!window.pywebview?.api)
@@ -75,7 +304,7 @@ async function loadSnapshot() {
   for (const url of ["/snapshot.json", "../data/export/snapshot.json"]) {
     try { const r = await fetch(url); if (r.ok) return r.json(); } catch (e) { /* try the next place */ }
   }
-  throw new Error("no snapshot found: run make all");
+  throw new Error("no snapshot found");
 }
 
 // Equirectangular, east-west scaled by cos(latitude): accurate enough for 150 km.
@@ -87,7 +316,7 @@ function project(lon, lat) {
 function setExtent() {
   const g = Object.values(snap.cells.geometry);
   const lon = g.flatMap(b => [b[0], b[2]]), lat = g.flatMap(b => [b[1], b[3]]);
-  const padLon = (Math.max(...lon) - Math.min(...lon)) * 0.04, padLat = (Math.max(...lat) - Math.min(...lat)) * 0.08;
+  const padLon = (Math.max(...lon) - Math.min(...lon)) * 0.03, padLat = (Math.max(...lat) - Math.min(...lat)) * 0.08;
   ext = { lon0: Math.min(...lon) - padLon, lon1: Math.max(...lon) + padLon, lat0: Math.min(...lat) - padLat, lat1: Math.max(...lat) + padLat };
   H = project(ext.lon0, ext.lat0)[1];
   document.getElementById("svg").setAttribute("viewBox", `0 0 ${W} ${H}`);
@@ -100,18 +329,20 @@ function el(tag, attrs, parent, text) {
   parent.appendChild(e);
   return e;
 }
+const h = (tag, props = {}, ...kids) => { const e = Object.assign(document.createElement(tag), props); e.append(...kids); return e; };
 const group = id => { const g = document.getElementById(id); g.replaceChildren(); return g; };
 const cellRect = cid => {
   const b = snap.cells.geometry[cid], [x0, y1] = project(b[0], b[1]), [x1, y0] = project(b[2], b[3]);
   return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
 };
+const empty = (text, name = "empty") => { const d = h("div", { className: "empty" }); d.innerHTML = icon(name); d.append(text); return d; };
 
 function drawBasemap() {
   const g = group("base");
   for (const f of snap.basemap.features) {
     const polys = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
     for (const poly of polys) for (const ring of poly)
-      el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", fill: "#e3eef7", stroke: "#6b8aa3", "stroke-width": 1 }, g);
+      el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", class: "basemap" }, g);
   }
 }
 
@@ -119,209 +350,318 @@ function drawBasemap() {
 function hatchUnobserved() {
   const defs = document.querySelector("#svg defs");
   if (defs.querySelector("#hatch")) return;
-  const pat = (id, bg, line, w, rot) => {
+  const pat = (id, bgClass, lineClass, w, rot) => {
     const p = el("pattern", { id, width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: `rotate(${rot})` }, defs);
-    el("rect", { width: 6, height: 6, fill: bg }, p);
-    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: line, "stroke-width": w }, p);
+    if (bgClass) el("rect", { width: 6, height: 6, class: bgClass }, p);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, class: lineClass, "stroke-width": w }, p);
   };
-  pat("hatch", "#dcdcdc", "#8a8a8a", 2, 45); // not observed: grey, diagonal
-  pat("lane", "none", "#16355c", 0.8, 90); // lanes and exclusion zones: thin blue, horizontal
+  pat("hatch", "hatch-bg-svg", "hatch-line-svg", 2, 45); // not observed: grey, diagonal
+  pat("lane", "", "lane-line-svg", 0.8, 90); // lanes and exclusion zones: thin, horizontal
 }
 
+// A value's colour token: one of 5 sequential steps by the snapshot's breaks, or one of 9 diverging steps.
 function colour(name, v) {
   const lg = snap.cells.legends[name];
   if (MAPS[name].div) {
-    const t = Math.max(-1, Math.min(1, v / lg.clip)), a = Math.abs(t);
-    return `hsl(${t < 0 ? 215 : 8} ${Math.round(65 * a)}% ${Math.round(86 - 38 * a)}%)`; // grey at 0
+    const k = Math.round(Math.max(-1, Math.min(1, v / lg.clip)) * 4);
+    return k === 0 ? "var(--div-0)" : `var(--div-${k < 0 ? "n" : "p"}${Math.abs(k)})`;
   }
   const n = lg.breaks.length - 1;
   let i = 0;
   while (i < n - 1 && v >= lg.breaks[i + 1]) i++;
-  return `hsl(212 65% ${Math.round(93 - 60 * (n > 1 ? i / (n - 1) : 1))}%)`;
+  return `var(--seq-${n > 1 ? Math.round((i * 4) / (n - 1)) : 4})`;
 }
+
+const hatchedValue = (name, c) => c[name] === null || (name === "exposure" && !c.observed) || !snap.cells.legends[name].breaks.length;
 
 function drawLegend(name, week) {
   const lg = snap.cells.legends[name], box = document.getElementById("legend");
-  const row = document.createElement("div");
-  row.className = "row";
-  const add = (cls, bg, label) => {
-    const s = document.createElement("div"); s.className = "sw " + cls; if (bg) s.style.background = bg;
-    const l = document.createElement("span"); l.className = "lab"; l.textContent = label || "";
-    row.append(s, l);
-  };
-  const head = document.createElement("div");
-  head.textContent = `${MAPS[name].title}, week ${week}: ${MAPS[name].unit}`;
+  const head = h("div", { className: "title" }, `${MAPS[name].long}, week ${week}`);
+  const unit = h("div", {}, MAPS[name].unit);
   if (!lg.breaks.length) {
-    box.replaceChildren(head, Object.assign(document.createElement("div"), { textContent: "Not available yet: every cell is hatched (needs the observed-over-expected ratio from the detectors)." }));
+    box.replaceChildren(head, unit, empty("Not available yet: every cell is hatched until the detectors provide this value.", "info"));
     return;
   }
-  if (MAPS[name].div) for (const t of [-1, -0.5, 0, 0.5, 1]) add("", colour(name, t * lg.clip), (t * lg.clip).toFixed(1));
-  else lg.breaks.slice(0, -1).forEach((b, i) => add("", colour(name, b), `${b} to ${lg.breaks[i + 1]}`));
-  add("hatch", "", name === "exposure" ? "not observed (zero coverage)" : "not observed");
-  box.replaceChildren(head, row);
+  const row = h("div", { className: "row" });
+  const key = (bg, label, cls = "") => { const s = h("span", { className: "sw " + cls }); if (bg) s.style.background = bg; row.append(h("span", { className: "key" }, s, label)); };
+  if (MAPS[name].div) for (const t of [-1, -0.5, 0, 0.5, 1]) key(colour(name, t * lg.clip), (t * lg.clip).toFixed(1));
+  else lg.breaks.slice(0, -1).forEach((b, i) => key(colour(name, b), `${b} to ${lg.breaks[i + 1]}`));
+  key("", name === "exposure" ? "not observed (zero coverage)" : "not observed", "hatch");
+  box.replaceChildren(head, unit, row);
 }
 
 function drawHeatmap(name, week) {
   hatchUnobserved();
-  const g = group("heat"), cells = snap.cells.weeks[week];
-  for (const c of cells) {
-    const v = c[name], hatched = v === null || (name === "exposure" && !c.observed) || !snap.cells.legends[name].breaks.length;
-    el("rect", { ...cellRect(c.cell_id), fill: hatched ? "url(#hatch)" : colour(name, v), "fill-opacity": 0.9 }, g,
-      hatched ? "not observed" : `${MAPS[name].title}: ${Number(v).toFixed(3)}`);
+  const g = group("heat");
+  for (const c of snap.cells.weeks[week]) {
+    const hatched = hatchedValue(name, c);
+    const r = el("rect", { ...cellRect(c.cell_id), class: hatched ? "cell hatched" : "cell" }, g,
+      hatched ? "not observed" : `${MAPS[name].long}: ${Number(c[name]).toFixed(3)}`);
+    if (!hatched) r.style.fill = colour(name, c[name]);
   }
   drawLegend(name, week);
 }
 
+const isOn = id => document.getElementById("t-" + id)?.getAttribute("aria-pressed") !== "false";
+
 function drawOverlays() {
   const root = group("over");
-  const layer = id => { const g = el("g", { id: "ov-" + id }, root); g.style.display = document.getElementById("t-" + id)?.checked === false ? "none" : ""; return g; };
+  const layer = id => { const g = el("g", { id: "ov-" + id }, root); g.style.display = isOn(id) ? "" : "none"; return g; };
   const L = snap.cells.layers;
-  for (const cid of L.inshore) el("rect", { ...cellRect(cid), fill: "none", stroke: "#1f6f8b", "stroke-width": 0.7 }, layer("inshore"));
+  const inshore = layer("inshore");
+  for (const cid of L.inshore) el("rect", { ...cellRect(cid), class: "inshore" }, inshore);
   const lanes = layer("lane");
-  for (const cid of L.lane) el("rect", { ...cellRect(cid), fill: "url(#lane)", opacity: 0.45 }, lanes, "shipping lane");
-  for (const cid of L.exclusion) el("rect", { ...cellRect(cid), fill: "url(#lane)", stroke: "#4a4a4a", "stroke-dasharray": "3 2", opacity: 0.7 }, lanes, "exclusion zone");
+  for (const cid of L.lane) el("rect", { ...cellRect(cid), class: "lane" }, lanes, "shipping lane");
+  for (const cid of L.exclusion) el("rect", { ...cellRect(cid), class: "exclusion" }, lanes, "exclusion zone");
 
   const routes = layer("routes");
-  const style = { ship: { stroke: "#a93226", dash: "" }, aircraft: { stroke: "#1b4f72", dash: "7 5" } };
   for (const [asset, stops] of Object.entries(snap.plan)) {
     if (stops.length < 2) continue;
-    el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), fill: "none", stroke: style[asset].stroke, "stroke-width": 2, "stroke-dasharray": style[asset].dash }, routes);
+    el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), class: `route ${asset}` }, routes,
+      asset === "ship" ? "ship route (by sea)" : "aircraft sweep (straight lines)");
     if (asset !== "ship") continue;
     stops.forEach((s, i) => {
       if (i === 0 || i === stops.length - 1) return;
-      const [x, y] = project(s.lon, s.lat);
-      el("circle", { cx: x, cy: y, r: 9, fill: "none", stroke: s.exploration ? "#6a2fb0" : style.ship.stroke, "stroke-width": s.exploration ? 3 : 1.5, "stroke-dasharray": s.exploration ? "3 2" : "" }, routes,
-        s.exploration ? "exploration visit" : "ship stop");
+      const [x, y] = project(s.lon, s.lat), explore = isExplore(s);
+      el("circle", { cx: x, cy: y, r: 9, class: explore ? "stop explore" : "stop" }, routes, explore ? "exploration visit" : "ship stop");
     });
   }
 
   const piers = layer("piers"), maxP = Math.max(0, ...snap.piers.map(p => p.P_j ?? 0));
   for (const p of snap.piers) {
-    const [x, y] = project(p.lon, p.lat), h = p.P_j === null || !maxP ? 4 : 3 + 6 * p.P_j / maxP; // fixed size until a pier score exists
-    el("rect", { x: x - h, y: y - h, width: 2 * h, height: 2 * h, fill: "#222", stroke: "#fff" }, piers, `${p.name ?? p.id}${p.P_j === null ? "" : `, pier score ${p.P_j.toFixed(2)}`}`);
+    const [x, y] = project(p.lon, p.lat), r = p.P_j === null || !maxP ? 4 : 3 + 6 * p.P_j / maxP;
+    el("rect", { x: x - r, y: y - r, width: 2 * r, height: 2 * r, class: "pier" }, piers, `${p.name ?? p.id}${p.P_j === null ? "" : `, pier score ${p.P_j.toFixed(2)}`}`);
   }
 
   const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...candidates().map(s => s.S), 1e-9);
   for (const s of candidates()) { // not all sites: a map of everything is not a plan
-    const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS);
-    el("circle", { cx: x, cy: y, r, fill: s.bh_flag ? "#c0392b" : "none", "fill-opacity": 0.75, stroke: "#c0392b", "stroke-width": 2 }, sites,
-      `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`);
+    const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS), tip = `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`;
+    // ring, mark, thin edge: the orange stays visible over every heat-map colour (contrast relief)
+    el("circle", { cx: x, cy: y, r, class: "site-ring" }, sites);
+    el("circle", { cx: x, cy: y, r, class: s.bh_flag ? "site flagged" : "site" }, sites, tip);
+    el("circle", { cx: x, cy: y, r: r + 1.6, class: "site-edge" }, sites);
     if (s.followup_unobserved > 0) {
       const dx = x + r + 7, dy = y - r - 7;
-      el("polygon", { points: `${dx},${dy - 6} ${dx + 6},${dy} ${dx},${dy + 6} ${dx - 6},${dy}`, fill: "none", stroke: "#222", "stroke-width": 1.5 }, follow, `${s.followup_unobserved} follow-up days unobserved`);
+      el("polygon", { points: `${dx},${dy - 6} ${dx + 6},${dy} ${dx},${dy + 6} ${dx - 6},${dy}`, class: "diamond" }, follow, `${s.followup_unobserved} follow-up days unobserved`);
     }
     // D1 (#176): merged signal groups that flag the site, not the raw 0-4 count (its detectors share counts)
     const nm = s.agreement_merged ?? 0;
-    for (let i = 0; i < nm; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, fill: "#222" }, agree, `${nm} independent signal group(s) agree (angles, not proof)`);
+    for (let i = 0; i < nm; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, class: "dot" }, agree, `${nm} independent signal group(s) agree (angles, not proof)`);
   }
-  // beside cells the detectors rate U >= 0.9 this week (the spec's threshold): one dot per agreeing detector
-  for (const c of snap.cells.weeks[view.week]) {
+  for (const c of snap.cells.weeks[view.week]) { // beside cells rated U >= 0.9 this week: one dot per agreeing detector
     if (c.unusual === null || c.unusual < AGREE_U || !c.agreement) continue;
     const { x, y, width, height } = cellRect(c.cell_id);
-    for (let i = 0; i < c.agreement; i++) el("circle", { cx: x + width + 2 + i * 4, cy: y + height / 2, r: 1.6, fill: "#222" }, agree, `${c.agreement} of 4 detectors agree`);
+    for (let i = 0; i < c.agreement; i++) el("circle", { cx: x + width + 2 + i * 4, cy: y + height / 2, r: 1.6, class: "dot" }, agree, `${c.agreement} of 4 detectors agree`);
   }
 }
 
 // The sites the patrol planner chose from (meta.top_sites, highest score first); the map and the list draw these, not every site.
 const candidates = () => [...snap.sites].sort((a, b) => b.S - a.S).slice(0, snap.meta.top_sites);
+const isExplore = s => s.reason === "explore" || s.exploration === true;
 
 function drawSiteList() {
   const ol = document.getElementById("sites");
-  ol.replaceChildren();
-  const pierName = id => snap.piers.find(p => p.id === id)?.name ?? id;
-  for (const s of candidates().slice(0, view.more ? undefined : TOP_LIST)) {
-    const li = document.createElement("li"), head = document.createElement("div");
-    const b = document.createElement("strong"); b.textContent = s.id;
-    const nm = s.agreement_merged ?? 0; // D1 (#176): merged signal groups, not the raw 0-4 count
-    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = s.agreement_merged === null ? " (agreement not available)" : " " + (nm ? "●".repeat(nm) : "○");
-    badge.title = s.agreement_merged === null ? "agreement not available yet" : `${nm} independent signal group(s) agree (angles, not proof)`;
-    head.append(b, badge, ` score ${s.S.toFixed(2)}, p = ${s.p_perm.toFixed(3)}` + (s.bh_flag ? "" : " (not significant)"));
-    const why = document.createElement("div"); why.textContent = s.reasons.join("; ");
-    const meta = document.createElement("div"); meta.className = "tag";
-    meta.textContent = `Seen ${s.recurrence} times` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
-      (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pierName).join(", ")}` : "");
-    li.append(head, why, meta);
-    ol.appendChild(li);
-  }
-  if (!snap.sites.length) ol.textContent = "No sites this week.";
-  const more = document.getElementById("more"), n = candidates().length;
-  more.hidden = n <= TOP_LIST;
-  more.textContent = view.more ? `Show only the top ${TOP_LIST}` : `Show the ${n} patrol candidates (${snap.sites.length} sites in all)`;
+  const pier = id => { const p = snap.piers.find(q => q.id === id); return p ? `${p.name ?? p.id}${p.P_j == null ? "" : ` (pier score ${p.P_j.toFixed(2)})`}` : id; };
+  const items = candidates().slice(0, view.more ? undefined : TOP_LIST).map((s, i) => {
+    const nm = s.agreement_merged;
+    const lead = h("div", { className: "lead", title: nm == null ? "agreement not available yet" : `${nm} independent signal group(s) agree (angles, not proof)` }, String(i + 1));
+    const badge = h("span", { className: "badge", title: lead.title }, nm == null ? "" : nm ? "●".repeat(nm) : "○");
+    const head = h("div", { className: "headline" }, h("span", {}, s.id), badge, h("span", { className: "muted" }, `score ${s.S.toFixed(2)} · p = ${s.p_perm.toFixed(3)}`));
+    if (!s.bh_flag) head.append(h("span", { className: "tag" }, "not significant"));
+    const more = h("details", {}, h("summary", { className: "state" }, "Why, and what to check"),
+      h("ul", {}, ...s.reasons.slice(1).map(r => h("li", {}, r))),
+      h("p", {}, `Seen ${s.recurrence} times` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
+        (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pier).join(", ")}.` : ".")));
+    return h("li", {}, lead, h("div", {}, head, h("div", { className: "supporting" }, s.reasons[0] ?? ""), more));
+  });
+  ol.replaceChildren(...items);
+  if (!snap.sites.length) ol.replaceChildren(h("li", {}, h("span"), empty("No sites this week.")));
+  const btn = document.getElementById("more"), n = candidates().length;
+  btn.hidden = n <= TOP_LIST;
+  btn.textContent = view.more ? `Show only the top ${TOP_LIST}` : `Show the ${n} patrol candidates (${snap.sites.length} sites in all)`;
 }
 
 function drawPlan() {
-  const box = document.getElementById("plan"), parts = [];
   const names = { ship: "Ship (sea route)", aircraft: "Aircraft (straight-line sweep)" };
-  for (const [asset, stops] of Object.entries(snap.plan)) {
-    const h = document.createElement("div"), ul = document.createElement("ul");
-    h.append(Object.assign(document.createElement("strong"), { textContent: names[asset] ?? asset }));
-    for (const s of stops) {
-      const li = document.createElement("li");
-      li.textContent = `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC: ` + (s.id === "base" ? "base" + (s.stand_in ? " (simulated stand-in: base port or start time not set yet)" : "") : `${s.id}, ${s.dwell_h} h on station`) +
-        (s.exploration ? " (exploration visit)" : "") + (s.not_significant ? " (not significant)" : "");
-      ul.appendChild(li);
-    }
-    parts.push(h, stops.length > 2 ? ul : Object.assign(document.createElement("div"), { className: "muted", textContent: "Nothing worth the trip within the time budget." }));
-  }
-  box.replaceChildren(...parts);
+  const parts = Object.entries(snap.plan).flatMap(([asset, stops]) => {
+    const title = h("h3", {}, names[asset] ?? asset);
+    if (stops.length <= 2) return [title, empty("Nothing worth the trip within the time budget.")];
+    const ol = h("ol", { className: "timeline" }, ...stops.map(s => {
+      const tags = [];
+      if (s.id === "base") tags.push(h("span", { className: "tag" }, s.stand_in ? "base · simulated stand-in" : "base"));
+      if (isExplore(s)) tags.push(h("span", { className: "tag explore" }, "exploration visit"));
+      if (s.not_significant) tags.push(h("span", { className: "tag" }, "not significant"));
+      return h("li", {}, h("div", { className: "time" }, `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC`),
+        h("div", { className: "headline" }, h("span", {}, s.id === "base" ? "Base" : s.id), ...tags),
+        s.id === "base" ? "" : h("div", { className: "supporting" }, `${s.dwell_h} h on station`));
+    }));
+    return [title, ol];
+  });
+  document.getElementById("plan").replaceChildren(...parts);
+  if (Object.values(snap.plan).some(st => st[0]?.stand_in))
+    document.getElementById("plan").append(h("p", { className: "muted" }, "The base port and start time are stand-ins on simulated data until they are set in config.yaml."));
 }
 
-function table(rows) {
-  const t = document.createElement("table"), keys = Object.keys(rows[0]);
+const LABELS = { length_bin: "Length (m)", sea_state: "Sea", n: "Boats", detected: "Seen", recall: "Recall", lo: "Low 95%", hi: "High 95%",
+  bin_lo: "From", bin_hi: "To", mean_pred: "Predicted", observed: "Observed" };
+function table(rows, caption) {
+  const keys = Object.keys(rows[0]), numeric = k => rows.every(r => r[k] === null || typeof r[k] === "number");
   const fmt = v => v === null ? "–" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3) : String(v);
-  const head = t.insertRow(); for (const k of keys) head.appendChild(Object.assign(document.createElement("th"), { textContent: k }));
-  for (const r of rows) { const tr = t.insertRow(); for (const k of keys) tr.insertCell().textContent = fmt(r[k]); }
-  return t;
+  const t = h("table", {}, h("caption", {}, caption),
+    h("thead", {}, h("tr", {}, ...keys.map(k => h("th", { className: numeric(k) ? "num" : "", scope: "col" }, LABELS[k] ?? k)))),
+    h("tbody", {}, ...rows.map(r => h("tr", {}, ...keys.map(k => h("td", { className: numeric(k) ? "num" : "" }, fmt(r[k])))))));
+  return h("div", { className: "table-wrap" }, t);
 }
 
 function drawValidation() {
   const v = snap.validation, box = document.getElementById("validation");
-  if (!v) { box.textContent = "Validation has not been run (make validate)."; return; }
-  const part = (title, body) => { const h = document.createElement("div"); h.append(Object.assign(document.createElement("strong"), { textContent: title })); return [h, body]; };
-  const note = t => Object.assign(document.createElement("div"), { className: "muted", textContent: t });
-  const none = "not available yet";
+  if (!v) { box.replaceChildren(empty("Validation has not been run (make validate).", "info")); return; }
+  const none = empty("Not available yet.");
+  const part = (title, body) => [h("h3", {}, title), body];
   box.replaceChildren(
-    ...part("Chance of seeing a boat that is there (recall, by size and sea state)", v.recall?.length ? table(v.recall) : note(none)),
-    ...part("Forecast skill (above 0 beats the flat baseline)", v.skill?.length ? table(v.skill) : note(none)),
-    ...part(`Probability calibration (Brier ${v.brier === null ? "–" : v.brier.toFixed(3)}, lower is better)`, v.calibration?.length ? table(v.calibration) : note(none)),
-    ...part("Alarms on pure noise (null test)", note(v.null?.share_with_any_flag === null || !v.null ? "not run yet" : `${(100 * v.null.share_with_any_flag).toFixed(0)}% of ${v.null.runs} runs raised any flag`)),
-    ...(v.interval_coverage == null ? [] : part("Forecast ranges that held the actual count", note(`${(100 * v.interval_coverage).toFixed(0)}% (aim: 90%)`))),
+    ...part("Chance of seeing a boat that is there", v.recall?.length ? table(v.recall, "Recall by boat length and sea state, with a 95% range. Small boats in rough seas are often missed.") : none.cloneNode(true)),
+    ...part("Forecast skill", v.skill?.length ? table(v.skill, "Above 0 means better than assuming every cell is average.") : none.cloneNode(true)),
+    ...part(`Are the probabilities honest? (Brier ${v.brier == null ? "–" : v.brier.toFixed(3)}, lower is better)`,
+      v.calibration?.length ? table(v.calibration, "Predicted against observed share, per probability bin. Close numbers mean honest probabilities.") : none.cloneNode(true)),
+    ...part("Alarms on pure noise", v.null?.share_with_any_flag == null ? empty("Null test not run yet.", "info")
+      : h("p", {}, `${(100 * v.null.share_with_any_flag).toFixed(0)}% of ${v.null.runs} shuffled runs raised any flag.`)),
+    ...(v.interval_coverage == null ? [] : part("Forecast ranges that held the actual count", h("p", {}, `${(100 * v.interval_coverage).toFixed(0)}% (aim: 90%)`))),
   );
 }
 
 function drawBanner() {
   const b = document.getElementById("banner");
-  b.className = snap.meta.data_label;
-  b.textContent = `Data: ${snap.meta.data_label} · as of ${snap.meta.T} (UTC) · week ${view.week} · generated ${snap.meta.generated_utc}`;
+  b.dataset.label = snap.meta.data_label;
+  b.replaceChildren(`Data: ${snap.meta.data_label}`, h("span", { className: "sub" }, `as of ${snap.meta.T} · week ${view.week}`));
 }
 
+// A radio group with roving focus: arrow keys move, Enter or a click selects (WAI-ARIA radio pattern).
+function radioGroup(box, items, current, onSelect, cls = "") {
+  box.replaceChildren(...items.map(([value, label, iconName]) => {
+    const b = h("button", { type: "button", className: `state ${cls}`.trim() });
+    b.setAttribute("role", "radio");
+    b.dataset.value = value;
+    b.innerHTML = iconName ? icon(iconName) : "";
+    b.append(label);
+    b.onclick = () => select(value, true);
+    return b;
+  }));
+  const buttons = [...box.children];
+  function select(value, fire) {
+    for (const b of buttons) { const on = b.dataset.value === value; b.setAttribute("aria-checked", on); b.tabIndex = on ? 0 : -1; }
+    if (fire) onSelect(value);
+  }
+  box.onkeydown = e => {
+    const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!step) return;
+    e.preventDefault();
+    const i = buttons.indexOf(document.activeElement), next = buttons[(i + step + buttons.length) % buttons.length];
+    next.focus(); select(next.dataset.value, true);
+  };
+  select(current, false);
+  return select;
+}
+
+let selectWeek = () => {};
 function onWeekChange(week) {
   view.week = week;
+  selectWeek(week, false);
   drawBanner();
   drawHeatmap(view.map, week);
   drawOverlays(); // the cell agreement dots depend on the week
 }
 
-function setup() {
-  const mapSel = document.getElementById("map"), wk = document.getElementById("week"), tg = document.getElementById("toggles");
-  for (const [k, m] of Object.entries(MAPS)) mapSel.add(new Option(m.title, k));
-  for (const w of snap.meta.weeks) wk.add(new Option(w, w, false, w === snap.meta.week));
+function stepWeek(d) {
+  const w = snap.meta.weeks, i = w.indexOf(view.week);
+  onWeekChange(w[(i + d + w.length) % w.length]);
+}
+
+function setReplay(on) {
+  const b = document.getElementById("play");
+  clearInterval(timer);
+  timer = on ? setInterval(() => stepWeek(1), REPLAY_MS) : null;
+  b.setAttribute("aria-pressed", on);
+  b.innerHTML = icon(on ? "pause" : "play");
+  b.append(on ? "Pause" : "Replay weeks");
+}
+
+function setTheme(pick) {
+  try { localStorage.setItem("np-theme", pick); } catch (e) { /* the choice lasts for this visit only */ }
+  document.documentElement.dataset.pick = pick;
+  const dark = pick === "dark" || (pick === "auto" && matchMedia("(prefers-color-scheme: dark)").matches);
+  document.documentElement.dataset.mode = dark ? "dark" : "light";
+}
+
+function setupControls() {
+  radioGroup(document.getElementById("theme"), [["light", "", "light"], ["dark", "", "dark"], ["auto", "", "auto"]],
+    document.documentElement.dataset.pick, setTheme);
+  for (const b of document.querySelectorAll("#theme button")) b.setAttribute("aria-label", `${b.dataset.value} theme`);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (document.documentElement.dataset.pick === "auto") setTheme("auto"); });
+  radioGroup(document.getElementById("map"), Object.entries(MAPS).map(([k, m]) => [k, m.title]), view.map,
+    k => { view.map = k; if (snap) onWeekChange(view.week); });
+  for (const b of document.querySelectorAll("#map button")) { b.title = MAPS[b.dataset.value].unit; b.disabled = true; }
+  const symbols = {
+    inshore: '<rect x="3" y="5" width="18" height="14" fill="none" class="inshore" stroke-width="2"/>',
+    lane: '<rect x="3" y="5" width="18" height="14" fill="url(#lane)" class="lane-line-svg" stroke-width="0"/><path d="M3 8h18M3 12h18M3 16h18" class="lane-line-svg" stroke-width="1.2"/>',
+    sites: '<circle cx="12" cy="12" r="7" class="site flagged"/>',
+    followup: '<path d="M12 4l8 8-8 8-8-8z" class="diamond" stroke-width="2"/>',
+    agreement: '<circle cx="6" cy="12" r="2.5" class="dot"/><circle cx="12" cy="12" r="2.5" class="dot"/><circle cx="18" cy="12" r="2.5" class="dot"/>',
+    piers: '<rect x="7" y="7" width="10" height="10" class="pier"/>',
+    routes: '<path d="M2 8h20" class="route"/><path d="M2 16h20" class="route aircraft"/>',
+  };
+  const tg = document.getElementById("toggles");
+  tg.replaceChildren(...OVERLAYS.map(([id, label]) => {
+    const b = h("button", { type: "button", id: "t-" + id, className: "chip state", disabled: true });
+    b.setAttribute("aria-pressed", "true");
+    b.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${symbols[id]}</svg>`;
+    b.append(label);
+    b.onclick = () => {
+      const on = b.getAttribute("aria-pressed") !== "true";
+      b.setAttribute("aria-pressed", on);
+      const g = document.getElementById("ov-" + id);
+      if (g) g.style.display = on ? "" : "none";
+    };
+    return b;
+  }));
+  document.getElementById("about").innerHTML = icon("info");
+  document.getElementById("prev").innerHTML = icon("prev");
+  document.getElementById("next").innerHTML = icon("next");
+  setReplay(false);
+}
+
+function enableControls() {
+  selectWeek = radioGroup(document.getElementById("week"), snap.meta.weeks.map(w => [w, w]), view.week, onWeekChange, "chip");
+  for (const b of document.querySelectorAll("#map button, #toggles button, #prev, #next, #play, #about")) b.disabled = false;
+  document.getElementById("prev").onclick = () => { setReplay(false); stepWeek(-1); };
+  document.getElementById("next").onclick = () => { setReplay(false); stepWeek(1); };
+  document.getElementById("play").onclick = () => setReplay(!timer);
   document.getElementById("more").onclick = () => { view.more = !view.more; drawSiteList(); };
-  mapSel.onchange = () => { view.map = mapSel.value; onWeekChange(view.week); };
-  wk.onchange = () => onWeekChange(wk.value);
-  for (const [id, label] of OVERLAYS) {
-    const l = document.createElement("label"), c = Object.assign(document.createElement("input"), { type: "checkbox", id: "t-" + id, checked: true });
-    c.onchange = () => { const g = document.getElementById("ov-" + id); if (g) g.style.display = c.checked ? "" : "none"; };
-    l.append(c, " " + label);
-    tg.appendChild(l);
-  }
+  const dlg = document.getElementById("aboutDlg"), m = snap.meta;
+  document.getElementById("about").onclick = () => {
+    const rows = [["Data", m.data_label], ["As of (T)", m.T], ["Weeks shown", m.weeks.join(", ")], ["Generated", m.generated_utc],
+      ["Region", `${m.region.lon_min}° to ${m.region.lon_max}°, ${m.region.lat_min}° to ${m.region.lat_max}°`], ["Config hash", m.config_hash]];
+    document.getElementById("aboutList").replaceChildren(...rows.flatMap(([k, v]) => [h("dt", {}, k), h("dd", {}, String(v))]));
+    dlg.showModal();
+  };
+  document.getElementById("aboutClose").onclick = () => dlg.close();
+}
+
+function showError() {
+  const b = document.getElementById("banner");
+  b.textContent = "No snapshot";
+  const a = document.getElementById("alert");
+  a.innerHTML = icon("warning");
+  a.append(h("div", {}, h("strong", {}, "No snapshot found. "), "Run ", h("code", {}, "make sim"), " and ", h("code", {}, "make all"), ", then reload this page."));
+  a.hidden = false;
+  for (const id of ["legend", "sites", "plan", "validation"]) document.getElementById(id).replaceChildren(empty("Waiting for a snapshot.", "info"));
 }
 
 (async () => {
+  setupControls();
   try { snap = await loadSnapshot(); }
-  catch (e) { const b = document.getElementById("banner"); b.textContent = "Could not load the snapshot: run make sim and make all, then reopen."; return; }
+  catch (e) { showError(); return; }
   view.week = snap.meta.week;
-  setExtent(); setup(); drawBasemap(); drawBanner(); drawHeatmap(view.map, view.week);
+  setExtent(); enableControls(); drawBasemap(); drawBanner(); drawHeatmap(view.map, view.week);
   drawOverlays(); drawSiteList(); drawPlan(); drawValidation();
 })();
 </script>
