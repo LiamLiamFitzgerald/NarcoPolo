@@ -627,6 +627,48 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
                 "top_piers": top,
             }
         )
+    # stand-in sites (#104): rows with no drops in truth, so patrol and the dashboard have 16+ sites to rank and route.
+    # Planted sites stay first and above every stand-in on S; no stand-ins under `null`. Values are stand-ins, not
+    # statistics: S falls by rank below the lowest planted S, a quarter are flagged, agreement and follow-ups vary.
+    n_in = s["stand_in_sites"] if rows else 0
+    pool = np.flatnonzero(
+        ok
+    )  # the planted site's candidates: 5-20 km out, off the lane, exclusion and wind farm
+    chosen = list(site_cells)
+    for c in _rng(config, "sites", seed).permutation(pool):
+        if len(chosen) == len(site_cells) + n_in:
+            break
+        if np.hypot(ccx[c] - ccx[chosen], ccy[c] - ccy[chosen]).min() > s["site_gap_m"]:
+            chosen.append(int(c))
+    low = min(r["S"] for r in rows) if rows else 0.0
+    for k, c in enumerate(chosen[len(site_cells) :], start=1):
+        S_k = low * (n_in + 1 - k) / (n_in + 1)
+        m = int(np.ceil(S_k))
+        links.append(
+            pd.DataFrame(
+                {"site_id": [str(cell_ids[c])] * m, "L": [S_k / max(m, 1)] * m, "age_days": 0.0}
+            )
+        )
+        dist = np.hypot(piers["geometry"].x - ccx[c], piers["geometry"].y - ccy[c])
+        top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
+        rec = n_in + 1 - k
+        rows.append(
+            {
+                "site_id": str(cell_ids[c]),
+                "x_m": ccx[c],
+                "y_m": ccy[c],
+                "n_slowdowns": rec,
+                "S": S_k,
+                "p_perm": k / (n_in + 1),
+                "bh_flag": k <= n_in // 4,
+                "recurrence": rec,
+                "followup_unobserved": rec * (k % 2),
+                "agreement": (n_in - k) % 5,
+                "reasons": ["stand-in site (simulated, no planted drops)"],
+                "top_piers": top,
+            }
+        )
+    site_cells = chosen
     sites = pd.DataFrame(rows, columns=SITE_COLS).astype(
         {
             "x_m": float,
