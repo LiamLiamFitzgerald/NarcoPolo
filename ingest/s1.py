@@ -122,12 +122,14 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
 def fetch_scene(pass_: Mapping[str, Any]) -> Path:
     """One row of list_passes (`pass` is a Python keyword) -> raw/s1/<hash>.tif and .json; returns the .tif."""
     cfg = _stub.config()
-    start = pd.Timestamp(pass_["time"]).tz_convert("UTC")
-    stop = pd.Timestamp(pass_["end_time"]).tz_convert("UTC") + pd.Timedelta(seconds=1)
+    # whole seconds, "Z": the openEO client rejects fractional seconds and offsets
+    start = pd.Timestamp(pass_["time"]).tz_convert("UTC").floor("s")
+    stop = pd.Timestamp(pass_["end_time"]).tz_convert("UTC").ceil("s") + pd.Timedelta(seconds=1)
+    utc = lambda t: t.strftime("%Y-%m-%dT%H:%M:%SZ")
     extent = _extent(_stub.region(cfg), float(cfg["x0"]), float(cfg["y0"]))
     req = {
         "source": "s1", "collection": COLLECTION, "coefficient": COEFFICIENT, "bands": BANDS,
-        "pass_id": str(pass_["pass_id"]), "start": start.isoformat(), "end": stop.isoformat(),
+        "pass_id": str(pass_["pass_id"]), "start": utc(start), "end": utc(stop),
         "extent": extent, "crs": _EPSG, "px": _PX,
     }  # fmt: skip
     if (hit := cached(req)) is not None:
@@ -139,7 +141,7 @@ def fetch_scene(pass_: Mapping[str, Any]) -> Path:
         COLLECTION,
         spatial_extent=dict(zip(("west", "south", "east", "north"), extent, strict=True))
         | {"crs": _EPSG},
-        temporal_extent=[start.isoformat(), stop.isoformat()],  # end exclusive
+        temporal_extent=[utc(start), utc(stop)],  # end exclusive
         bands=BANDS,
     )
     cube = cube.sar_backscatter(coefficient=COEFFICIENT)
@@ -151,7 +153,7 @@ def fetch_scene(pass_: Mapping[str, Any]) -> Path:
     meta = {
         "scene_id": key,
         "pass_id": str(pass_["pass_id"]),
-        "start_time": start.isoformat(),
+        "start_time": pd.Timestamp(pass_["time"]).tz_convert("UTC").isoformat(),
         "orbit_direction": str(pass_["orbit_dir"]),
         "relative_orbit": int(pass_["rel_orbit"]),
         "footprint": str(pass_["footprint"]),

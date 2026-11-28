@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 import rasterio
 import shapely
+from openeo.dates import get_temporal_extent
 from pyproj import Transformer
 from shapely.geometry import box, mapping
 
@@ -162,7 +163,7 @@ def test_select_passes_calm_share_and_rough_spread(raw, tmp_path):
     calm = ["p0", "p1"]
     rough = [
         "p2",
-        "p3",
+        "p4",
         "p5",
         "p6",
         "p8",
@@ -196,6 +197,7 @@ class FakeCube:
 
     def load_collection(self, collection_id, **kw):
         self.calls.append(("load_collection", collection_id, kw))
+        get_temporal_extent(extent=kw["temporal_extent"])  # the real client's date check
         return self
 
     def sar_backscatter(self, **kw):
@@ -220,7 +222,9 @@ class FakeCube:
 
 
 def _row(meta):
-    t = pd.Timestamp(meta["start_time"])
+    t = pd.Timestamp(meta["start_time"]) + pd.Timedelta(
+        microseconds=54368
+    )  # as the catalogue gives
     return {
         "pass_id": meta["pass_id"], "time": t, "end_time": t + pd.Timedelta(seconds=50),
         "orbit_dir": meta["orbit_direction"], "rel_orbit": meta["relative_orbit"],
@@ -245,9 +249,10 @@ def test_fetch_scene_recovers_simulator_chip(simraw, raw, monkeypatch):
     assert np.abs(got.astype(int) - want).max() <= 1  # dB x 100 round trip through linear float32
     (_, coll, kw), (_, bs), (_, rs), (_, fmt) = calls
     assert coll == "SENTINEL1_GRD" and kw["bands"] == ["VV", "VH"]
-    assert kw["temporal_extent"] == [
-        row["time"].isoformat(),
-        (row["end_time"] + timedelta(seconds=1)).isoformat(),
+    z = lambda t: t.tz_convert("UTC").strftime("%Y-%m-%dT%H:%M:%SZ")
+    assert kw["temporal_extent"] == [  # whole seconds around the fractional pass times
+        z(row["time"].floor("s")),
+        z(row["end_time"].ceil("s") + timedelta(seconds=1)),
     ]
     ext = kw["spatial_extent"]
     assert ext["crs"] == 32629 and all((ext[k] - CFG["x0"]) % 10 == 0 for k in ("west", "east"))
