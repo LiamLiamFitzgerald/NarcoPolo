@@ -13,6 +13,7 @@ import pandas as pd
 from core import io
 from core.config import load
 from validate.backtest import backtest
+from validate.cusum import write_cusum_report
 from validate.injection import injection_test
 from validate.null import null_test
 from validate.policy import _block as policy_block
@@ -239,5 +240,6 @@ def run() -> Path:
             "null": null_test(),
             "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),
             "policy": policy_block(),  # L6; None until #150, #151 and #152 land
+            "cusum": write_cusum_report(),  # D2: fits h on null runs, or says the target does not bind
         }
     )

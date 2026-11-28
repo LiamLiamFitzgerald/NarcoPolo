@@ -54,3 +54,20 @@ def test_site_features_ignore_weeks_after_T(season):
         if first.empty
         else f.iloc[0]["oe"] == pytest.approx(first["oe"].iloc[-1])
     )
+
+
+def test_weekly_gi_matches_esda_on_a_small_grid():
+    """D6 (#174): the trainer's Gi* (8 surrounding 2 km cells, self included) is esda.G_Local(star=True).Zs."""
+    esda = pytest.importorskip("esda")
+    libpysal = pytest.importorskip("libpysal")
+    from fuse.features import _gi
+
+    rng = np.random.default_rng(7)
+    ij = np.array([(i, j) for i in range(6) for j in range(5) if (i, j) != (2, 3)])
+    y = rng.gamma(2.0, 1.0, len(ij))
+    y[[3, 11]] += 6
+    w = libpysal.weights.DistanceBand(
+        ij * 2000.0, threshold=2900, binary=True, silence_warnings=True
+    )
+    ref = esda.G_Local(y, w, transform="B", star=True, permutations=0).Zs
+    assert _gi(ij[:, 0], ij[:, 1], y) == pytest.approx(ref, abs=1e-6)

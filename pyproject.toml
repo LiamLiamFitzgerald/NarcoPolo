@@ -19,7 +19,15 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pandas-stubs", "types-pyyaml", "pytest", "ruff", "basedpyright", "tach"]
+dev = [
+    "pandas-stubs",
+    "types-pyyaml",
+    "pytest",
+    "ruff",
+    "basedpyright",
+    "tach",
+    "esda>=2.10.0",
+]
 
 [tool.ruff]
 line-length = 100

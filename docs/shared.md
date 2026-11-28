@@ -295,7 +295,7 @@ Six passes over every function. Passes 1–3 found the issues below; pass 4 foun
 
 | # | Problem found | Fix | Module |
 | --- | --- | --- | --- |
-| A1 | CUSUM on Pearson z is wrong for counts near zero | Poisson likelihood-ratio CUSUM: S = max(0, S + (C ln ρ − (ρ − 1)μ) ÷ max(φ, 1)), ρ = 2; choose h on the simulator so a quiet cell alarms about once a quarter | P6 |
+| A1 | CUSUM on Pearson z is wrong for counts near zero | Poisson likelihood-ratio CUSUM: S = max(0, S + (C ln ρ − (ρ − 1)μ) ÷ max(φ, 1)), ρ = 2; choose h on the simulator so a quiet cell alarms about once a quarter (`p6.cusum_alarm_days` = 91; `make validate` fits it on null runs into reports/cusum_h.json, D2). ÷ max(φ, 1) is the quasi-likelihood scaling of the log-likelihood ratio, floored at 1 so underdispersed cells are not made more alarm-prone | P6 |
 | A2 | DBSCAN chains adjacent cells into one giant site | A site is a 2 km cell; the top list drops any site within 4 km of a higher-ranked one | P6 |
 | A3 | Too few shuffles for BH to ever flag a site | Test only cells with at least one linked slowdown (m of them); shuffles = max(999, 10m ÷ q) | P6 |
 | A4 | Thousands of shuffles would be slow | Precompute, for every cell and date, the best decayed small-boat U and follow-up exposure in its 4 km neighbourhood; each shuffle is then a lookup | P6 |

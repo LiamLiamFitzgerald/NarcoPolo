@@ -78,6 +78,47 @@ def cusum(C, mu, phi, rho=PARAMS["cusum_rho"], h=PARAMS["cusum_h"]) -> np.ndarra
     return out
 
 
+def _increments(series, rho) -> np.ndarray:
+    """Cells x days matrix of CUSUM increments (A1); NaN = unobserved day or padding."""
+    n = max((len(c) for c, _, _ in series), default=0)
+    out = np.full((len(series), n), np.nan)
+    for k, (C, mu, phi) in enumerate(series):
+        C, mu, phi = (np.asarray(a, float) for a in (C, mu, phi))
+        out[k, : len(C)] = (C * np.log(rho) - (rho - 1) * mu) / np.maximum(phi, 1)
+    return out
+
+
+def _alarm_rate(series, h, rho=PARAMS["cusum_rho"]) -> float:
+    """Alarms (S > h, then S restarts at 0, as cusum()) per observed cell-day over (C, mu, phi) series."""
+    inc = _increments(series, rho)
+    S, alarms = np.zeros(len(inc)), 0
+    for x in inc.T:
+        ok = ~np.isnan(x)
+        S = np.where(ok, np.maximum(0.0, S + np.where(ok, x, 0.0)), S)
+        hit = S > h
+        alarms += int(hit.sum())
+        S[hit] = 0.0
+    days = int(np.isfinite(inc).sum())
+    return alarms / days if days else 0.0
+
+
+def _calibrate_h(series, per_days, rho=PARAMS["cusum_rho"]) -> float | None:
+    """D2 (#174): the smallest h whose alarm rate on null series is at most one per `per_days` cell-days
+    (A1: a quiet cell alarms about once a quarter, per_days = 91). Counts are whole numbers, so the rate is a
+    step function of h: bisection finds the step's edge to 1e-6. None when even h -> 0 meets the target (single
+    events are rarer than the target): the target does not bind, and a near-zero h would erase build-up memory."""
+    target = 1 / per_days
+    if _alarm_rate(series, 0.0, rho) <= target:
+        return None
+    lo, hi = 0.0, 1.0
+    while _alarm_rate(series, hi, rho) > target:
+        hi *= 2
+    while hi - lo > 1e-6:
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if _alarm_rate(series, mid, rho) > target else (lo, mid)
+    return hi
+
+
 def _fact(known, yes) -> np.ndarray:
     """1.0 / 0.0 for a yes/no fact, NaN where its input is unknown."""
     return np.where(known, np.asarray(yes, float), np.nan)

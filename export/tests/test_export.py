@@ -13,6 +13,7 @@ from core.schemas import check_json
 from export import (
     _legends,
     _provenance,
+    _sites,
     _weeks,
     basemap,
     build_snapshot,
@@ -212,8 +213,13 @@ def test_snapshot_positions_lie_in_the_region_and_plan_stops_have_positions(worl
 def test_snapshot_sites_match_the_stage_file(world):
     _, snap = world
     sites = io.read_stage("fuse/sites")
-    score = dict(zip(sites["site_id"], sites["S"], strict=True))
-    assert [s["id"] for s in snap["sites"]] == sorted(score, key=lambda i: -score[i])
+    # D1: listed in the patrol order, p_site (S breaks ties); the agreement badge is the merged count
+    keys = ["p_site", "S"] if "p_site" in sites else ["S"]
+    order = sites.sort_values(keys, ascending=False, kind="stable")["site_id"].tolist()
+    assert [s["id"] for s in snap["sites"]] == order
+    col = "agreement_merged" if "agreement_merged" in sites else "agreement"
+    merged = dict(zip(sites["site_id"], sites[col], strict=True))
+    assert all(s["agreement"] == merged[s["id"]] for s in snap["sites"])
     assert all(len(s["top_piers"]) <= 3 and isinstance(s["reasons"], list) for s in snap["sites"])
     assert np.isfinite([s["S"] for s in snap["sites"]]).all()
     assert datetime.fromisoformat(snap["meta"]["generated_utc"])
@@ -252,3 +258,45 @@ def test_snapshot_carries_legends_and_the_overlay_layers(world):
     assert set(snap["cells"]["layers"]["inshore"]) <= geom
     breaks = snap["cells"]["legends"]["normal"]["breaks"]
     assert breaks == sorted(set(breaks)) and len(breaks) >= 2
+
+
+def test_site_list_without_learning_columns_keeps_the_s_order_and_raw_agreement():
+    df = pd.DataFrame(
+        {
+            "site_id": ["a", "b"],
+            "x_m": 5e5,
+            "y_m": 57e5,
+            "S": [1.0, 2.0],
+            "p_perm": 0.5,
+            "bh_flag": False,
+            "recurrence": 0,
+            "agreement": [3, 1],
+            "followup_unobserved": 0,
+            "reasons": [[], []],
+            "top_piers": [[], []],
+        }
+    )
+    got = _sites(df)
+    assert [s["id"] for s in got] == ["b", "a"] and [s["agreement"] for s in got] == [1, 3]
+
+
+def test_site_list_with_learning_columns_follows_p_site_and_merged_agreement():
+    df = pd.DataFrame(
+        {
+            "site_id": ["a", "b"],
+            "x_m": 5e5,
+            "y_m": 57e5,
+            "S": [1.0, 2.0],
+            "p_perm": 0.5,
+            "bh_flag": False,
+            "recurrence": 0,
+            "agreement": [3, 1],
+            "followup_unobserved": 0,
+            "reasons": [[], []],
+            "top_piers": [[], []],
+            "p_site": [0.9, 0.2],
+            "agreement_merged": [2, 0],
+        }
+    )
+    got = _sites(df)
+    assert [s["id"] for s in got] == ["a", "b"] and [s["agreement"] for s in got] == [2, 0]

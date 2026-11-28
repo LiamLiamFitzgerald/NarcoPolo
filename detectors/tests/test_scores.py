@@ -166,3 +166,66 @@ def test_score_cells_is_the_pure_core_of_run_cells(
     a = score_cells(*frames, io.read_snapshot()["T"])
     b = score_cells(*frames, io.read_snapshot()["T"])
     assert len(a) and a.equals(b) and {"U", "agreement", "y", "y_week"} <= set(a.columns)
+
+
+def test_gi_star_matches_esda_on_a_small_grid():
+    """D6 (#174): our Gi* z is esda.G_Local(star=True).Zs with binary distance-band weights, self included."""
+    esda = pytest.importorskip("esda")
+    libpysal = pytest.importorskip("libpysal")
+    from core.grid import centroid
+
+    rng = np.random.default_rng(7)
+    cells = [
+        cell_id(ix, iy, 2000) for ix in range(6) for iy in range(5) if (ix, iy) != (2, 3)
+    ]  # one gap
+    C, mu = rng.poisson(4, len(cells)).astype(float), rng.uniform(2, 6, len(cells))
+    C[[3, 11]] += 15  # a hotspot, so z is not all near 0
+    y = (C + 0.5) / (mu + 0.5)
+    w = libpysal.weights.DistanceBand(
+        np.array([centroid(c) for c in cells]),
+        threshold=PARAMS["gi_band_m"],
+        binary=True,
+        silence_warnings=True,
+    )
+    ref = esda.G_Local(y, w, transform="B", star=True, permutations=0).Zs
+    assert gi_star(C, mu, cells) == pytest.approx(ref, abs=1e-6)
+
+
+def _null_inc(mu, days=2000, cells=40, seed=0):
+    rng = np.random.default_rng(seed)
+    C = rng.poisson(mu, (cells, days)).astype(float)
+    return [(c, np.full(days, mu), np.ones(days)) for c in C]
+
+
+def test_calibrated_h_is_the_smallest_meeting_the_alarm_target():
+    from detectors.scores import _alarm_rate, _calibrate_h
+
+    series = _null_inc(0.3)
+    h = _calibrate_h(series, per_days=91)
+    assert h is not None and _alarm_rate(series, h) <= 1 / 91
+    assert _alarm_rate(series, h - 1e-3) > 1 / 91  # any smaller h alarms too often
+
+
+def test_calibrated_h_needs_more_than_one_event_on_a_quiet_cell():
+    """Known answer: mu = 0.05 a day, so one event (+ ln 2 - 0.05) happens about every 20 days. Once a quarter
+    needs h above a single event's increment."""
+    from detectors.scores import _calibrate_h
+
+    assert _calibrate_h(_null_inc(0.05), per_days=91) >= np.log(2) - 0.05
+
+
+def test_unobserved_days_count_neither_as_days_nor_alarms():
+    from detectors.scores import _alarm_rate
+
+    c = np.array([3.0, np.nan, np.nan, 0.0])
+    assert _alarm_rate([(c, np.ones(4), np.ones(4))], h=0.1) == pytest.approx(
+        1 / 2
+    )  # 1 alarm, 2 observed days
+
+
+def test_a_target_that_never_binds_returns_none_not_a_zero_threshold():
+    from detectors.scores import _calibrate_h
+
+    assert (
+        _calibrate_h(_null_inc(0.001), per_days=91) is None
+    )  # single events far rarer than once a quarter

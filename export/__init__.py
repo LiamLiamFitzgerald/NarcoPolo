@@ -173,12 +173,17 @@ def _sites(df: pd.DataFrame) -> list[dict]:
             "p_perm": _num(r["p_perm"]),
             "bh_flag": bool(r["bh_flag"]),
             "recurrence": int(r["recurrence"]),
-            "agreement": int(r["agreement"]),
+            "agreement": int(
+                r.get("agreement_merged", r["agreement"])
+            ),  # D1: merged groups, not raw agents
             "followup_unobserved": int(r["followup_unobserved"]),
             "reasons": [str(x) for x in r["reasons"]],
             "top_piers": [str(x) for x in r["top_piers"]][:3],
         }
-        for r in df.sort_values("S", ascending=False).to_dict("records")
+        # D1: the patrol order (p_site, S breaks ties); S alone before the learning columns exist
+        for r in df.sort_values(
+            ["p_site", "S"] if "p_site" in df else ["S"], ascending=False, kind="stable"
+        ).to_dict("records")
     ]
 
 
