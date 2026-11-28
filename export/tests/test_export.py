@@ -308,6 +308,9 @@ def test_backdrop_is_an_embedded_png_with_its_bounds_and_attribution():
     bd = _backdrop(_png(), BACKDROP_META)
     assert bd["image"].startswith("data:image/png;base64,")
     assert bd["bounds"] == BACKDROP_META["bounds"] and "Copernicus" in bd["attribution"]
+    assert (
+        bd["method"] == "median"
+    )  # P3's file (#263) is a median unless its metadata says otherwise
     assert (bd["from"], bd["to"]) == ("2026-08-30", "2026-11-27")
     with pytest.raises(ValueError, match="PNG"):
         _backdrop(b"GIF89a....", BACKDROP_META)
@@ -497,7 +500,9 @@ def test_raw_backdrop_latest_scene_wins_and_uncovered_is_transparent(tmp_path):
     _scene(tmp_path, "a", "2026-11-20T06:00:00Z", 500_000.0, -2500)
     _scene(tmp_path, "b", "2026-11-26T06:00:00Z", 500_100.0, -1500)
     _scene(tmp_path, "c", "2026-11-29T06:00:00Z", 500_000.0, -1000)
-    png, meta = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    made = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    assert made is not None
+    png, meta = made
     grey, alpha = _decode(png)
     assert png.startswith(b"\x89PNG") and len(png) < 1_000_000
     assert (meta["from"], meta["to"]) == ("2026-11-20", "2026-11-26")  # c is after T
@@ -518,7 +523,9 @@ def test_raw_backdrop_leaves_gaps_transparent_and_credits_real_scenes(tmp_path):
 
     _scene(tmp_path, "a", "2026-11-20T06:00:00Z", 500_000.0, -2500, simulated=False)
     _scene(tmp_path, "b", "2026-11-21T06:00:00Z", 500_400.0, -1500, simulated=False)  # a 200 m gap
-    png, meta = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    made = _raw_backdrop(tmp_path, date(2026, 11, 28))
+    assert made is not None
+    png, meta = made
     _, alpha = _decode(png)
     assert alpha[10, 30] == 0 and alpha[10, 5] == 255  # not looked at: transparent, not black
     assert meta["attribution"] == "Contains modified Copernicus Sentinel data 2026"
@@ -532,11 +539,14 @@ def test_simulator_scenes_make_a_labelled_backdrop_up_to_T(world):
     t = io.read_snapshot()["T"]
     scenes = _scenes(io.raw_root(), t)
     assert scenes and all(when.date() <= t for when, _ in scenes)
-    png, meta = _raw_backdrop(io.raw_root(), t)
+    made = _raw_backdrop(io.raw_root(), t)
+    assert made is not None
+    png, meta = made
     bd = _backdrop(png, meta)  # the same checks as P3's file: a PNG under 1 MB with 4 bounds
     assert (
         bd["attribution"].startswith("Simulated") and bd["to"] == scenes[-1][0].date().isoformat()
     )
+    assert bd["method"] == "latest"  # the legend says "the latest pass at each point", not a median
     region = load(io.CONFIG_PATH)[0]["region_bbox"]
     lon0, lat0, lon1, lat1 = bd["bounds"]
     assert region["lon_min"] - 0.5 < lon0 < lon1 < region["lon_max"] + 0.5

@@ -193,6 +193,8 @@ def _backdrop(png: bytes, meta: dict) -> dict:
         "image": "data:image/png;base64," + base64.b64encode(png).decode(),
         "bounds": [float(v) for v in meta["bounds"]],
         "attribution": str(meta.get("attribution", "Contains modified Copernicus Sentinel data")),
+        # how the passes were combined, for the legend: P3's file is a median (#263), raw/s1 the latest pass (#387)
+        "method": str(meta.get("method", "median")),
         "from": meta.get("from"),
         "to": meta.get("to"),
     }
@@ -300,6 +302,7 @@ def _raw_backdrop(root: Path, t: date) -> tuple[bytes, dict] | None:
     meta = {
         "bounds": [lon0, lat0, lon1, lat1],
         "attribution": _attribution(root, scenes),
+        "method": "latest",
         "from": scenes[0][0].date().isoformat(),
         "to": scenes[-1][0].date().isoformat(),
     }
