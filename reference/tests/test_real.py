@@ -39,7 +39,9 @@ def built(tmp_path_factory):
             "reference/cells",
             "reference/land",
             "reference/travel_hours",
+            "reference/presence_2km",
             "coverage/exposure",
+            "coverage/weather_daily",
         )
     }
     fine = planted["reference/cells"].query("level == 2000")
@@ -131,3 +133,45 @@ def test_rebuilt_exposure_matches_the_planted_passes(built):
     # the simulator\'s covered_frac ignores land; P3\'s counts sea only (PR #122)
     assert np.allclose(m["covered_frac_b"], m["covered_frac_p"] * m["cell_id"].map(sea), atol=1e-3)
     assert pd.api.types.is_bool_dtype(b["post_storm"])
+
+
+def test_rebuilt_presence_2km_holds_the_planted_hours(built):
+    """#208: reference.run writes regrid_presence on the cells layer's 2 km cells. The simulator's presence_2km puts
+    each hour on its true 2 km cell, so the area-weighted regrid of raw/gfw_presence must give the same hours per
+    day, vessel type and speed bin (hours only move between neighbouring cells, none are lost)."""
+    assert io.read_provenance("reference/presence_2km") == "real"
+    b, p = io.read_stage("reference/presence_2km"), built["reference/presence_2km"]
+    fine = set(io.read_stage("reference/cells").query("level == 2000")["cell_id"])
+    assert (
+        set(b["cell_id"]) <= fine
+        and not b.duplicated(["cell_id", "date", "vessel_type", "speed_bin"]).any()
+    )
+    keys = ["date", "vessel_type", "speed_bin"]
+    tot = (
+        p[p["cell_id"].isin(fine)]
+        .groupby(keys)["hours"]
+        .sum()
+        .to_frame("p")
+        .join(b.groupby(keys)["hours"].sum().to_frame("b"), how="outer")
+        .fillna(0.0)
+    )
+    # the regrid spreads a presence cell over the 2 km cells it overlaps, so cells at the layer's edge gain or lose
+    # a little; over the whole region the hours agree closely
+    assert tot["b"].sum() == pytest.approx(tot["p"].sum(), rel=0.05)
+    per_cell = (
+        p.groupby("cell_id")["hours"]
+        .sum()
+        .to_frame("p")
+        .join(b.groupby("cell_id")["hours"].sum().to_frame("b"), how="inner")
+    )
+    assert per_cell.corr().iloc[0, 1] > 0.9  # busy cells stay busy
+
+
+def test_rebuilt_weather_daily_matches_the_planted_one(built):
+    """#208: coverage.run writes the daily weather from raw/era5.nc; the simulator planted the same values."""
+    assert io.read_provenance("coverage/weather_daily") == "real"
+    b, p = io.read_stage("coverage/weather_daily"), built["coverage/weather_daily"]
+    m = p.merge(b, on=["cell_id", "date"], suffixes=("_p", "_b"))
+    assert len(m) == len(p) == len(b)
+    assert np.allclose(m["wind_max_ms_p"], m["wind_max_ms_b"], atol=1e-4)
+    assert np.allclose(m["hs_max_m_p"], m["hs_max_m_b"], atol=1e-4)

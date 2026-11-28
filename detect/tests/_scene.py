@@ -14,7 +14,7 @@ SIM_SEA_DB = {"vv": -20.0, "vh": -27.0}
 SIM_META = {
     "prf_hz": 1700.0,
     "slant_range_m": 850_000.0,
-    "sat_speed_ms": 7600.0,
+    "satellite_speed_ms": 7600.0,
     "heading_deg": 350.0,
 }
 
@@ -60,7 +60,7 @@ def make_scene(
         CFG["radar_wavelength_m"]
         * meta["slant_range_m"]
         * meta["prf_hz"]
-        / (2 * meta["sat_speed_ms"])
+        / (2 * meta["satellite_speed_ms"])
     )
     h = np.deg2rad(meta["heading_deg"])
     drow, dcol = -np.cos(h) * offset / px, np.sin(h) * offset / px

@@ -76,6 +76,7 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path, 
             count=len(bands),
             dtype=dtype,
             transform=tr,
+            crs="EPSG:32629",
         ) as f:
             f.write(np.stack(bands))
 
@@ -100,8 +101,8 @@ def test_run_all_writes_schema_valid_detections_and_drops_rough_cells(tmp_path, 
     rng = np.random.default_rng(0)
     inj = pd.DataFrame({"peak_ratio_vv_db": rng.uniform(5, 20, 400), "peak_ratio_vh_db": rng.uniform(5, 20, 400),
                         "pol_agree": rng.random(400) < 0.5, "n_px": rng.integers(1, 5, 400), "wind_ms": rng.uniform(0, 8, 400),
-                        "ghost": rng.random(400) < 0.1, "time_utc": cut - pd.Timedelta(days=1)})  # fmt: skip
-    inj["is_boat"] = rng.random(400) < 1 / (1 + np.exp(-(inj["peak_ratio_vv_db"] - 12)))
+                        "ghost": rng.random(400) < 0.1, "date": (cut - pd.Timedelta(days=1)).date()})  # fmt: skip
+    inj["label"] = rng.random(400) < 1 / (1 + np.exp(-(inj["peak_ratio_vv_db"] - 12)))
     model = fit_pboat(inj, Split(cut.date()))
 
     det = run_all(model, exposure, raw=tmp_path / "raw")

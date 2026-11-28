@@ -99,7 +99,7 @@ def _render(world: SimWorld, k: int, chip: tuple[float, float, float, float]) ->
     dets = world.detections[world.detections["pass_id"] == p["pass_id"]]
     x0, _ = _origin()
     on_day = (
-        world.ships[world.ships["day"].astype(int) == int(p["day"])]
+        world.ships[np.floor(world.ships["day"]) == int(p["day"])]
         if len(world.ships)
         else world.ships
     )

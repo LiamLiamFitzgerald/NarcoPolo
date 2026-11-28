@@ -11,6 +11,7 @@ int16 dB x 100: format conversion only. Endpoints and product type come from con
 
 import json
 import math
+import sys
 import tempfile
 import threading
 from collections.abc import Mapping
@@ -91,8 +92,10 @@ def _heading(times: list[pd.Timestamp], geoms: list[Any]) -> float:
 
 
 def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
-    """passes + calm_share + downloaded: a pass is downloaded if >= s1_calm_share of the ERA5 sea points it
-    covers inside the region are calm at the nearest hour, plus s1_rough_passes rough ones spread over time."""
+    """passes (sorted by time) + calm_share + downloaded: a pass is downloaded if >= s1_calm_share of the ERA5 sea
+    points it covers inside the region are calm at the nearest hour, plus s1_rough_passes rough ones spread over
+    time. A pass that can't be scored is never chosen; its reason goes to raw/s1_passes.json and stderr (#347)."""
+    passes = passes.sort_values("time", kind="stable", ignore_index=True)
     cfg = _stub.config()
     cov, ing = cfg["coverage"], cfg["ingest"]
     lon0, lat0, lon1, lat1 = _stub.region(cfg)
@@ -109,16 +112,26 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
     lon2, lat2 = np.meshgrid(lon, lat)
     in_region = (lon2 >= lon0) & (lon2 <= lon1) & (lat2 >= lat0) & (lat2 <= lat1)
     calm = (np.hypot(u, v) < cov["calm_wind_ms"]) & (hs < cov["calm_hs_m"])
-    shares = []
-    for time, footprint in zip(passes["time"].tolist(), passes["footprint"].tolist(), strict=True):
+    shares, reasons = [], []
+    for pid, time, footprint in zip(
+        passes["pass_id"].tolist(),
+        passes["time"].tolist(),
+        passes["footprint"].tolist(),
+        strict=True,
+    ):
         when = pd.Timestamp(time)
         k = int(np.abs((hours - when).total_seconds()).argmin()) if len(hours) else -1
+        sea = None
         if k < 0 or abs((hours[k] - when).total_seconds()) > 1800:
-            shares.append(math.nan)  # no ERA5 hour for this pass: unknown, never calm or rough
-            continue
-        sea = in_region & shapely.contains_xy(shapely.from_wkt(str(footprint)), lon2, lat2)
-        sea &= ~np.isnan(hs[k])  # no wave value = land point
-        shares.append(float(calm[k][sea].mean()) if sea.any() else math.nan)
+            reason = "no ERA5 hour within 30 min of the pass"  # unknown, never calm or rough
+        else:
+            sea = in_region & shapely.contains_xy(shapely.from_wkt(str(footprint)), lon2, lat2)
+            sea &= ~np.isnan(hs[k])  # no wave value = land point
+            reason = None if sea.any() else "footprint holds no ERA5 sea point inside the region"
+        shares.append(math.nan if reason or sea is None else float(calm[k][sea].mean()))
+        reasons.append(reason)
+        if reason:
+            print(f"s1: {pid} not scored: {reason}", file=sys.stderr, flush=True)
     share = pd.Series(shares, index=passes.index, dtype=float)
     down = (share >= ing["s1_calm_share"]).to_numpy(copy=True)
     rough = np.flatnonzero(share.notna().to_numpy() & ~down)
@@ -127,7 +140,7 @@ def select_passes(passes: pd.DataFrame, era5: Path) -> pd.DataFrame:
         rough = rough[np.unique(np.round(np.linspace(0, len(rough) - 1, n)).astype(int))]
     down[rough] = True
     out = passes.assign(calm_share=share, downloaded=down)
-    _write_passes(out)
+    _write_passes(out, reasons)
     return out
 
 
@@ -238,17 +251,18 @@ def _products(bbox: _stub.Bbox, start: date, end: date) -> list[dict]:
     return products
 
 
-def _write_passes(out: pd.DataFrame) -> None:
-    """raw/s1_passes.json: every pass in the window with its downloaded flag; rewritten only on change."""
+def _write_passes(out: pd.DataFrame, reasons: list[str | None]) -> None:
+    """raw/s1_passes.json: every pass in the window with its downloaded flag and, when it couldn't be scored,
+    why (skip_reason); rewritten only on change."""
     rows = [
         {
             "pass_id": str(r["pass_id"]), "time": pd.Timestamp(r["time"]).isoformat(),
             "orbit_dir": str(r["orbit_dir"]), "rel_orbit": int(r["rel_orbit"]),
             "footprint": str(r["footprint"]),
             "calm_share": None if math.isnan(r["calm_share"]) else float(r["calm_share"]),
-            "downloaded": bool(r["downloaded"]),
+            "downloaded": bool(r["downloaded"]), "skip_reason": why,
         }
-        for r in out.to_dict("records")
+        for r, why in zip(out.to_dict("records"), reasons, strict=True)
     ]  # fmt: skip
     text = json.dumps(rows, indent=1)
     path = raw_root() / "s1_passes.json"
