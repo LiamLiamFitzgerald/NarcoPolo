@@ -59,7 +59,9 @@ def _shift(frames: dict[str, pd.DataFrame], rng: np.random.Generator) -> dict[st
 def _fuse(frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
     from fuse import run  # validate may import fuse (tach.toml)
 
-    return run(*(frames[k] for k in _NAMES))
+    out = run(*(frames[k] for k in _NAMES))
+    assert out is not None  # with frames, run() returns (cells, sites); None only for make all
+    return out
 
 
 def _flagged(frames: dict[str, pd.DataFrame]) -> bool:
