@@ -5,6 +5,7 @@ swh as (time, lat, lon) arrays with NaN waves over land. era5=None means weather
 Thresholds come from config.yaml `coverage:`."""
 
 import json
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -117,6 +118,44 @@ def weather_at(
     )
 
 
+def _weather_daily(era5: Mapping[str, np.ndarray] | None, cells: gpd.GeoDataFrame) -> pd.DataFrame:
+    """coverage/weather_daily (#208): per 2 km cell and UTC day, the max over that day's ERA5 hours of the wind and the
+    wave height, at weather_at's points (nearest point for wind, nearest valid-wave point for waves, A8).
+    Unknown weather has no row, never 0: no ERA5 at all gives no rows, and a cell-day whose wind or waves are NaN in
+    every hour is left out. A day is the hours ERA5 has for it (a download cut mid-day gives that day's partial max)."""
+    cols = ["cell_id", "date", "wind_max_ms", "hs_max_m"]
+    fine = cells[cells["level"] == 2000] if "level" in cells else cells
+    if era5 is None or fine.empty or not len(era5["time"]):
+        empty = {"cell_id": pd.Series([], dtype=str), "date": pd.Series([], dtype="datetime64[ns]")}
+        return pd.DataFrame(
+            {
+                **empty,
+                "wind_max_ms": pd.Series([], dtype=float),
+                "hs_max_m": pd.Series([], dtype=float),
+            }
+        )
+    i, j = _points(era5, fine)
+    wi, wj = _wave_points(era5, fine)
+    wind = np.hypot(era5["u10"][:, i, j], era5["v10"][:, i, j])  # (hour, cell)
+    hs = era5["swh"][:, wi, wj]
+    day = pd.DatetimeIndex(era5["time"]).normalize()
+    out = []
+    for d in day.unique():
+        h = day == d
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter(
+                "ignore", RuntimeWarning
+            )  # all-NaN columns: unknown, dropped below
+            w, s = np.nanmax(wind[h], axis=0), np.nanmax(hs[h], axis=0)
+        out.append(
+            pd.DataFrame(
+                {"cell_id": fine["cell_id"].to_numpy(), "date": d, "wind_max_ms": w, "hs_max_m": s}
+            )
+        )
+    frame = pd.concat(out, ignore_index=True)
+    return frame.dropna(subset=["wind_max_ms", "hs_max_m"]).reset_index(drop=True)[cols]
+
+
 def calm(wind_ms: pd.Series, hs_m: pd.Series) -> pd.Series:
     """Calm if wind and wave height are both under their thresholds; unknown weather is not calm.
     The thresholds are provisional until P1's recall curve exists (spec warning)."""
@@ -211,10 +250,12 @@ def _raw_is_real() -> bool:
 
 
 def run() -> None:
-    """make all. Simulator (or ingest stubs): `make sim` already wrote coverage/exposure; check it and stop.
-    Real raw/: one row per 2 km cell and pass from raw/s1 metadata and raw/era5.nc (unknown weather if missing)."""
+    """make all. Simulator (or ingest stubs): `make sim` already wrote coverage/exposure and coverage/weather_daily;
+    check them and stop. Real raw/: one row per 2 km cell and pass from raw/s1 metadata and raw/era5.nc (unknown
+    weather if missing), and the daily weather per 2 km cell (#208)."""
     if not _raw_is_real():
         io.read_stage("coverage/exposure")
+        io.read_stage("coverage/weather_daily")
         return
     raw = io.raw_root()
     era5 = _read_era5(raw / "era5.nc") if (raw / "era5.nc").exists() else None
@@ -222,3 +263,4 @@ def run() -> None:
     io.write_stage(
         "coverage/exposure", build_exposure(_read_passes(raw / "s1"), cells, era5), "real"
     )
+    io.write_stage("coverage/weather_daily", _weather_daily(era5, cells), "real")

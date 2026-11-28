@@ -25,8 +25,14 @@ def sim(tmp_path_factory):
     truth = io.read_stage("coverage/exposure")
     era5 = cv._read_era5(raw / "era5.nc")
     passes = cv._read_passes(raw / "s1")
+    _PLANTED["coverage/weather_daily"] = io.read_stage("coverage/weather_daily")
     mp.undo()
     return cells, truth, era5, passes
+
+
+_PLANTED: dict[
+    str, pd.DataFrame
+] = {}  # other stage files the sim fixture planted, for the tests that need them
 
 
 def test_reads_every_scene_pass(sim):
@@ -110,3 +116,59 @@ def test_post_storm_needs_24_stormy_hours_in_the_last_72():
         3.0  # 30 stormy hours, but a pass at hour 99 looks back over hours 27-98: only 3 of them
     )
     assert not cv.post_storm(era5, cells, pd.Timestamp("2026-08-05T03:00", tz="UTC")).iloc[0]
+
+
+def test_weather_daily_recovers_the_simulated_daily_weather(sim):
+    """#208 known answer: from the simulator's raw/era5.nc, every 2 km cell-day equals the weather_daily it planted."""
+    cells, _, era5, _ = sim
+    planted = _PLANTED["coverage/weather_daily"]
+    out = check("coverage/weather_daily", cv._weather_daily(era5, cells))
+    key = ["cell_id", "date"]
+    m = planted.assign(date=pd.to_datetime(planted["date"])).merge(
+        out, on=key, suffixes=("_p", "_b")
+    )
+    assert len(m) == len(planted) == len(out)
+    assert np.allclose(m["wind_max_ms_p"], m["wind_max_ms_b"], atol=1e-4)
+    assert np.allclose(m["hs_max_m_p"], m["hs_max_m_b"], atol=1e-4)
+
+
+def _one_cell_era5(hours: int) -> tuple[gpd.GeoDataFrame, dict[str, np.ndarray]]:
+    from core.crs import to_wgs84
+
+    cells = gpd.GeoDataFrame(
+        {"cell_id": ["2000_0_0"], "level": [2000]},
+        geometry=[box(*_origin(), _origin()[0] + FINE, _origin()[1] + FINE)],
+        crs=32629,
+    )
+    c = cells.centroid
+    lon, lat = to_wgs84(c.x.iloc[0], c.y.iloc[0])
+    t = np.datetime64("2026-08-01T00:00", "ns") + np.arange(hours) * np.timedelta64(1, "h")
+    era5 = {
+        "time": t,
+        "lat": np.array([float(lat)]),
+        "lon": np.array([float(lon)]),
+        "u10": np.zeros((hours, 1, 1)),
+        "v10": np.zeros((hours, 1, 1)),
+        "swh": np.ones((hours, 1, 1)),
+    }
+    return cells, era5
+
+
+def test_weather_daily_is_the_max_over_each_utc_day_and_unknown_has_no_row():
+    cells, era5 = _one_cell_era5(60)  # 1 Aug, 2 Aug, and 12 hours of 3 Aug
+    era5["u10"][5], era5["v10"][5] = 3.0, 4.0  # wind 5 m/s at 05:00 on 1 Aug
+    era5["swh"][30] = 2.5  # waves 2.5 m at 06:00 on 2 Aug
+    era5["u10"][48:] = np.nan  # 3 Aug: wind unknown all day
+    out = check("coverage/weather_daily", cv._weather_daily(era5, cells))
+    by_day = out.set_index(pd.to_datetime(out["date"]).dt.strftime("%m-%d"))
+    assert list(by_day.index) == ["08-01", "08-02"]  # 3 Aug unknown: no row, never 0
+    assert by_day.loc["08-01", "wind_max_ms"] == pytest.approx(5.0)
+    assert by_day.loc["08-01", "hs_max_m"] == pytest.approx(1.0)
+    assert by_day.loc["08-02", "wind_max_ms"] == pytest.approx(0.0)
+    assert by_day.loc["08-02", "hs_max_m"] == pytest.approx(2.5)
+
+
+def test_weather_daily_without_era5_is_empty_not_zero():
+    cells, _ = _one_cell_era5(1)
+    out = check("coverage/weather_daily", cv._weather_daily(None, cells))
+    assert out.empty and list(out.columns) == ["cell_id", "date", "wind_max_ms", "hs_max_m"]
