@@ -3,8 +3,8 @@ import json
 import numpy as np
 import pytest
 
-from detect._standin import SIM_SEA_DB, make_scene
 from detect.scene import apply_masks, load_scene, to_linear
+from detect.tests._scene import SIM_SEA_DB, make_scene
 
 
 def test_linear_conversion_known_values():

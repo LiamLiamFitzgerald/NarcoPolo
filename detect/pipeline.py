@@ -6,22 +6,22 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from detect._standin import CFG, cell_id, check_detections
+from core import io
+from core.schemas import SCHEMAS
+from detect._common import CFG, cell_ids
 from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
 from detect.ghost import azimuth_heading, ghost_offset_m, is_ghost
 from detect.pboat import features, predict_pboat
 from detect.scene import apply_masks, load_scene
 
 
-def _read_masks(
-    meta: dict[str, Any], shape: tuple[int, int], root: Path
-) -> tuple[np.ndarray, np.ndarray]:
-    """reference/land_mask_10m.tif and static_mask_10m.tif, cut to the scene's window on the region grid."""
+def _read_masks(meta: dict[str, Any], shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """reference/land_mask_10m and static_mask_10m (core.io.raster_path), cut to the scene's window on the region grid."""
     import rasterio
 
     out = []
-    for name in ("land_mask_10m.tif", "static_mask_10m.tif"):
-        with rasterio.open(root / "reference" / name) as src:
+    for name in ("reference/land_mask_10m", "reference/static_mask_10m"):
+        with rasterio.open(io.raster_path(name)) as src:
             r0 = round((src.transform.f - meta["y_top"]) / CFG["pixel_m"])
             c0 = round((meta["x_left"] - src.transform.c) / CFG["pixel_m"])
             out.append(src.read(1)[r0 : r0 + shape[0], c0 : c0 + shape[1]])
@@ -44,15 +44,16 @@ def run_pass(
     img: tuple[np.ndarray, np.ndarray, dict[str, Any]] | None = None,
     *,
     masks: tuple[np.ndarray, np.ndarray] | None = None,
-    root: Path = Path("."),
+    root: Path | None = None,
 ) -> pd.DataFrame:
     """CFAR on VV and VH, merged candidates with size class, ghost flag and cell_id (no p_boat yet).
 
     img: (vv, vh, meta) in linear sigma0; validate.injection_test passes a modified chip here.
-    masks: (land, static) on the scene's grid; read from reference/ when None.
+    masks: (land, static) on the scene's grid; read from the reference rasters when None.
+    root: the raw/ directory (default core.io.raw_root()).
     """
-    vv, vh, meta = img if img is not None else load_scene(pass_id, root / "raw")
-    land, static = masks if masks is not None else _read_masks(meta, vv.shape, root)
+    vv, vh, meta = img if img is not None else load_scene(pass_id, root or io.raw_root())
+    land, static = masks if masks is not None else _read_masks(meta, vv.shape)
     a = alpha(CFG["enl"], CFG["p_fa"])
     per_pol = {}
     for pol, raw in (("vv", vv), ("vh", vh)):
@@ -75,26 +76,24 @@ def run_pass(
         pd.Series(meta["start_time"], index=cands.index), utc=True
     )  # naive = UTC
     cands["cell_id"] = (
-        cell_id(cands["x_m"].to_numpy(), cands["y_m"].to_numpy()) if len(cands) else []
+        cell_ids(cands["x_m"].to_numpy(), cands["y_m"].to_numpy()) if len(cands) else []
     )
     cands["det_id"] = [f"{pass_id}-{i}" for i in range(len(cands))]
     return cands
 
 
-def run_all(model: Any, *, root: Path = Path("."), out: Path | None = None) -> Path:
-    """Every pass in coverage/exposure.parquet -> detect/detections.parquet.
+DETECTIONS_COLUMNS = list(SCHEMAS["detect/detections"].columns)
 
-    Candidates in cells where that pass is not calm (or not covered) are dropped: those cells
-    have small-boat exposure 0. model is the fitted fit_pboat result.
-    TODO(P1): who fits the model on injection runs, and where it is stored, is not yet fixed.
+
+def run_all(model: Any, exposure: pd.DataFrame, *, raw: Path | None = None) -> pd.DataFrame:
+    """Every pass in coverage/exposure -> the detect/detections frame (schema-checked; run() writes it).
+
+    Candidates in cells where that pass is not calm (or not covered) are dropped: those cells have small-boat
+    exposure 0. model is the fitted fit_pboat result.
     """
-    exposure = pd.read_parquet(root / "coverage" / "exposure.parquet")
-    frames = [run_pass(p, root=root) for p in exposure["pass_id"].unique()]
+    frames = [run_pass(p, root=raw) for p in exposure["pass_id"].unique()]
     dets = pd.concat(frames, ignore_index=True)
     calm = exposure.loc[exposure["calm"].astype(bool), ["cell_id", "pass_id"]].drop_duplicates()
     dets = dets.merge(calm, on=["cell_id", "pass_id"], how="inner")
     dets["p_boat"] = predict_pboat(model, features(dets, exposure)) if len(dets) else []
-    out = out or root / "detect" / "detections.parquet"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    check_detections(dets).to_parquet(out)  # TODO(P1): write through core.io (config hash, seed)
-    return out
+    return SCHEMAS["detect/detections"].validate(dets[DETECTIONS_COLUMNS])

@@ -16,7 +16,7 @@ depends_on = ["core"]
 
 [[modules]]
 path = "validate"
-depends_on = ["core", "detect", "detectors", "forecast", "fuse"]
+depends_on = ["core", "sim", "detect", "detectors", "forecast", "fuse"]  # sim: L2, L4 and L6 simulate their own regimes and seeds (#168)
 
 [[modules]]
 path = "ingest"

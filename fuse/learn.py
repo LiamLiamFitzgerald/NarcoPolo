@@ -120,7 +120,9 @@ def _add_learning_columns(sites: pd.DataFrame, q: float) -> pd.DataFrame:
         comb_flag=combine.flags(p_comb, q, threshold),
         agreement_merged=combine.agreement_merged(pv, merged, q),
     )
-    scores = -np.log10(pv.clip(lower=np.finfo(float).tiny))
+    scores = pd.DataFrame(
+        -np.log10(pv.clip(lower=np.finfo(float).tiny)), index=pv.index, columns=pv.columns
+    )
     p_site, rung = _site_value(
         pd.concat([out, scores.drop(columns=out.columns, errors="ignore")], axis=1), model
     )

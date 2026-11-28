@@ -3,13 +3,17 @@
 import hashlib
 import logging
 import os
-from pathlib import Path
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 from scipy import optimize
 
-from match._standin import CFG, EVENTS_COLUMNS, KN_TO_MS, RAW_ID_COLUMNS, cell_id, check_events
+from core import io
+from core.schemas import SCHEMAS
+from match._common import CFG, KN_TO_MS, RAW_ID_COLUMNS, cell_ids
+
+EVENTS_COLUMNS = list(SCHEMAS["match/events"].columns)
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +156,7 @@ def slowdowns_from_tracks(
         for r in _ship_slowdowns(t.reset_index())
     ]
     ev = pd.DataFrame(rows, columns=["time_utc", "x_m", "y_m", "duration_min", "ship_key"])
-    ev["cell_id"] = cell_id(ev["x_m"], ev["y_m"]) if len(ev) else []
+    ev["cell_id"] = cell_ids(ev["x_m"], ev["y_m"]) if len(ev) else []
     ev["date"] = ev["time_utc"].dt.strftime("%Y-%m-%d") if len(ev) else []
     ev = _outside_exclusion_and_calm(ev, cells, era5)
     ev["event_id"] = [
@@ -173,16 +177,20 @@ def ship_key(ship_id) -> str:
     return hashlib.sha256(f"{salt}:{ship_id}".encode()).hexdigest()
 
 
-def write_events(*frames: pd.DataFrame, out: Path = Path("match/events.parquet")) -> Path:
-    """dark_small and slowdown frames -> match/events.parquet. Refuses any raw ship identifier column."""
+def write_events(
+    *frames: pd.DataFrame, provenance: Literal["simulated", "real"] = "real"
+) -> pd.DataFrame:
+    """Write the dark_small and slowdown frames as the events stage file through core.io (schema check, config
+    hash, provenance). Refuses any raw ship identifier column. Returns the frame it wrote."""
     raw = RAW_ID_COLUMNS & {c.lower() for f in frames for c in f.columns}
     if raw:
         raise ValueError(f"raw ship identifiers must never be written: {sorted(raw)}")
     parts = [f for f in frames if len(f)]
     df = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=EVENTS_COLUMNS)
-    df = df.astype({"p": float, "matched": bool, "duration_min": float})
+    text = {c: "string[pyarrow]" for c in ("event_id", "event_type", "cell_id", "ship_key")}
+    df = df.astype({"p": float, "matched": bool, "duration_min": float, **text})
     df["time_utc"] = pd.to_datetime(df["time_utc"], utc=True)
     assert df["event_id"].is_unique, "duplicate event_id"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    check_events(df).to_parquet(out)  # TODO(P1): write through core.io (config hash, seed)
-    return out
+    df = df[EVENTS_COLUMNS]
+    io.write_stage("match/events", df, provenance)
+    return df

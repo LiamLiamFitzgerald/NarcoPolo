@@ -32,17 +32,6 @@ from core.split import Split, folds
 
 _AGENTS = ("oe", "midp", "gi", "cusum")  # R3: `link` is site-level only and enters through p_comb
 _RHO = 2.0  # Poisson CUSUM shift, A1
-# TODO(P1): move to config.yaml learn.train (#158); 500, 5 and 2 are docs/learning.md L4 steps 3-4
-_DEFAULTS: dict[str, float] = {
-    "l2": 1.0,
-    "n_eff_min": 500,
-    "pos_mult": 5,
-    "promote_se": 2,
-    "nam_hidden": 32,
-    "nam_epochs": 300,
-    "nam_lr": 0.01,
-    "nam_l2": 0.001,
-}
 
 
 def model_path() -> Path:
@@ -50,7 +39,7 @@ def model_path() -> Path:
 
 
 def _params(cfg: Config) -> dict[str, float]:
-    return {**_DEFAULTS, **cfg["learn"].get("train", {})}
+    return dict(cfg["learn"]["train"])  # config.yaml learn.train (#158)
 
 
 # ---------------------------------------------------------------- rows: site-weeks from the simulator
@@ -74,10 +63,9 @@ def _scratch() -> Iterator[None]:
 
 
 def _simulate(cfg: Config, seed: int, regime: str) -> None:
-    # tach-ignore(validate runs the simulator; tach.toml change requested in #158)
     from sim.simulate import simulate
 
-    simulate(cfg, seed, regime)  # NotImplementedError for regimes #150 has not built yet
+    simulate(cfg, seed, regime)
 
 
 def _midp(c: np.ndarray, mu: np.ndarray) -> np.ndarray:
@@ -114,7 +102,7 @@ def _scores(obs: pd.DataFrame, exp: pd.DataFrame) -> pd.DataFrame:
     with no exposure has no row, never a zero. `date` is the week's Sunday, so Split.train keeps whole weeks."""
     seen = Observed(obs).observed_rows()
     seen = seen[seen["level"] == 2000]
-    exp = exp[exp["fold"].fillna(0) == 0]
+    exp = exp[exp["fold"] == 0]  # the live forecast; backtest folds would duplicate cell-days
     key = ["cell_id", "date", "event_type"]
     m = seen.merge(exp[[*key, "mu"]], on=key)
     d = pd.to_datetime(m["date"])
