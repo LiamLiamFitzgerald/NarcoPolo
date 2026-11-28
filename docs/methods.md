@@ -103,7 +103,7 @@
 
 ---
 
-## Decisions to make
+## Decisions (all approved by Liam, 28 Nov 01:42)
 
 - **D1 Fusion overlap.** U (rank mean), p_comb (CCT), `agreement` and `agreement_merged` all answer "how many signals say unusual". Proposal: **U stays only as the input to the link score L** (it needs a 0–1 per cell-day); **p_comb → p_site is the site ranking**; **show `agreement_merged`, drop the raw 0–4 badge from the dashboard.**
 - **D2 CUSUM.** Fit `cusum_h` on `null` simulator runs to a target false-alarm rate (like the CCT threshold) instead of the picked 0.5; and decide whether dividing by max(φ, 1) stays (it's a quasi-likelihood adjustment not written in A1).
