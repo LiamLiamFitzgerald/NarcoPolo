@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from itertools import pairwise
 
 import numpy as np
@@ -312,3 +312,46 @@ def test_patrol_parameters_are_the_spec_values_overlaid_by_config():
     assert (patrol.AIR_KN, patrol.AIR_BUDGET_H, patrol.AIR_DWELL_H) == (
         want["aircraft_kn"], want["aircraft_budget_h"], want["aircraft_dwell_h"],
     )  # fmt: skip
+
+
+def _record(rows):
+    """patrol/outcomes rows (site_id, iso_week, outcome), entered in order, as the dashboard writes them."""
+    t0 = pd.Timestamp("2026-11-20", tz="UTC")
+    f = pd.DataFrame(rows, columns=["site_id", "iso_week", "outcome"])
+    f["entered_at"] = [t0 + pd.Timedelta(minutes=i) for i in range(len(f))]
+    io.write_stage("patrol/outcomes", f, "real")
+
+
+def test_crew_outcomes_move_next_weeks_draw(world):  # #339: patrol reads patrol/outcomes (#329)
+    T = io.read_snapshot()["T"]
+    plan_week = iso_week(T + timedelta(days=1))
+    y, w, _ = (date.fromisocalendar(*plan_week, 1) - timedelta(days=7)).isocalendar()
+    last, now = f"{y}-W{w:02d}", f"{plan_week[0]}-W{plan_week[1]:02d}"
+    cfg = load(io.CONFIG_PATH)[0]
+    sites = io.read_stage("fuse/sites")
+    prior = bandit._mean(bandit.prior(_greedy_inputs(sites), cfg["learn"]["prior_strength"]))
+    a, b, c, d = list(prior.index[:4])
+    try:
+        _record([
+            (a, last, "found_something"),  # corrected below: the latest answer wins
+            (a, last, "found_nothing"),
+            (b, last, "found_something"),
+            (c, last, "not_visited"),  # never a "found nothing"
+            (d, now, "found_something"),  # the plan week itself: after the cut-off, ignored
+        ])  # fmt: skip
+        ship_plan()
+        mean = bandit._mean(io.read_json_stage("patrol/bandit_state"))
+        assert mean[a] < prior[a] and mean[b] > prior[b]
+        k = cfg["learn"]["discount"]
+        for s in (c, d):  # only the weekly discount, which leaves the mean unchanged
+            assert mean[s] == pytest.approx(prior[s])
+        st = io.read_json_stage("patrol/bandit_state")
+        assert st[c]["alpha"] == pytest.approx(
+            k * bandit.prior(_greedy_inputs(sites), cfg["learn"]["prior_strength"])[c]["alpha"]
+        )
+        ship_plan()  # rerunning counts nothing twice
+        assert io.read_json_stage("patrol/bandit_state") == st
+    finally:
+        io.stage_path("patrol/outcomes").unlink()
+    ship_plan()  # no file: back to the priors
+    assert bandit._mean(io.read_json_stage("patrol/bandit_state")).equals(prior)

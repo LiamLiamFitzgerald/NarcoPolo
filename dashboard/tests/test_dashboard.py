@@ -7,6 +7,7 @@ import threading
 import urllib.request
 from pathlib import Path
 
+from core import io
 from dashboard import app
 from dashboard.app import Api
 
@@ -162,9 +163,10 @@ def test_every_screen_has_a_nav_link_and_a_question():
         ), name
 
 
-# "We checked" outcomes (#317, placeholder draft file until contract #329)
-def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path):
-    api = Api(tmp_path / "snapshot.json", tmp_path / "o" / "outcomes.json")
+# "We checked" outcomes (#317), kept in the stage file patrol/outcomes (#329)
+def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path, monkeypatch):
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    api = Api(tmp_path / "snapshot.json")
     assert api.get_outcomes() == []
     api.record_outcome("2000_1_2", "2026-W48", "found_nothing")
     rows = api.record_outcome("2000_1_2", "2026-W48", "found_something")  # a correction replaces
@@ -180,12 +182,32 @@ def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp
         except ValueError:
             pass
     assert len(api.get_outcomes()) == 1
+    stored = io.read_stage("patrol/outcomes")  # the schema checks it on read
+    assert (
+        stored["outcome"].tolist() == ["found_something"]
+        and io.read_provenance("patrol/outcomes") == "real"
+    )
 
 
-def test_fallback_server_records_an_outcome(tmp_path):
-    snap, out = tmp_path / "snapshot.json", tmp_path / "outcomes.json"
+def test_draft_answers_move_into_the_stage_file_once(tmp_path, monkeypatch):
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    draft = app._draft_path()
+    draft.parent.mkdir(parents=True)
+    draft.write_text(json.dumps([{"site_id": "s1", "iso_week": "2026-W47", "outcome": "found_nothing",
+                                  "entered_at": "2026-11-20T10:00:00Z"}]))  # fmt: skip
+    rows = Api(tmp_path / "snapshot.json").record_outcome("s2", "2026-W48", "not_visited")
+    assert sorted((r["site_id"], r["outcome"]) for r in rows) == [
+        ("s1", "found_nothing"),
+        ("s2", "not_visited"),
+    ]
+    assert not draft.exists()
+
+
+def test_fallback_server_records_an_outcome(tmp_path, monkeypatch):
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    snap = tmp_path / "snapshot.json"
     snap.write_text("{}")
-    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap, out)) as srv:
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap)) as srv:
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         url = f"http://127.0.0.1:{srv.server_port}/outcomes.json"
         body = json.dumps({"site_id": "s1", "iso_week": "2026-W48", "outcome": "not_visited"})

@@ -591,10 +591,10 @@ const PHRASES = {
   pass_rough: "{date}: rough pass, small boats unobserved", no_pass: "no radar pass afterwards: follow-up unobserved",
   pier_time: "{pier}, about {min} min by small boat", pier_time_na: "{pier} (travel time not available yet)",
   numbers: "Numbers", numbers_line: "score {S} · p = {p} · seen {n} time(s)",
-  // "we checked" (#317); saved to a draft file until the outcomes file is agreed (issue 329)
+  // "we checked" (#317); saved to patrol/outcomes, which next week's plan learns from (#329)
   outcome_q: "We checked this site this week:", outcome_found_something: "Found something",
   outcome_found_nothing: "Found nothing", outcome_not_visited: "Not visited",
-  outcome_saved: "Saved. Next week's plan will use it once patrol reads outcomes (issue 329).",
+  outcome_saved: "Saved. Next week's plan learns from it.",
   outcome_failed: "Not saved: open the dashboard window or the local server to record answers.",
   // plan (#316)
   mix_title: "Mission mix", mix_value: "{p} % fisheries",
@@ -1041,7 +1041,7 @@ function numbersDetails(s) {
     h("p", { className: "muted" }, t("numbers_line", { S: fmt(s.S, 2), p: fmt(s.p_perm, 3), n: s.recurrence })));
 }
 
-// "We checked" buttons (#317). PLACEHOLDER: the answers go to a draft file until contract issue 329.
+// "We checked" buttons (#317): the answers go to patrol/outcomes (#329) through the window or the local server.
 async function saveOutcome(id, outcome) {
   const row = { site_id: id, iso_week: snap.meta.week, outcome };
   if (window.pywebview?.api?.record_outcome) return window.pywebview.api.record_outcome(row.site_id, row.iso_week, outcome);
