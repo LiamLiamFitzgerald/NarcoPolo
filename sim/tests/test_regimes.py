@@ -86,7 +86,9 @@ def test_null_has_no_drops_and_every_file_validates(runs):
     assert not (truth["kind"].isin(["drop", "pickup", "visit"])).any()
     mp.setenv("NARCO_DATA", str(data))
     mp.setattr(io, "CONFIG_PATH", data.parent / "config.yaml")
-    for name in io.SCHEMAS:
+    for name in io.SCHEMAS.keys() - {
+        "patrol/outcomes"
+    }:  # crew answers; the simulator has none (#329)
         io.read_stage(name)  # raises on a broken file
     assert io.read_stage("fuse/sites").empty and (io.read_stage("fuse/piers")["P_j"] == 0).all()
     assert (

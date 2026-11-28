@@ -286,6 +286,19 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "age_days": _num(ge=0),  # per site, sum of L x 0.5^(age_days / 30) = S in fuse/sites
         }
     ),
+    # #329: a crew's "we checked" answer per site and ISO week, written by P7. Places only: no vessel, person or
+    # free-text field. A missing file means "no outcomes yet"; not_visited is an answer, never stored as a zero.
+    "patrol/outcomes": _schema(
+        {
+            "site_id": _id(),  # a fuse/sites id
+            "iso_week": pa.Column(
+                str, pa.Check.str_matches(r"^\d{4}-W(0[1-9]|[1-4]\d|5[0-3])$"), nullable=False
+            ),  # e.g. 2026-W48
+            "outcome": _in("found_something", "found_nothing", "not_visited"),
+            "entered_at": _utc(),  # when the crew recorded it
+        },
+        _unique("site_id", "iso_week"),
+    ),
 }
 
 

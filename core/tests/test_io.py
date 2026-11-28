@@ -161,3 +161,31 @@ def test_an_empty_sites_file_keeps_its_list_types():
     for col in ("reasons", "top_piers", "site_id"):
         assert got.field(col).type == want.field(col).type
     assert io.read_stage("fuse/sites").empty
+
+
+def test_patrol_outcomes_round_trip_small_and_empty():  # #329
+    small = pd.DataFrame(
+        {
+            "site_id": ["s1", "s2"],
+            "iso_week": ["2026-W47", "2026-W48"],
+            "outcome": pd.Categorical(["found_something", "not_visited"]),
+            "entered_at": pd.to_datetime(["2026-11-24T09:00Z", "2026-11-28T18:00Z"]),
+        }
+    )
+    assert io.stage_path("patrol/outcomes").name == "outcomes.parquet"
+    assert not io.stage_path("patrol/outcomes").exists()  # missing file = no outcomes yet
+    io.write_stage("patrol/outcomes", small, "real")
+    back = io.read_stage("patrol/outcomes")
+    assert back["site_id"].tolist() == ["s1", "s2"]
+    assert back["outcome"].astype(str).tolist() == ["found_something", "not_visited"]
+    assert str(back["entered_at"].dt.tz) == "UTC" and back["entered_at"].equals(small["entered_at"])
+    io.write_stage("patrol/outcomes", small.iloc[0:0], "real")
+    assert io.read_stage("patrol/outcomes").empty
+
+
+def test_no_config_edit_makes_crew_answers_stale(
+    sandbox,
+):  # #329: answers can't be rebuilt by a rerun
+    io.write_stage("patrol/outcomes", frame("patrol/outcomes"), "real")
+    sandbox.write_text(sandbox.read_text().replace("lat_min: 51.1", "lat_min: 51.2"))
+    assert len(io.read_stage("patrol/outcomes")) == 1
