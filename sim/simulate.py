@@ -249,7 +249,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     drop_days, d = [], float(rng.integers(3, 8))
     while d < days:
         drop_days.append(d + rng.uniform(0.3, 0.7))
-        d += s["drop_interval_days"] + int(rng.integers(-1, 2))
+        # #177: random gaps (a Poisson process, mean drop_interval_days, at least 1 day). A near-fixed 10-day cadence
+        # let the site permutation test realign slowdowns with pick-ups by shifting whole periods.
+        d += max(1.0, float(rng.exponential(s["drop_interval_days"])))
     # the regime moves or retimes drops with its own stream, so `fixed` consumes no extra draws (docs/learning.md L1)
     pass_days = (
         (passes["time_utc"] - pd.Timestamp(start, tz="UTC")).dt.total_seconds() / 86400
