@@ -241,10 +241,11 @@ def test_patrol_plan_feeds_the_export(world):
 def test_base_and_start_come_from_config_never_from_a_guess(world, monkeypatch):
     import patrol
 
-    (x, y), stand_in = _base({"base_port": {"lon": -8.0, "lat": 51.5}})
+    (x, y), stand_in = _base({"patrol": {"base_port": {"lon": -8.0, "lat": 51.5}}})
+    assert _base({"base_port": {"lon": -8.0, "lat": 51.5}})[0] == (x, y)  # top-level form read too
     ex, ey = to_utm(-8.0, 51.5)
     assert (x, y) == pytest.approx((float(ex), float(ey))) and not stand_in
-    start, stand_in = _start({"patrol_start_hour_utc": 6})
+    start, stand_in = _start({"patrol": {"start_hour_utc": 6}})
     assert start == pd.Timestamp("2026-11-28 06:00", tz="UTC") and not stand_in
     # no config: simulated data gets a stand-in (the first road pier), flagged as such
     (px, py), stand_in = _base({})
