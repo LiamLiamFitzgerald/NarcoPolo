@@ -8,11 +8,10 @@ validate reads. Not done here (follow-up): raw/-shaped files and radar scene chi
 """
 
 import hashlib
+from collections.abc import Mapping
 from datetime import date, timedelta
 
 import geopandas as gpd
-from collections.abc import Mapping
-
 import numpy as np
 import pandas as pd
 from scipy.stats import poisson
