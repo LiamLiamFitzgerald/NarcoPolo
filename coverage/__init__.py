@@ -2,7 +2,7 @@
 
 ERA5 is passed around as a mapping (see _read_era5): time (datetime64, UTC), lat, lon (1-D, degrees), and u10, v10,
 swh as (time, lat, lon) arrays with NaN waves over land. era5=None means weather unknown, which is never calm.
-Thresholds are keyword arguments or config lookups with the spec's defaults until P3's config keys land (#85)."""
+Thresholds come from config.yaml `coverage:`."""
 
 import json
 from collections.abc import Mapping
@@ -19,7 +19,6 @@ from shapely.geometry.base import BaseGeometry
 from core import io
 from core.config import load
 from core.crs import to_utm, to_wgs84
-from core.schemas import SCHEMAS
 
 
 def _cfg() -> Mapping[str, Any]:
@@ -122,20 +121,21 @@ def calm(wind_ms: pd.Series, hs_m: pd.Series) -> pd.Series:
     """Calm if wind and wave height are both under their thresholds; unknown weather is not calm.
     The thresholds are provisional until P1's recall curve exists (spec warning)."""
     c = _cfg().get("coverage", {})
-    wind_max = c.get("calm_wind_ms", 6)  # TODO(P3): config key pending #85
-    hs_max = c.get("calm_hs_m", 1.5)  # TODO(P3): config key pending #85
+    wind_max, hs_max = c["calm_wind_ms"], c["calm_hs_m"]
     return ((wind_ms < wind_max) & (hs_m < hs_max)).rename("calm")
 
 
-def _post_storm(
-    era5: Mapping[str, np.ndarray] | None,
-    cells: gpd.GeoDataFrame,
-    time: pd.Timestamp,
-    storm_hs_m: float = 2.5,
-    hours: int = 24,
-    lookback_h: int = 72,
+def post_storm(
+    era5: Mapping[str, np.ndarray] | None, cells: gpd.GeoDataFrame, time: pd.Timestamp
 ) -> pd.Series:
-    """A9: at least `hours` hourly wave heights over storm_hs_m in the lookback_h hours before the pass."""
+    """A9: at least storm_hours hourly wave heights over storm_hs_m in the storm_lookback_h hours before the pass.
+    Unknown weather (era5 None) is never a storm."""
+    c = _cfg()["coverage"]
+    storm_hs_m, hours, lookback_h = (
+        c["storm_hs_m"],
+        int(c["storm_hours"]),
+        int(c["storm_lookback_h"]),
+    )
     if era5 is None:
         return pd.Series(False, index=cells.index, name="post_storm")
     h = _hour(era5, time)
@@ -146,10 +146,8 @@ def _post_storm(
 
 def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> pd.DataFrame:
     """One row per 2 km cell and pass. `passes`: pass_id, time_utc, footprint (UTM), downloaded.
-    exposure_small = covered_frac x calm; a pass not downloaded gives 0 everywhere, even where calm. post_storm (A9) is
-    written once the coverage/exposure schema has the column (#85)."""
+    exposure_small = covered_frac x calm; a pass not downloaded gives 0 everywhere, even where calm. post_storm per A9."""
     fine = cells[cells["level"] == 2000]
-    with_storm = "post_storm" in SCHEMAS["coverage/exposure"].columns
     rows = []
     for pass_id, time_utc, footprint, downloaded in zip(
         passes["pass_id"],
@@ -172,10 +170,9 @@ def build_exposure(passes: pd.DataFrame, cells: gpd.GeoDataFrame, era5: Any) -> 
                 "hs_m": hs.to_numpy(),
                 "calm": ok.to_numpy(),
                 "exposure_small": (cov * ok * bool(downloaded)).to_numpy(),
+                "post_storm": post_storm(era5, fine, time_utc).to_numpy(),
             }
         )
-        if with_storm:
-            frame["post_storm"] = _post_storm(era5, fine, time_utc).to_numpy()
         rows.append(frame)
     return pd.concat(rows, ignore_index=True)
 

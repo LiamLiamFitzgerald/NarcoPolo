@@ -102,11 +102,11 @@ def test_post_storm_needs_24_stormy_hours_in_the_last_72():
     }
     when = pd.Timestamp("2026-08-04T04:00", tz="UTC")  # hour 76
     swh[20:43] = 3.0  # 23 stormy hours inside the window
-    assert not cv._post_storm(era5, cells, when).iloc[0]
+    assert not cv.post_storm(era5, cells, when).iloc[0]
     swh[43] = 3.0  # 24
-    assert cv._post_storm(era5, cells, when).iloc[0]
+    assert cv.post_storm(era5, cells, when).iloc[0]
     swh[:] = 1.0
     swh[0:30] = (
         3.0  # 30 stormy hours, but a pass at hour 99 looks back over hours 27-98: only 3 of them
     )
-    assert not cv._post_storm(era5, cells, pd.Timestamp("2026-08-05T03:00", tz="UTC")).iloc[0]
+    assert not cv.post_storm(era5, cells, pd.Timestamp("2026-08-05T03:00", tz="UTC")).iloc[0]

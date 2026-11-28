@@ -15,12 +15,21 @@ def test_python_m_sim_writes_the_stage_files(tmp_path):
     assert (tmp_path / "sim" / "truth.parquet").exists()
 
 
-def test_make_all_names_the_first_module_without_run(tmp_path):
-    r = subprocess.run(
-        [sys.executable, "-m", "scripts.run_all"],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert r.returncode != 0 and "has no run()" in (r.stderr + r.stdout)
+def test_make_all_names_the_first_module_without_run(monkeypatch):
+    """Uses stand-in modules so the test holds whichever real modules have run() yet (#96)."""
+    import types
+
+    import pytest
+
+    from scripts.run_all import main
+
+    calls = []
+    ready = types.ModuleType("fake_ready")
+    ready.run = lambda: calls.append("fake_ready")  # pyright: ignore[reportAttributeAccessIssue]
+    monkeypatch.setitem(sys.modules, "fake_ready", ready)
+    monkeypatch.setitem(sys.modules, "fake_missing", types.ModuleType("fake_missing"))
+    monkeypatch.setitem(sys.modules, "fake_after", ready)
+
+    with pytest.raises(SystemExit, match="'fake_missing' has no run()"):
+        main(["fake_ready", "fake_missing", "fake_after"])
+    assert calls == ["fake_ready"]

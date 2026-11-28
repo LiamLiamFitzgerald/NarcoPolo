@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NarcoPolo</title>
+<style>
+  :root { --bg: #f4f5f7; --card: #fff; --ink: #1b1f23; --muted: #5b6570; --line: #d5d9de; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14181c; --card: #1d2227; --ink: #e8ebee; --muted: #9aa4ad; --line: #343b42; }
+  }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  #banner { padding: 8px 14px; font-weight: 600; color: #fff; background: #555; }
+  #banner.simulated { background: #a15c00; } #banner.real { background: #1a6b3a; } #banner.mixed { background: #6a2fb0; }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 12px; padding: 12px; align-items: start; }
+  @media (max-width: 980px) { main { grid-template-columns: minmax(0, 1fr); } }
+  section, .map-card { background: var(--card); border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
+  h2 { font-size: 14px; margin: 0 0 6px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 8px; }
+  .controls label { color: var(--muted); } select { font: inherit; }
+  svg { width: 100%; height: auto; display: block; background: #cfe3f1; border: 1px solid var(--line); }
+  #legend { font-size: 12px; margin-top: 8px; color: var(--muted); }
+  #legend .row { display: flex; align-items: center; gap: 2px; margin-top: 4px; flex-wrap: wrap; }
+  #legend .sw { width: 34px; height: 14px; border: 1px solid var(--line); }
+  #legend .sw.hatch { background: repeating-linear-gradient(45deg, #ddd 0 3px, #888 3px 5px); margin-left: 14px; }
+  #legend span.lab { margin: 0 8px 0 3px; }
+  #toggles { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; margin-top: 8px; }
+  ol, ul { margin: 0; padding-left: 20px; } li { margin-bottom: 8px; }
+  .badge { letter-spacing: 1px; } .tag { font-size: 12px; color: var(--muted); }
+  table { border-collapse: collapse; font-size: 12px; margin: 4px 0 8px; } td, th { border-bottom: 1px solid var(--line); padding: 2px 8px 2px 0; text-align: left; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="banner">loading…</div>
+<main>
+  <div class="map-card">
+    <div class="controls">
+      <label>Heat map <select id="map"></select></label>
+      <label>Week <select id="week"></select></label>
+    </div>
+    <svg id="svg"><defs></defs><g id="base"></g><g id="heat"></g><g id="over"></g></svg>
+    <div id="legend"></div>
+    <div id="toggles"></div>
+  </div>
+  <aside>
+    <section><h2>Sites worth checking</h2><ol id="sites"></ol></section>
+    <section><h2>Patrol plan</h2><div id="plan"></div></section>
+    <section><h2>How far to trust this</h2><div id="validation"></div></section>
+  </aside>
+</main>
+<script>
+// Plain JavaScript, inline SVG, no network. The browser only draws, sorts and formats: every number
+// and every colour-scale break comes from the snapshot (docs/specs/P7.md).
+const NS = "http://www.w3.org/2000/svg", W = 900;
+const MAPS = {
+  normal: { title: "Normal small-boat activity", unit: "expected boats per unit of coverage (weekly mean of μ ÷ E)", div: false },
+  obs_vs_exp: { title: "Observed versus expected", unit: "log₂(observed ÷ expected), clipped at ±3 (8× more or less)", div: true },
+  unusual: { title: "Unusual score", unit: "U from 0 to 1 (weekly maximum, either event type)", div: false },
+  exposure: { title: "Blind spots", unit: "small-boat coverage summed over the week's passes", div: false },
+};
+const OVERLAYS = [
+  ["inshore", "Inshore fishing grounds"], ["lane", "Shipping lanes, exclusion zones"], ["sites", "Drop sites"],
+  ["followup", "Follow-up unobserved"], ["agreement", "Agreement dots"], ["piers", "Piers"], ["routes", "Routes"],
+];
+let snap, ext, H;
+const view = { map: "normal", week: null };
+const AGREE_U = 0.9; // spec: agreement dots beside a cell with U >= 0.9
+
+async function loadSnapshot() {
+  if (!window.pywebview?.api)
+    await new Promise(r => { addEventListener("pywebviewready", r, { once: true }); setTimeout(r, 300); });
+  if (window.pywebview?.api) return window.pywebview.api.get_snapshot();
+  for (const url of ["/snapshot.json", "../data/export/snapshot.json"]) {
+    try { const r = await fetch(url); if (r.ok) return r.json(); } catch (e) { /* try the next place */ }
+  }
+  throw new Error("no snapshot found: run make all");
+}
+
+// Equirectangular, east-west scaled by cos(latitude): accurate enough for 150 km.
+function project(lon, lat) {
+  const k = Math.cos(((ext.lat0 + ext.lat1) / 2) * Math.PI / 180), s = W / ((ext.lon1 - ext.lon0) * k);
+  return [(lon - ext.lon0) * k * s, (ext.lat1 - lat) * s];
+}
+
+function setExtent() {
+  const g = Object.values(snap.cells.geometry);
+  const lon = g.flatMap(b => [b[0], b[2]]), lat = g.flatMap(b => [b[1], b[3]]);
+  const padLon = (Math.max(...lon) - Math.min(...lon)) * 0.04, padLat = (Math.max(...lat) - Math.min(...lat)) * 0.08;
+  ext = { lon0: Math.min(...lon) - padLon, lon1: Math.max(...lon) + padLon, lat0: Math.min(...lat) - padLat, lat1: Math.max(...lat) + padLat };
+  H = project(ext.lon0, ext.lat0)[1];
+  document.getElementById("svg").setAttribute("viewBox", `0 0 ${W} ${H}`);
+}
+
+function el(tag, attrs, parent, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+  if (text) { const t = document.createElementNS(NS, "title"); t.textContent = text; e.appendChild(t); }
+  parent.appendChild(e);
+  return e;
+}
+const group = id => { const g = document.getElementById(id); g.replaceChildren(); return g; };
+const cellRect = cid => {
+  const b = snap.cells.geometry[cid], [x0, y1] = project(b[0], b[1]), [x1, y0] = project(b[2], b[3]);
+  return { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+};
+
+function drawBasemap() {
+  const g = group("base");
+  for (const f of snap.basemap.features) {
+    const polys = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
+    for (const poly of polys) for (const ring of poly)
+      el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", fill: "#e3eef7", stroke: "#6b8aa3", "stroke-width": 1 }, g);
+  }
+}
+
+// Unobserved is never the lowest colour of a scale (Design principle 4): it is grey hatching.
+function hatchUnobserved() {
+  const defs = document.querySelector("#svg defs");
+  if (defs.querySelector("#hatch")) return;
+  const pat = (id, bg, line, w, rot) => {
+    const p = el("pattern", { id, width: 6, height: 6, patternUnits: "userSpaceOnUse", patternTransform: `rotate(${rot})` }, defs);
+    el("rect", { width: 6, height: 6, fill: bg }, p);
+    el("line", { x1: 0, y1: 0, x2: 0, y2: 6, stroke: line, "stroke-width": w }, p);
+  };
+  pat("hatch", "#dcdcdc", "#8a8a8a", 2, 45); // not observed: grey, diagonal
+  pat("lane", "none", "#16355c", 0.8, 90); // lanes and exclusion zones: thin blue, horizontal
+}
+
+function colour(name, v) {
+  const lg = snap.cells.legends[name];
+  if (MAPS[name].div) {
+    const t = Math.max(-1, Math.min(1, v / lg.clip)), a = Math.abs(t);
+    return `hsl(${t < 0 ? 215 : 8} ${Math.round(65 * a)}% ${Math.round(86 - 38 * a)}%)`; // grey at 0
+  }
+  const n = lg.breaks.length - 1;
+  let i = 0;
+  while (i < n - 1 && v >= lg.breaks[i + 1]) i++;
+  return `hsl(212 65% ${Math.round(93 - 60 * (n > 1 ? i / (n - 1) : 1))}%)`;
+}
+
+function drawLegend(name, week) {
+  const lg = snap.cells.legends[name], box = document.getElementById("legend");
+  const row = document.createElement("div");
+  row.className = "row";
+  const add = (cls, bg, label) => {
+    const s = document.createElement("div"); s.className = "sw " + cls; if (bg) s.style.background = bg;
+    const l = document.createElement("span"); l.className = "lab"; l.textContent = label || "";
+    row.append(s, l);
+  };
+  const head = document.createElement("div");
+  head.textContent = `${MAPS[name].title}, week ${week}: ${MAPS[name].unit}`;
+  if (!lg.breaks.length) {
+    box.replaceChildren(head, Object.assign(document.createElement("div"), { textContent: "Not available yet: every cell is hatched (needs the observed-over-expected ratio from the detectors)." }));
+    return;
+  }
+  if (MAPS[name].div) for (const t of [-1, -0.5, 0, 0.5, 1]) add("", colour(name, t * lg.clip), (t * lg.clip).toFixed(1));
+  else lg.breaks.slice(0, -1).forEach((b, i) => add("", colour(name, b), `${b} to ${lg.breaks[i + 1]}`));
+  add("hatch", "", name === "exposure" ? "not observed (zero coverage)" : "not observed");
+  box.replaceChildren(head, row);
+}
+
+function drawHeatmap(name, week) {
+  hatchUnobserved();
+  const g = group("heat"), cells = snap.cells.weeks[week];
+  for (const c of cells) {
+    const v = c[name], hatched = v === null || (name === "exposure" && !c.observed) || !snap.cells.legends[name].breaks.length;
+    el("rect", { ...cellRect(c.cell_id), fill: hatched ? "url(#hatch)" : colour(name, v), "fill-opacity": 0.9 }, g,
+      hatched ? "not observed" : `${MAPS[name].title}: ${Number(v).toFixed(3)}`);
+  }
+  drawLegend(name, week);
+}
+
+function drawOverlays() {
+  const root = group("over");
+  const layer = id => { const g = el("g", { id: "ov-" + id }, root); g.style.display = document.getElementById("t-" + id)?.checked === false ? "none" : ""; return g; };
+  const L = snap.cells.layers;
+  for (const cid of L.inshore) el("rect", { ...cellRect(cid), fill: "none", stroke: "#1f6f8b", "stroke-width": 0.7 }, layer("inshore"));
+  const lanes = layer("lane");
+  for (const cid of L.lane) el("rect", { ...cellRect(cid), fill: "url(#lane)", opacity: 0.45 }, lanes, "shipping lane");
+  for (const cid of L.exclusion) el("rect", { ...cellRect(cid), fill: "url(#lane)", stroke: "#4a4a4a", "stroke-dasharray": "3 2", opacity: 0.7 }, lanes, "exclusion zone");
+
+  const routes = layer("routes");
+  const style = { ship: { stroke: "#a93226", dash: "" }, aircraft: { stroke: "#1b4f72", dash: "7 5" } };
+  for (const [asset, stops] of Object.entries(snap.plan)) {
+    if (stops.length < 2) continue;
+    el("polyline", { points: stops.map(s => project(s.lon, s.lat).join(",")).join(" "), fill: "none", stroke: style[asset].stroke, "stroke-width": 2, "stroke-dasharray": style[asset].dash }, routes);
+    if (asset !== "ship") continue;
+    stops.forEach((s, i) => {
+      if (i === 0 || i === stops.length - 1) return;
+      const [x, y] = project(s.lon, s.lat);
+      el("circle", { cx: x, cy: y, r: 9, fill: "none", stroke: s.exploration ? "#6a2fb0" : style.ship.stroke, "stroke-width": s.exploration ? 3 : 1.5, "stroke-dasharray": s.exploration ? "3 2" : "" }, routes,
+        s.exploration ? "exploration visit" : "ship stop");
+    });
+  }
+
+  const piers = layer("piers"), maxP = Math.max(0, ...snap.piers.map(p => p.P_j ?? 0));
+  for (const p of snap.piers) {
+    const [x, y] = project(p.lon, p.lat), h = p.P_j === null || !maxP ? 4 : 3 + 6 * p.P_j / maxP; // fixed size until a pier score exists
+    el("rect", { x: x - h, y: y - h, width: 2 * h, height: 2 * h, fill: "#222", stroke: "#fff" }, piers, `${p.name ?? p.id}${p.P_j === null ? "" : `, pier score ${p.P_j.toFixed(2)}`}`);
+  }
+
+  const sites = layer("sites"), follow = layer("followup"), agree = layer("agreement"), maxS = Math.max(...snap.sites.map(s => s.S), 1e-9);
+  for (const s of snap.sites) {
+    const [x, y] = project(s.lon, s.lat), r = Math.max(5, 20 * s.S / maxS);
+    el("circle", { cx: x, cy: y, r, fill: s.bh_flag ? "#c0392b" : "none", "fill-opacity": 0.75, stroke: "#c0392b", "stroke-width": 2 }, sites,
+      `${s.id}: score ${s.S.toFixed(2)}, p ${s.p_perm.toFixed(3)}${s.bh_flag ? "" : ", not significant"}`);
+    if (s.followup_unobserved > 0) {
+      const dx = x + r + 7, dy = y - r - 7;
+      el("polygon", { points: `${dx},${dy - 6} ${dx + 6},${dy} ${dx},${dy + 6} ${dx - 6},${dy}`, fill: "none", stroke: "#222", "stroke-width": 1.5 }, follow, `${s.followup_unobserved} follow-up days unobserved`);
+    }
+    for (let i = 0; i < s.agreement; i++) el("circle", { cx: x + r + 6 + i * 7, cy: y + r + 4, r: 2.5, fill: "#222" }, agree, `${s.agreement} of 4 detectors agree`);
+  }
+  // beside cells the detectors rate U >= 0.9 this week (the spec's threshold): one dot per agreeing detector
+  for (const c of snap.cells.weeks[view.week]) {
+    if (c.unusual === null || c.unusual < AGREE_U || !c.agreement) continue;
+    const { x, y, width, height } = cellRect(c.cell_id);
+    for (let i = 0; i < c.agreement; i++) el("circle", { cx: x + width + 2 + i * 4, cy: y + height / 2, r: 1.6, fill: "#222" }, agree, `${c.agreement} of 4 detectors agree`);
+  }
+}
+
+function drawSiteList() {
+  const ol = document.getElementById("sites");
+  ol.replaceChildren();
+  const pierName = id => snap.piers.find(p => p.id === id)?.name ?? id;
+  for (const s of [...snap.sites].sort((a, b) => b.S - a.S)) {
+    const li = document.createElement("li"), head = document.createElement("div");
+    const b = document.createElement("strong"); b.textContent = s.id;
+    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = " " + "●".repeat(s.agreement) + "○".repeat(4 - s.agreement);
+    badge.title = `${s.agreement} of 4 detectors agree`;
+    head.append(b, badge, ` score ${s.S.toFixed(2)}, p = ${s.p_perm.toFixed(3)}` + (s.bh_flag ? "" : " (not significant)"));
+    const why = document.createElement("div"); why.textContent = s.reasons.join("; ");
+    const meta = document.createElement("div"); meta.className = "tag";
+    meta.textContent = `Seen ${s.recurrence} times` + (s.followup_unobserved ? `; follow-up unobserved on ${s.followup_unobserved} days` : "") +
+      (s.top_piers.length ? `. Piers to check: ${s.top_piers.map(pierName).join(", ")}` : "");
+    li.append(head, why, meta);
+    ol.appendChild(li);
+  }
+  if (!snap.sites.length) ol.textContent = "No sites this week.";
+}
+
+function drawPlan() {
+  const box = document.getElementById("plan"), parts = [];
+  const names = { ship: "Ship (sea route)", aircraft: "Aircraft (straight-line sweep)" };
+  for (const [asset, stops] of Object.entries(snap.plan)) {
+    const h = document.createElement("div"), ul = document.createElement("ul");
+    h.append(Object.assign(document.createElement("strong"), { textContent: names[asset] ?? asset }));
+    for (const s of stops) {
+      const li = document.createElement("li");
+      li.textContent = `${s.arrival_utc.slice(5, 10)} ${s.arrival_utc.slice(11, 16)} UTC: ` + (s.id === "base" ? "base" + (s.stand_in ? " (simulated stand-in: base port or start time not set yet)" : "") : `${s.id}, ${s.dwell_h} h on station`) +
+        (s.exploration ? " (exploration visit)" : "") + (s.not_significant ? " (not significant)" : "");
+      ul.appendChild(li);
+    }
+    parts.push(h, stops.length > 2 ? ul : Object.assign(document.createElement("div"), { className: "muted", textContent: "Nothing worth the trip within the time budget." }));
+  }
+  box.replaceChildren(...parts);
+}
+
+function table(rows) {
+  const t = document.createElement("table"), keys = Object.keys(rows[0]);
+  const fmt = v => v === null ? "–" : typeof v === "number" && !Number.isInteger(v) ? v.toFixed(3) : String(v);
+  const head = t.insertRow(); for (const k of keys) head.appendChild(Object.assign(document.createElement("th"), { textContent: k }));
+  for (const r of rows) { const tr = t.insertRow(); for (const k of keys) tr.insertCell().textContent = fmt(r[k]); }
+  return t;
+}
+
+function drawValidation() {
+  const v = snap.validation, box = document.getElementById("validation");
+  if (!v) { box.textContent = "Validation has not been run (make validate)."; return; }
+  const part = (title, body) => { const h = document.createElement("div"); h.append(Object.assign(document.createElement("strong"), { textContent: title })); return [h, body]; };
+  const note = t => Object.assign(document.createElement("div"), { className: "muted", textContent: t });
+  const none = "not available yet";
+  box.replaceChildren(
+    ...part("Chance of seeing a boat that is there (recall, by size and sea state)", v.recall?.length ? table(v.recall) : note(none)),
+    ...part("Forecast skill (above 0 beats the flat baseline)", v.skill?.length ? table(v.skill) : note(none)),
+    ...part(`Probability calibration (Brier ${v.brier === null ? "–" : v.brier.toFixed(3)}, lower is better)`, v.calibration?.length ? table(v.calibration) : note(none)),
+    ...part("Alarms on pure noise (null test)", note(v.null?.share_with_any_flag === null || !v.null ? "not run yet" : `${(100 * v.null.share_with_any_flag).toFixed(0)}% of ${v.null.runs} runs raised any flag`)),
+    ...(v.interval_coverage == null ? [] : part("Forecast ranges that held the actual count", note(`${(100 * v.interval_coverage).toFixed(0)}% (aim: 90%)`))),
+  );
+}
+
+function drawBanner() {
+  const b = document.getElementById("banner");
+  b.className = snap.meta.data_label;
+  b.textContent = `Data: ${snap.meta.data_label} · as of ${snap.meta.T} (UTC) · week ${view.week} · generated ${snap.meta.generated_utc}`;
+}
+
+function onWeekChange(week) {
+  view.week = week;
+  drawBanner();
+  drawHeatmap(view.map, week);
+  drawOverlays(); // the cell agreement dots depend on the week
+}
+
+function setup() {
+  const mapSel = document.getElementById("map"), wk = document.getElementById("week"), tg = document.getElementById("toggles");
+  for (const [k, m] of Object.entries(MAPS)) mapSel.add(new Option(m.title, k));
+  for (const w of snap.meta.weeks) wk.add(new Option(w, w, false, w === snap.meta.week));
+  mapSel.onchange = () => { view.map = mapSel.value; onWeekChange(view.week); };
+  wk.onchange = () => onWeekChange(wk.value);
+  for (const [id, label] of OVERLAYS) {
+    const l = document.createElement("label"), c = Object.assign(document.createElement("input"), { type: "checkbox", id: "t-" + id, checked: true });
+    c.onchange = () => { const g = document.getElementById("ov-" + id); if (g) g.style.display = c.checked ? "" : "none"; };
+    l.append(c, " " + label);
+    tg.appendChild(l);
+  }
+}
+
+(async () => {
+  try { snap = await loadSnapshot(); }
+  catch (e) { const b = document.getElementById("banner"); b.textContent = "Could not load the snapshot: run make sim and make all, then reopen."; return; }
+  view.week = snap.meta.week;
+  setExtent(); setup(); drawBasemap(); drawBanner(); drawHeatmap(view.map, view.week);
+  drawOverlays(); drawSiteList(); drawPlan(); drawValidation();
+})();
+</script>
+</body>
+</html>

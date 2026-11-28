@@ -58,6 +58,12 @@ def _str_list() -> pa.Column:
     return pa.Column(checks=pa.Check(ok, error="not a list of str"), nullable=False)
 
 
+def _later(col: pa.Column) -> pa.Column:
+    """A column the learning layer adds (docs/learning.md): checked when present, not yet required."""
+    col.required = False
+    return col
+
+
 def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSchema:
     return pa.DataFrameSchema(columns, checks=list(checks), strict=True, ordered=False)
 
@@ -108,6 +114,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "hs_m": _num(ge=0),
             "calm": _flag(),
             "exposure_small": _prob(),
+            "post_storm": _flag(),  # A9: >= 24 h of hs > 2.5 m in the 72 h before the pass
         }
     ),
     "detect/detections": _schema(
@@ -163,7 +170,7 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "model": pa.Column(str, nullable=False),
             "fold": _num(
                 "Int64", nullable=True
-            ),  # null for the live forecast, fold number in backtests
+            ),  # 0 for the live forecast (evaluation window), fold number 1..k in backtests
         },
         pa.Check(lambda df: df["lo90"] <= df["hi90"], error="lo90 > hi90"),
     ),
@@ -178,6 +185,10 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "cusum_s": _num(ge=0),
             "context": _prob(),
             "U": _prob(),
+            "y": _num(ge=0),  # (C + 0.5) / (mu + 0.5) for this row (#87)
+            "y_week": _num(
+                ge=0
+            ),  # (sum C + 0.5) / (sum mu + 0.5) over the cell's ISO week, on each day row (#87)
             "agreement": _num(int, ge=0, le=4),
         }
     ),
@@ -195,6 +206,26 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "agreement": _num(int, ge=0, le=4),
             "reasons": _str_list(),
             "top_piers": _str_list(),
+            "p_comb": _later(_prob()),  # L3: Cauchy-combined p over merged agents
+            "comb_flag": _later(_flag()),  # L3: BH on calibrated p_comb
+            "agreement_merged": _later(_num(int, ge=0)),  # L3: merged agents that flag the site
+            "p_site": _later(_prob()),  # L4: site value from the model rung in use
+            "model_rung": _later(
+                _num(int, ge=0, le=3)
+            ),  # L4: 0 statistics only ... 3 mixture of experts
+        }
+    ),
+    "fuse/piers": _schema(  # #88: one row per pier
+        {
+            "pier_id": _id(),
+            "P_j": _num(ge=0),  # sum over scored sites of S x exp(-T / 1 h), T = sea travel hours
+        }
+    ),
+    "fuse/links": _schema(  # #98: one row per slowdown with a link score
+        {
+            "site_id": _id(),
+            "L": _prob(),
+            "age_days": _num(ge=0),  # per site, sum of L x 0.5^(age_days / 30) = S in fuse/sites
         }
     ),
 }
@@ -250,6 +281,13 @@ def _plan(obj: Mapping[str, Any]) -> None:
                 raise ValueError(
                     f"plan: {asset} stop {i} needs id (str), arrival_utc (ISO UTC string) and dwell_h >= 0"
                 )
+            # L5 (docs/learning.md): optional bandit fields
+            if "theta" in s and not 0 <= s["theta"] <= 1:
+                raise ValueError(f"plan: {asset} stop {i} theta must be in [0, 1]")
+            if "reason" in s and s["reason"] not in ("exploit", "explore"):
+                raise ValueError(f"plan: {asset} stop {i} reason must be exploit or explore")
+            if "day" in s and s["day"] not in range(7):  # rev 2: day of the planning week
+                raise ValueError(f"plan: {asset} stop {i} day must be 0-6")
 
 
 _SNAPSHOT_KEYS = {"meta", "basemap", "cells", "sites", "piers", "plan", "validation"}
@@ -265,7 +303,23 @@ def _snapshot(obj: Mapping[str, Any]) -> None:
     _plan(obj["plan"])
 
 
-JSON_CHECKS = {"patrol/plan": _plan, "export/snapshot": _snapshot}
+def _bandit_state(obj: Mapping[str, Any]) -> None:
+    """L5: {site_id: {alpha, beta, last_visit_week}}; alpha, beta > 0."""
+    for site, st in obj.items():
+        week = st.get("last_visit_week")
+        if not (st.get("alpha", 0) > 0 and st.get("beta", 0) > 0) or not (
+            week is None or isinstance(week, int)
+        ):
+            raise ValueError(
+                f"bandit_state: {site!r} needs alpha > 0, beta > 0, last_visit_week int or null"
+            )
+
+
+JSON_CHECKS = {
+    "patrol/plan": _plan,
+    "export/snapshot": _snapshot,
+    "patrol/bandit_state": _bandit_state,
+}
 
 
 def check_json(name: str, obj: Mapping[str, Any]) -> Mapping[str, Any]:

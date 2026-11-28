@@ -6,9 +6,15 @@ import importlib
 
 STEPS = ["reference", "coverage", "detect", "match", "aggregate", "forecast", "detectors", "fuse", "patrol", "export"]
 
-for name in STEPS:
-    mod = importlib.import_module(name)
-    if not hasattr(mod, "run"):
-        raise SystemExit(f"make all: module {name!r} has no run() yet (its stub issue defines it)")
-    print(f"== {name}.run()", flush=True)
-    mod.run()
+
+def main(steps: list[str] = STEPS) -> None:
+    for name in steps:
+        mod = importlib.import_module(name)
+        if not hasattr(mod, "run"):
+            raise SystemExit(f"make all: module {name!r} has no run() yet (its stub issue defines it)")
+        print(f"== {name}.run()", flush=True)
+        mod.run()
+
+
+if __name__ == "__main__":
+    main()
