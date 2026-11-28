@@ -4,7 +4,7 @@ One line per module, updated at every merge. Format: what works on the simulator
 
 | Module | Simulator | Real data | Blocked |
 | --- | --- | --- | --- |
-| P1 core, sim, validate, CI | all core, sim (stage + raw files), make targets; validate: all 10 checks incl. injection, null, backtest; contracts #85 #87 #88 #98 in; rasterio + netCDF4 added | n/a until P2 data | null test and planted-site rank wait for P6's real fuse; #117 (CI over every module) waits for other modules' type errors |
+| P1 core, sim, validate, CI | all core, sim (stage + raw files), make targets; validate: all 10 checks incl. injection, null, backtest; contracts #85 #87 #88 #98 in; rasterio + netCDF4 added; L1 (#150): drop regimes fixed, two_sites, pass_aware, displacing, null and `sim.patrol_outcome` | n/a until P2 data | null test and planted-site rank wait for P6's real fuse; #117 (CI over every module) waits for other modules' type errors |
 | P2 ingest | `ingest/cache` (PR #53); offline stubs for probe, s1, gfw, era5, osm, static, run write sim-shaped raw/ files recorded with a licence, `fetch_all` exported (#21) | — | real fetchers not started; P2 tests not in pytest testpaths (P1, see #117) |
 | P3 reference, coverage | stubs (#22); reference/cells real layers on the simulator: cells, inshore_frac (NaN outside survey), regrid_presence, lanes, anchorages, exclusion, to_coarse; thresholds from config `reference:` (#34) | — | masks #35, piers #36, coverage #37 in review |
 | P4 detect, match | — | — | — |
