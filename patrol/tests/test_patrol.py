@@ -420,3 +420,20 @@ def test_simulator_mix_plans_exist_only_with_fisheries_data_and_stay_in_budget(w
         assert set(p) == {"ship", "aircraft"}
         assert _trip_h(p["ship"]) <= 24 and _trip_h(p["aircraft"]) <= 4
     assert any(s.get("lens") == "fisheries" for s in mixes["plans"]["100"]["ship"])
+
+
+def test_simulator_answers_move_next_weeks_draw_weights(world):
+    # #339 / #317 on the simulator's own bandit state: a W47 "found nothing" lowers that site's posterior
+    # mean for the W48 plan, "found something" raises it, "not visited" leaves it as it was
+    from patrol import _learn
+
+    _, plan = world
+    state = io.read_json_stage("patrol/bandit_state")
+    a, b, c = [s["id"] for s in plan["ship"][1:4]]
+    plan_week = "{}-W{:02d}".format(*iso_week(io.read_snapshot()["T"]))
+    prev = "{}-W{:02d}".format(*iso_week(io.read_snapshot()["T"] - pd.Timedelta(days=7)))
+    out = _answers(
+        [(a, prev, "found_something"), (b, prev, "found_nothing"), (c, prev, "not_visited")]
+    )
+    before, after = bandit._mean(state), bandit._mean(_learn(state, out, plan_week, 0.9))
+    assert after[a] > before[a] and after[b] < before[b] and after[c] == pytest.approx(before[c])
