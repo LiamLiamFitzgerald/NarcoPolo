@@ -223,13 +223,21 @@ def _shuffle_scores(
     table: LinkTable,
     offsets: np.ndarray,
 ) -> np.ndarray:
-    """S per (offset, site) with every slowdown moved by the same offset, wrapping within the link table's days
-    ([first radar day - link_days, T]); each keeps its cell and U. L and age follow the moved date (A4: lookups)."""
+    """S per (offset, site) with every slowdown moved by the same offset, wrapping within the days that have
+    small-boat scores (#177); each keeps its cell and U. L follows the moved date (A4: lookups); the age
+    decay keeps the real date (#177), so a shuffle changes timing, not recency."""
     span = table.X.shape[1]
-    nd = (d[None, :] + offsets[:, None]) % span
+    # #177: wrap within the days that have small-boat scores (the scored window); outside it no link is possible,
+    # so shifting a slowdown there would lower S for reasons that have nothing to do with timing.
+    days = np.flatnonzero(np.isfinite(table.best).any(axis=0))
+    lo, width = (int(days[0]), int(days[-1]) - int(days[0]) + 1) if len(days) else (0, span)
+    nd = lo + (d[None, :] - lo + offsets[:, None]) % width
     best, X = table.best[ci[None, :], nd], table.X[ci[None, :], nd]
     L = np.where((X > 0) & np.isfinite(best), U[None, :] * best, 0.0)
-    w = L * 2.0 ** (-(span - 1 - nd) / PARAMS["half_life_days"])
+    # #177: the age stays with the slowdown's real date. U exists only in the recent scored window, so decaying at the
+    # moved date made every shuffle look older (lower S) and every linked site look significant. The shift tests
+    # timing, not recency.
+    w = L * 2.0 ** (-(span - 1 - d[None, :]) / PARAMS["half_life_days"])
     out = np.zeros((len(offsets), n_sites))
     for k in range(len(offsets)):
         out[k] = np.bincount(site, weights=w[k], minlength=n_sites)
