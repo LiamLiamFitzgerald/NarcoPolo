@@ -183,3 +183,26 @@ def test_pboat_training_is_labelled_by_truth(world):  # #209
     assert not t.loc[t["label"], "ghost"].any()  # a ghost is never a boat
     vv = t.groupby("label")["peak_ratio_vv_db"].mean()
     assert vv[True] > vv[False]  # boats are brighter than false alarms
+
+
+def test_slowdowns_cover_the_whole_ship_history(world):  # #273
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    cfg, _ = load(io.CONFIG_PATH)
+    h, days = cfg["ship_history_days"], cfg["sim"]["days"]
+    start = pd.Timestamp(cfg["sim"]["start_date"])
+    first, last = start + pd.Timedelta(days=days - h), start + pd.Timedelta(days=days - 1)
+    obs = io.read_stage("aggregate/observed")
+    sl = obs[(obs["event_type"] == "slowdown") & (obs["level"] == 2000)]
+    dates = pd.to_datetime(sl["date"])
+    assert dates.min() == first and dates.max() == last and dates.nunique() == h
+    # slowdowns per day are about the same before the radar starts as after it
+    per_day = sl.groupby(dates)["count"].sum()
+    before, after = per_day[per_day.index < start], per_day[per_day.index >= start]
+    assert abs(before.mean() / after.mean() - 1) < 0.1
+    # radar rows still span sim.days only
+    small = pd.to_datetime(obs.loc[obs["event_type"] == "dark_small", "date"])
+    assert small.min() == start and small.nunique() == days
+    t = io.read_stage("match/events").query("event_type == 'slowdown'")["time_utc"]
+    assert t.min() >= pd.Timestamp(first, tz="UTC")
+    assert t.max() < pd.Timestamp(last, tz="UTC") + pd.Timedelta(days=1)
