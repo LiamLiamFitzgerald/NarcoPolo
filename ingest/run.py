@@ -62,11 +62,15 @@ def fetch_all(config: Config) -> None:
         after = _manifest(raw)["files"]
         changed = {k for k, v in after.items() if before.get(k) != v}
         returned = {_rel(raw, p) for p in _paths(out)}
-        for rel in sorted(changed | returned):
+        size = lambda rel: (raw / rel).stat().st_size if (raw / rel).is_file() else 0
+        for rel in sorted(returned):  # the files the fetcher hands back, one line each
             how = "downloaded" if rel in changed else "cached"
             tally[how] += 1
-            size = (raw / rel).stat().st_size if (raw / rel).is_file() else 0
-            _say(f"ok {name}: {how} {rel} {size:,} B")
+            _say(f"ok {name}: {how} {rel} {size(rel):,} B")
+        if side := changed - returned:  # per-request caches and sidecars (raw/gfw/, scene .json)
+            tally["downloaded"] += len(side)
+            total = sum(size(rel) for rel in side)
+            _say(f"ok {name}: downloaded {len(side):,} more files, {total:,} B")
         if not changed and not returned:
             _say(f"ok {name}")
         return out
