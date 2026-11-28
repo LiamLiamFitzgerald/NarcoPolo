@@ -11,9 +11,10 @@ from statsmodels.stats.multitest import multipletests
 
 from core import io
 from core.config import load
-from core.grid import cell_id
+from core.grid import cell_id, centroid
 from detectors import bh, cusum, gi_star, pearson_z, tail_pmid
 from detectors._common import PARAMS
+from detectors.scores import _alarm_rate, _calibrate_h
 from sim.simulate import simulate
 
 KEY = ["cell_id", "date", "event_type"]
@@ -89,13 +90,52 @@ def test_gi_star_peaks_on_planted_cluster_and_is_deterministic():
     C = rng.poisson(mu).astype(float)
     planted = [cell_id(ix, iy, 2000) for ix in (5, 6, 7) for iy in (5, 6, 7)]
     C[[cells.index(c) for c in planted]] += 6
-    z = gi_star(C, mu, cells, seed=7)
+    z = gi_star(C, mu, cells)
     assert cells[int(np.argmax(z))] in planted
     assert cells[int(np.argmax(z))] == cell_id(6, 6, 2000)  # centre has the most busy neighbours
-    assert np.array_equal(z, gi_star(C, mu, cells, seed=7))
+    assert np.array_equal(z, gi_star(C, mu, cells))
     assert np.all(
         np.isfinite(gi_star(np.zeros(4), np.ones(4), cells[:4]))
     )  # flat week: z = 0, not NaN
+
+
+def _gi_star_textbook(y, cells, band_m, row_standardise):
+    """Ord & Getis (1995) Gi*, written the way esda.G_Local(star=True) computes Zs: a dense weight matrix with
+    w_ii = 1, optionally row-standardised (esda's default transform 'R'), z = (G - E[G]) / sqrt(V[G])."""
+    xy = np.array([centroid(c) for c in cells])
+    d = np.hypot(*(xy[:, None, :] - xy[None, :, :]).transpose(2, 0, 1))
+    w = (d <= band_m).astype(float)  # includes the diagonal (star)
+    if row_standardise:
+        w /= w.sum(axis=1, keepdims=True)
+    n, W, S1 = len(y), w.sum(axis=1), (w**2).sum(axis=1)
+    G = w @ y / y.sum()
+    EG = W / n
+    s2 = (y**2).sum() / n - y.mean() ** 2
+    VG = (n * S1 - W**2) / (n - 1) * s2 / y.sum() ** 2
+    return (G - EG) / np.sqrt(VG)
+
+
+def test_gi_star_matches_the_textbook_formula_on_an_irregular_grid():
+    # D6: an irregular set of observed cells (holes, an edge, an isolated cell), so neighbour counts differ
+    rng = np.random.default_rng(3)
+    cells = [c for c in _block(7) if rng.uniform() < 0.7] + [cell_id(20, 20, 2000)]
+    C, mu = rng.poisson(2.0, len(cells)).astype(float), rng.uniform(0.5, 3, len(cells))
+    y = (C + 0.5) / (mu + 0.5)
+    z = gi_star(C, mu, cells, band_m=2900)
+    for rs in (False, True):  # binary or row-standardised weights give the same z
+        assert np.allclose(z, _gi_star_textbook(y, cells, 2900, rs))
+
+
+def test_gi_star_matches_esda_when_installed():
+    esda, libpysal = pytest.importorskip("esda"), pytest.importorskip("libpysal")
+    rng = np.random.default_rng(4)
+    cells = [c for c in _block(6) if rng.uniform() < 0.8]
+    C, mu = rng.poisson(2.0, len(cells)).astype(float), rng.uniform(0.5, 3, len(cells))
+    w = libpysal.weights.DistanceBand(
+        np.array([centroid(c) for c in cells]), threshold=2900, silence_warnings=True
+    )
+    g = esda.G_Local((C + 0.5) / (mu + 0.5), w, star=True, permutations=0)
+    assert np.allclose(gi_star(C, mu, cells, band_m=2900), g.Zs)
 
 
 def test_cusum_alarms_on_planted_build_up_and_unobserved_days_leave_s_unchanged():
@@ -141,3 +181,23 @@ def test_run_cells_scores_only_observed_rows_in_the_evaluation_window(sim_data):
     assert (
         cells.groupby(["event_type", "cell_id", week])["gi_z"].nunique() == 1
     ).all()  # a day gets its week's z
+
+
+def test_cusum_h_is_calibrated_on_a_null_simulator_run(tmp_path, monkeypatch):
+    # D2: on a null run (no drops), the configured h gives about the target false-alarm rate, and _calibrate_h
+    # returns an h that meets the target while a slightly smaller one does not
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    cfg = tmp_path / "config.yaml"
+    shutil.copy(io.ROOT / "config.yaml", cfg)
+    monkeypatch.setattr(io, "CONFIG_PATH", cfg)
+    simulate(load(cfg)[0], 1, regime="null")
+    obs = io.read_stage("aggregate/observed")
+    m = obs[obs["exposure"] > 0].merge(io.read_stage("forecast/expected"), on=KEY)
+    series = [
+        (g["count"].to_numpy(), g["mu"].to_numpy(), g["phi"].to_numpy())
+        for _, g in m.sort_values("date").groupby(["event_type", "cell_id"])
+    ]
+    target = PARAMS["cusum_alarms_per_quarter"]
+    h = _calibrate_h(series, target)
+    assert _alarm_rate(series, h) <= target < _alarm_rate(series, h * 0.9)
+    assert _alarm_rate(series, PARAMS["cusum_h"]) == pytest.approx(target, rel=0.1)
