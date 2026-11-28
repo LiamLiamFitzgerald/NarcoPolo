@@ -576,3 +576,8 @@ def run_sites() -> None:
     io.write_stage("fuse/sites", sites_, prov)  # type: ignore[arg-type]
     io.write_stage("fuse/piers", piers, prov)  # type: ignore[arg-type]
     io.write_stage("fuse/links", links, prov)  # type: ignore[arg-type]
+    from fuse.fisheries import _gated  # fuse.fisheries imports this module
+
+    fish = _gated(frames[0], frames[1], frames[3], io.read_stage("reference/piers"))
+    if fish is not None:  # until #344-#346 land, nothing is written
+        io.write_stage("fuse/fisheries", fish, prov)  # type: ignore[arg-type]
