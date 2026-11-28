@@ -456,7 +456,9 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
     small = _small_rows(observed).set_index(["cell_id", "date"])["count"] if len(observed) else None
     mu = None
     if expected is not None and len(expected):
-        e = expected[expected["fold"].fillna(0) == 0] if "fold" in expected else expected
+        e = (
+            expected[expected["fold"] == 0] if "fold" in expected else expected
+        )  # live forecast (#198)
         mu = _small_rows(e).set_index(["cell_id", "date"])["mu"]
     lay = layers.set_index("cell_id") if layers is not None and len(layers) else None
     in_top = (
