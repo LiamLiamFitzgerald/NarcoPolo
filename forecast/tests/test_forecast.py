@@ -346,6 +346,17 @@ def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatc
     assert log.read_bytes() == before  # simulated runs record no decision
 
 
+def test_report_coverage_skips_rows_whose_mu_is_unknown():
+    """A cell with an unknown covariate has mu = NaN under the GLM; coverage must score the rest, not turn NaN."""
+    from forecast import forecast_all
+
+    observed, cells = _all_observed()
+    cells.loc[cells.cell_id == "2000_3_3", "dist_coast_m"] = np.nan
+    glm = {"slowdown": "glm", "dark_small": "glm"}
+    _, report = forecast_all(observed, cells, observed.date.max(), CFG, None, "x", glm)
+    assert np.isfinite(report.loc[report.chosen, "coverage"]).all(), report
+
+
 def test_unknown_covariate_does_not_inflate_its_neighbours_mu():
     from core.grid import parent
 
