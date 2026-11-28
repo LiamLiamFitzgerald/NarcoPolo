@@ -229,7 +229,7 @@ function drawSiteList() {
     const li = document.createElement("li"), head = document.createElement("div");
     const b = document.createElement("strong"); b.textContent = s.id;
     const nm = s.agreement_merged ?? 0; // D1 (#176): merged signal groups, not the raw 0-4 count
-    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = s.agreement_merged === null ? " (agreement not available)" : " " + "●".repeat(nm);
+    const badge = document.createElement("span"); badge.className = "badge"; badge.textContent = s.agreement_merged === null ? " (agreement not available)" : " " + (nm ? "●".repeat(nm) : "○");
     badge.title = s.agreement_merged === null ? "agreement not available yet" : `${nm} independent signal group(s) agree (angles, not proof)`;
     head.append(b, badge, ` score ${s.S.toFixed(2)}, p = ${s.p_perm.toFixed(3)}` + (s.bh_flag ? "" : " (not significant)"));
     const why = document.createElement("div"); why.textContent = s.reasons.join("; ");
