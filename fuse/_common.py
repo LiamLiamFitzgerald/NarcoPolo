@@ -9,7 +9,7 @@ from core.config import load
 
 # TODO(P1): add these keys to config.yaml under `p6` (#123). Values are docs/specs/P6.md, Parameters.
 _SPEC = {
-    "fdr_q": 0.1, "link_radius_m": 4000, "link_days": 7, "tau_days": 3, "half_life_days": 30,
+    "fdr_q": 0.1, "top_frac": 0.1, "inshore_max": 0.1, "link_radius_m": 4000, "link_days": 7, "tau_days": 3, "half_life_days": 30,
     "shift_days": 60, "n_shuffles": 999, "pier_tau_h": 1,
     "site_flags": True,  # the spec flags sites by BH over p_perm; config can switch it off (#269)
     "test_top_k": 15,  # #177: BH over the top-k sites by S only (= patrol.top_sites, the patrol candidates)

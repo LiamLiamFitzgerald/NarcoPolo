@@ -94,6 +94,7 @@ def test_list_passes_recovers_simulated_passes(simraw, raw, catalogue):
         "rel_orbit",
         "footprint",
         "end_time",
+        "heading_deg",
     ]
     assert len(out) == len(scenes)  # two slices each, one pass
     want = sorted(pd.Timestamp(m["start_time"]) for m in scenes)
@@ -106,7 +107,8 @@ def test_list_passes_recovers_simulated_passes(simraw, raw, catalogue):
     )
     assert shapely.from_wkt(out["footprint"].iloc[0]).buffer(1e-9).contains(fp)  # union of slices
     url, params = catalogue[0]
-    assert url == s1.CATALOGUE_URL and "IW_GRDH_1S" in params["$filter"]
+    assert url == CFG["ingest"]["s1_catalogue_url"]
+    assert CFG["ingest"]["s1_product_type"] in params["$filter"]
     assert "ContentDate/Start lt 2100-01-02T00:00:00.000Z" in params["$filter"]  # end day included
     entry = json.loads((raw / "manifest.json").read_text())["files"]
     assert any(
@@ -263,7 +265,9 @@ def test_fetch_scene_recovers_simulator_chip(simraw, raw, monkeypatch):
     }
     assert fmt == "GTiff"
     meta = json.loads(tif.with_suffix(".json").read_text())
-    assert set(meta) == set(sim_meta) and meta["prf_hz"] is None and meta["heading_deg"] is None
+    assert (
+        set(meta) == set(sim_meta) and meta["prf_hz"] is None and meta["heading_deg"] is None
+    )  # no heading given
     assert meta["start_time"] == row["time"].isoformat()
     files = json.loads((raw / "manifest.json").read_text())["files"]
     for p in (tif, tif.with_suffix(".json")):
@@ -312,3 +316,65 @@ def test_parallel_fetches_share_one_openeo_login(monkeypatch):
     for th in threads:
         th.join()
     assert len(logins) == 1 and len({id(c) for c in got}) == 1
+
+
+def test_heading_is_the_bearing_from_first_to_last_slice():
+    """#291: the fake catalogue's slices go north half first, then south: a descending track, about 180 deg.
+    The same slices in reverse time order fly north (about 0 deg); one slice gives no heading (NaN, never 0)."""
+    north, south = box(-9.0, 51.5, -8.0, 52.0), box(-9.0, 51.0, -8.0, 51.5)
+    t0 = pd.Timestamp("2026-11-22T06:47:00Z")
+    t1 = t0 + pd.Timedelta(seconds=25)
+    assert abs(s1._heading([t0, t1], [north, south]) - 180.0) < 1.0
+    assert (
+        s1._heading([t1, t0], [north, south]) < 1.0 or s1._heading([t1, t0], [north, south]) > 359.0
+    )
+    assert np.isnan(s1._heading([t0], [north]))
+
+
+def test_list_passes_heading_on_simulated_passes(simraw, raw, catalogue):
+    out = s1.list_passes(BBOX, date(2000, 1, 1), date(2100, 1, 1))
+    assert ((out["heading_deg"] - 180.0).abs() < 1.0).all()  # every fake pass flies north to south
+
+
+def test_fetch_scene_writes_the_measured_heading(simraw, raw, monkeypatch):
+    sim_tif = min((simraw / "s1").glob("*.tif"))
+    meta = json.loads(sim_tif.with_suffix(".json").read_text())
+    monkeypatch.setattr(s1, "_connection", lambda: FakeCube([], sim_tif))
+    tif = s1.fetch_scene(_row(meta) | {"heading_deg": 193.456})
+    assert json.loads(tif.with_suffix(".json").read_text())["heading_deg"] == 193.46
+    assert s1._float_or_none(float("nan")) is None and s1._float_or_none(None) is None
+
+
+def test_select_passes_spreads_rough_by_time_not_row_order(raw, tmp_path):
+    """#347: the same passes in shuffled rows pick the same rough passes, and come back sorted by time."""
+    hours = pd.date_range("2026-11-01", periods=10, freq="D", tz="UTC") + pd.Timedelta(hours=6)
+    _era5(tmp_path / "era5.nc", hours, [0.0, -8.5, -9.5] + [-99.0] * 7)
+    passes = pd.DataFrame(
+        {"pass_id": [f"p{i}" for i in range(10)], "time": hours, "orbit_dir": "DESCENDING",
+         "rel_orbit": 1, "footprint": box(*BBOX).wkt}
+    )  # fmt: skip
+    ordered = s1.select_passes(passes, tmp_path / "era5.nc")
+    shuffled = s1.select_passes(passes.sample(frac=1, random_state=3), tmp_path / "era5.nc")
+    assert list(shuffled["pass_id"]) == list(ordered["pass_id"]) == [f"p{i}" for i in range(10)]
+    assert list(shuffled["downloaded"]) == list(ordered["downloaded"])
+
+
+def test_unscored_passes_are_recorded_with_a_reason(raw, tmp_path, capsys):
+    """#347: a pass with no ERA5 hour, or no ERA5 sea point of the region in its footprint, is never chosen,
+    and says why in raw/s1_passes.json and on stderr instead of disappearing silently."""
+    hours = pd.date_range("2026-11-01", periods=2, freq="D", tz="UTC") + pd.Timedelta(hours=6)
+    _era5(tmp_path / "era5.nc", hours, [0.0, 0.0])
+    passes = pd.DataFrame(
+        {"pass_id": ["ok", "clip", "late"],
+         "time": [hours[0], hours[1], hours[1] + pd.Timedelta(hours=5)],
+         "orbit_dir": "DESCENDING", "rel_orbit": 1,
+         "footprint": [box(*BBOX).wkt, box(-7.95, 51.9, -7.9, 51.95).wkt, box(*BBOX).wkt]}
+    )  # fmt: skip
+    out = s1.select_passes(passes, tmp_path / "era5.nc")
+    assert list(out["downloaded"]) == [True, False, False]
+    saved = {r["pass_id"]: r for r in json.loads((raw / "s1_passes.json").read_text())}
+    assert saved["ok"]["skip_reason"] is None
+    assert "sea point" in saved["clip"]["skip_reason"]
+    assert "ERA5 hour" in saved["late"]["skip_reason"]
+    err = capsys.readouterr().err
+    assert "s1: clip not scored" in err and "s1: late not scored" in err and "s1: ok " not in err

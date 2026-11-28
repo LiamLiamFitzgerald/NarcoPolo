@@ -132,6 +132,7 @@ def test_no_identity_or_verdict_in_outputs(sim_out, tmp_path):
     assert res.returncode == 0
 
 
+@pytest.mark.slow
 def test_pure_run_is_deterministic_and_touches_no_files(sim_out):
     from fuse.link import _run
 

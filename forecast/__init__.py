@@ -363,6 +363,40 @@ def forecast_window(
     return expected_rows(model, evaluation_split(T), 0, frames, delta, min_se, level)
 
 
+def _live_splits(T: pd.Timestamp, days: int, block_days: int) -> list[Split]:
+    """Fold 0's fits (#269): the evaluation window, then block_days blocks back to T - days + 1.
+
+    Each block is its own Split with no embargo, like the evaluation window: fitted on every day before
+    the block and none inside it, so no live mu comes from a fit that saw its date (principle 6).
+    The blocks don't overlap, so each date is in exactly one; the oldest may be shorter.
+    """
+    window = evaluation_split(T)
+    first = T.normalize() - pd.Timedelta(days=days - 1)
+    out, start = [window], pd.Timestamp(window.cutoff)
+    while start > first:
+        lo = max(start - pd.Timedelta(days=block_days), first)
+        out.append(Split(lo.date(), embargo_days=0, test_days=(start - lo).days))
+        start = lo
+    return out
+
+
+def _live_rows(
+    model: str,
+    splits: list[Split],
+    frames: tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame],
+    params: tuple[float, float, float],
+) -> pd.DataFrame:
+    """fold 0 rows for every live block. A block with no observed day before it has nothing to fit, so it
+    gets no rows: its mu is unknown, never 0, and forecast/expected's mu can't be NaN (core/schemas), so a
+    missing row is how "unknown" is written; detectors join on the rows that exist."""
+    out = [
+        expected_rows(model, s, 0, frames, *params)
+        for s in splits
+        if (s.train(frames[0])["exposure"] > 0).any()
+    ]
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=EXPECTED_COLUMNS)
+
+
 def choose_baseline(
     event_type: str,
     skills: dict[str, pd.DataFrame],
@@ -473,7 +507,9 @@ def forecast_all(
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The whole forecast stage for both event types. Returns (expected rows, report).
 
-    expected: fold 0 (evaluation window) plus every backtest fold, all from the chosen model.
+    expected: fold 0 plus every backtest fold, all from the chosen model. fold 0 is the live forecast for
+    T - radar_history_days + 1 .. T (#269): the evaluation window plus weekly blocks before it, each fitted
+    only on days before its block; a block with no observed day before it has no rows (unknown).
     report: per type and model, backtest skill mean/min/max over all folds, the same over the folds
     the choice used (select_*), the window's phi and the NB2 alpha check.
     The model per type is chosen on backtest folds whose test week ends before the evaluation window
@@ -487,6 +523,9 @@ def forecast_all(
         "dark_small": cfg["split"]["n_folds_small"],
     }
     params = (_cfg(cfg, "ewma_delta"), _cfg(cfg, "ewma_min_se"), _cfg(cfg, "interval"))
+    # fold 0 spans the radar history for both types (docs/shared.md: T - 89 .. T), in blocks as long
+    # as a backtest fold's test week
+    live = _live_splits(T, _cfg(cfg, "radar_history_days"), cfg["split"]["test_days"])
     expected, report = [], []
     observed = observed.assign(date=pd.to_datetime(observed["date"]))  # core may give plain dates
     for event_type, k in n_folds.items():
@@ -517,7 +556,10 @@ def forecast_all(
             or _choose_or_default(event_type, picked, decisions, when, _select_margin(cfg))
         )
         window = forecast_window(chosen, T, frames, *params)
-        expected += [window, *(fold_rows[(chosen, i)] for i in range(1, k + 1))]
+        # fold 0 covers the radar history, not just the evaluation window (#269): older blocks
+        # are each fitted on the days before them
+        older = _live_rows(chosen, live[1:], frames, params)
+        expected += [window, older, *(fold_rows[(chosen, i)] for i in range(1, k + 1))]
 
         prod = evaluation_split(T)
         alpha = nb2_alpha(prod, prod.train(f2), X2)

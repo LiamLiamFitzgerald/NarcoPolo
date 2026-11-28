@@ -183,6 +183,7 @@ def test_run_cells_scores_only_observed_rows_in_the_evaluation_window(sim_data):
     ).all()  # a day gets its week's z
 
 
+@pytest.mark.slow
 def test_cusum_h_is_calibrated_on_a_null_simulator_run(tmp_path, monkeypatch):
     # D2: on a null run (no drops), the configured h gives about the target false-alarm rate, and _calibrate_h
     # returns an h that meets the target while a slightly smaller one does not
@@ -250,6 +251,7 @@ def test_run_cells_reads_post_storm_into_context(sim_data):
     ).any()  # the simulator writes post_storm, so the fact is known on some days
 
 
+@pytest.mark.slow
 def test_score_cells_is_the_pure_core_of_run_cells(
     tmp_path, monkeypatch
 ):  # #177: the null test calls it

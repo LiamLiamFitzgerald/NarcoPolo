@@ -41,6 +41,7 @@ def test_shift_rotates_each_series_inside_the_date_range(frames):
     assert (ev["time_utc"] != frames["match/events"]["time_utc"]).any()
 
 
+@pytest.mark.slow
 def test_null_share_near_or_below_q(frames):
     first = null_test(runs=5, seed=0)
     if first["runs"] == 0:
@@ -51,6 +52,7 @@ def test_null_share_near_or_below_q(frames):
     assert null_test(runs=5, seed=0) == first
 
 
+@pytest.mark.slow
 def test_null_loop_with_a_stand_in_fuse(frames, monkeypatch):
     """Stand-in for fuse.run: flag when a dark small boat follows a slowdown at the planted site within 4 days (the
     pick-up delay). Checks the loop (count, Wilson interval, A13 cut-back), not P6's statistics."""

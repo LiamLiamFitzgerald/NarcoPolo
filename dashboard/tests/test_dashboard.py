@@ -88,7 +88,7 @@ def test_fallback_server_serves_the_page_and_the_snapshot(tmp_path):
 
 # The Material Design theme (#249) must not break the demo rules: one offline file, colours only in
 # the token block, every theme defines every token, and the data label always has its own style.
-SIZE_BUDGET = 100_000  # bytes for index.html with no data; about 43 KB when the theme landed (#257)
+SIZE_BUDGET = 150_000  # bytes, no data; raised from 100 KB for the five briefing screens and seven charts (#318, #276): about 103 KB
 # 3-character hex needs a letter, so issue references such as #176 are not colours
 HEX = re.compile(r"#[0-9a-fA-F]{6}\b|#(?=[0-9]*[a-fA-F])[0-9a-fA-F]{3}\b")
 
@@ -132,3 +132,64 @@ def test_motion_and_hatching_rules_are_kept():
     assert (
         ".cell.hatched { fill: url(#hatch); }" in HTML
     )  # unobserved is a pattern, never a scale step
+
+
+# Words before numbers (#315): no sentence on the page may claim more than the system knows.
+BANNED = re.compile(r"\b(detected|suspect vessels?|confirmed|smuggling detected)\b", re.IGNORECASE)
+
+
+def test_phrases_live_in_one_block_and_use_the_fixed_vocabulary():
+    start, end = HTML.index("// phrases:start"), HTML.index("// phrases:end")
+    block = HTML[start:end]
+    assert "const PHRASES = {" in block and "worth checking" in block.lower()
+    # every quoted string in the page's script and every visible text node, not only the phrase block
+    script = HTML[HTML.index("<script>\n// Plain JavaScript") :]
+    strings = re.findall(r"\"((?:[^\"\\\n]|\\.)*)\"|`((?:[^`\\]|\\.)*)`", script)
+    text = re.sub(r"<script.*?</script>|<style.*?</style>|<[^>]+>", " ", HTML, flags=re.DOTALL)
+    words = [
+        re.sub(r"\$\{[^}]*\}", "", x) for pair in strings for x in pair if x
+    ]  # ${...} is code, not words
+    hits = [x for x in words if BANNED.search(x)] + BANNED.findall(text)
+    assert not hits, f"banned wording: {hits}"
+
+
+def test_every_screen_has_a_nav_link_and_a_question():
+    for name in ("this-week", "dropoff", "fisheries", "plan", "limits"):
+        assert f'<a href="#{name}" data-screen="{name}">' in HTML
+        assert re.search(
+            rf'<section class="screen" data-screen="{name}"[^>]*>\s*<h2 class="screen-title"[^>]*>[^<]+\?</h2>',
+            HTML,
+        ), name
+
+
+# "We checked" outcomes (#317, placeholder draft file until contract #329)
+def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path):
+    api = Api(tmp_path / "snapshot.json", tmp_path / "o" / "outcomes.json")
+    assert api.get_outcomes() == []
+    api.record_outcome("2000_1_2", "2026-W48", "found_nothing")
+    rows = api.record_outcome("2000_1_2", "2026-W48", "found_something")  # a correction replaces
+    assert [(r["site_id"], r["iso_week"], r["outcome"]) for r in rows] == [
+        ("2000_1_2", "2026-W48", "found_something")
+    ]
+    assert set(rows[0]) == {"site_id", "iso_week", "outcome", "entered_at"}  # places only, no text
+    for bad in (("2000_1_2", "2026-W48", "a boat called X"), ("a b", "2026-W48", "not_visited"),
+                ("2000_1_2", "week 48", "not_visited")):  # fmt: skip
+        try:
+            api.record_outcome(*bad)
+            raise AssertionError(bad)
+        except ValueError:
+            pass
+    assert len(api.get_outcomes()) == 1
+
+
+def test_fallback_server_records_an_outcome(tmp_path):
+    snap, out = tmp_path / "snapshot.json", tmp_path / "outcomes.json"
+    snap.write_text("{}")
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap, out)) as srv:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/outcomes.json"
+        body = json.dumps({"site_id": "s1", "iso_week": "2026-W48", "outcome": "not_visited"})
+        req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+        assert json.load(urllib.request.urlopen(req))[0]["outcome"] == "not_visited"
+        assert json.load(urllib.request.urlopen(url))[0]["site_id"] == "s1"
+        srv.shutdown()
