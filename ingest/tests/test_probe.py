@@ -23,7 +23,7 @@ def test_go_when_both_answer(raw, fake_gfw, monkeypatch):
     s1_ok, gfw_ok, notes = probe.probe()
     assert (s1_ok, gfw_ok) == (True, True) and "1 passes" in notes and "1 presence cells" in notes
     ((kind, kw),) = fake_gfw
-    assert kind == "presence" and kw["start_date"] == kw["end_date"] and kw["filters"] is None
+    assert kind == "presence" and kw["start_date"] < kw["end_date"] and kw["filters"] is None
     assert list(raw.glob("gfw/*.parquet"))  # the query is on disk, through the cache
 
 

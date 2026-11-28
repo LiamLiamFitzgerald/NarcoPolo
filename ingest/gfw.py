@@ -5,6 +5,8 @@ and hour, with no per-detection rows. That is the issue 1 fallback, so gfw_sar.p
 counted detection at its cell and hour, with scene_id null and length_m NaN.
 Filter strings, vessel types, speed bins and chunk size come from config `gfw`; none is guessed (#212).
 Every 4Wings request is cached on its own under raw/gfw/<key>.parquet, so an interrupted fetch resumes.
+Our windows are inclusive; 4Wings' date-range end is exclusive (a one-day range start = end returns no rows,
+checked on real data 28 Nov), so the day after `end` is sent.
 """
 
 import asyncio
@@ -169,7 +171,7 @@ def _query(req: dict) -> pd.DataFrame:
             temporal_resolution=req["temporal_resolution"],
             filters=req["filters"],
             start_date=req["start"],
-            end_date=req["end"],
+            end_date=(date.fromisoformat(req["end"]) + timedelta(days=1)).isoformat(),  # exclusive
             geojson={"type": "Polygon", "coordinates": [ring]},
         )
     )

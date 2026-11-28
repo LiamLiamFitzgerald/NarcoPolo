@@ -71,8 +71,9 @@ def test_sar_requests(raw, fake_gfw):
     assert [kw["filters"] for _, kw in fake_gfw] == [["m=1"], ["m=1"], ["m=0"], ["m=0"]]
     first = fake_gfw[0][1]
     second = fake_gfw[1][1]
-    assert (first["start_date"], first["end_date"]) == ("2026-11-01", "2026-11-01")
-    assert (second["start_date"], second["end_date"]) == ("2026-11-02", "2026-11-03")
+    # inclusive chunks [1, 1] and [2, 3]; 4Wings' end is exclusive, so the next day is sent
+    assert (first["start_date"], first["end_date"]) == ("2026-11-01", "2026-11-02")
+    assert (second["start_date"], second["end_date"]) == ("2026-11-02", "2026-11-04")
     assert first["spatial_resolution"] == "HIGH" and first["temporal_resolution"] == "HOURLY"
     ring = first["geojson"]["coordinates"][0]
     assert first["geojson"]["type"] == "Polygon" and ring[0] == ring[-1]
