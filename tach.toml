@@ -52,7 +52,7 @@ depends_on = ["core"]
 
 [[modules]]
 path = "fuse"
-depends_on = ["core"]
+depends_on = ["core", "detectors"]  # #269: fuse scores the radar history for the lag link
 
 [[modules]]
 path = "patrol"
