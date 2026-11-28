@@ -16,7 +16,7 @@ def fetch_all(config: Config) -> None:
     weather = era5.fetch_era5(bbox, radar_start, end)  # ERA5 first, to pick the calm passes
     passes = s1.select_passes(s1.list_passes(bbox, radar_start, end), weather)
     for row in passes[passes["downloaded"]].to_dict("records"):
-        s1.fetch_scene(row)
+        s1.fetch_scene({str(k): v for k, v in row.items()})
     gfw.fetch_sar(bbox, ship_start, end)
     gfw.fetch_presence(bbox, ship_start, end)
     osm.fetch_piers(bbox)
