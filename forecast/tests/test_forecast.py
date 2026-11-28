@@ -276,7 +276,8 @@ CFG = {
     "ewma_delta": DELTA,
     "ewma_min_se": MIN_SE,
     "interval": LEVEL,
-    "split": {"n_folds_slowdown": 12, "n_folds_small": 6},
+    "split": {"n_folds_slowdown": 12, "n_folds_small": 6, "test_days": 7},
+    "radar_history_days": 90,
 }
 
 
@@ -305,11 +306,11 @@ def test_stage_run_writes_window_and_fold_rows_with_a_report(tmp_path):
         ("glm",),
         ("ewma",),
     }
-    assert (expected.fold == 0).sum() == 2 * len(
-        evaluation_split(T).test(
-            observed[(observed.level == 2000) & (observed.event_type == "slowdown")]
-        )
-    )
+    # fold 0 = the radar history (#269): every 2 km row from T - 89 .. T, once, for both types
+    fine = observed[observed.level == 2000]
+    live = fine[fine.date > T - pd.Timedelta(days=90)]
+    assert (expected.fold == 0).sum() == len(live)
+    assert not expected[expected.fold == 0].duplicated(["cell_id", "date", "event_type"]).any()
     assert report.chosen.sum() == 2 and not (tmp_path / "D.md").exists()  # forced: nothing recorded
     assert (report.nb2_alpha < 0.1).all()  # the fake simulator is Poisson: NB2 agrees with phi ~ 1
     print(report.round(3).to_string())
@@ -356,12 +357,35 @@ def test_p1_simulator_runs_through_both_p5_run_entry_points(tmp_path, monkeypatc
     assert {et: set(g.model) for et, g in expected.groupby("event_type")} == {
         et: {m} for et, m in chosen.items()
     }
-    # finite mu and phi wherever the cell was observed; detectors divide by max(phi, 1)
+    # finite mu and phi wherever the cell was observed and its block had an observed day before it;
+    # detectors divide by max(phi, 1). A live block with no history (#269) has no rows, never 0.
     fine = obs[obs.level == 2000].assign(date=lambda d: pd.to_datetime(d.date))
-    seen = expected.assign(date=pd.to_datetime(expected.date)).merge(
-        fine.loc[fine.exposure > 0, ["cell_id", "date", "event_type"]]
-    )
-    assert len(seen) and np.isfinite(seen[["mu", "phi"]]).all().all()
+    seen_rows = fine.loc[fine.exposure > 0, ["cell_id", "date", "event_type"]]
+    seen = expected.assign(date=pd.to_datetime(expected.date)).merge(seen_rows)
+    first = seen_rows.groupby("event_type").date.min()
+    from core.io import read_snapshot
+    from forecast import _live_splits
+
+    T = pd.Timestamp(read_snapshot()["T"])
+    cut = pd.Series(pd.NaT, index=seen.index, dtype="datetime64[ns]")
+    for s in _live_splits(T, cfg["radar_history_days"], cfg["split"]["test_days"]):
+        inside = (seen.fold == 0) & seen.date.isin(s.test(seen).date)
+        cut[inside] = pd.Timestamp(s.cutoff)
+    blind = (seen.fold == 0) & (cut <= seen.event_type.map(first))
+    assert len(seen) and np.isfinite(seen[["mu", "phi"]]).all().all() and not blind.any()
+    # fold 0 spans the radar history (#269): every date for slowdowns (24 months before it); for
+    # dark_small every date after the first block, which has no radar day before it
+    live = expected[expected.fold == 0].assign(date=lambda d: pd.to_datetime(d.date))
+    days = cfg["radar_history_days"]
+    for et, g in live.groupby("event_type"):
+        rows = fine[fine.event_type == et]
+        want = set()
+        for s in _live_splits(T, days, cfg["split"]["test_days"]):
+            if (s.train(rows).exposure > 0).any():  # the block has an observed day before it
+                want |= set(s.test(rows).date)
+        assert set(g.date) == want, et
+    assert live[live.event_type == "slowdown"].date.nunique() == days  # 24 months before it
+    assert live.date.min() >= T - pd.Timedelta(days=days - 1) and live.date.max() == T
     assert log.read_bytes() == before  # simulated runs record no decision
 
 
@@ -441,8 +465,11 @@ def test_glm_is_fitted_once_per_fold(monkeypatch):
     observed, cells = _all_observed()
     forced = {"slowdown": "glm", "dark_small": "ewma"}
     forecast_all(observed, cells, observed.date.max(), CFG, None, "x", forced)
-    # one fit per backtest fold for the comparison, plus the window only where the GLM is chosen
-    assert len(calls) == (12 + 1) + 6
+    # one fit per backtest fold for the comparison, plus each live block only where the GLM is chosen
+    from forecast import _live_splits
+
+    blocks = len(_live_splits(observed.date.max(), 90, 7))
+    assert len(calls) == (12 + blocks) + 6
 
 
 @pytest.mark.parametrize("event_type", TYPES)
@@ -553,3 +580,68 @@ def test_a_fit_problem_is_one_log_line_not_a_warning(caplog):
         _log_fit("GLM", SPLIT, [], True, "10 rows")  # a clean fit says nothing
     assert len(caplog.records) == 1
     assert "did not converge for cutoff" in caplog.text and "UserWarning" in caplog.text
+
+
+def test_live_blocks_cover_the_radar_history_once_each_fitted_before_its_dates():
+    """#269: fold 0 = the evaluation window plus weekly blocks back to T - 89, no date twice or missing."""
+    from forecast import _live_splits
+
+    for T in pd.date_range("2026-11-02", periods=7):  # every weekday
+        splits = _live_splits(T, 90, 7)
+        days = pd.DataFrame({"date": pd.date_range(T - pd.Timedelta(days=120), T)})
+        tested = pd.concat([s.test(days) for s in splits]).date
+        assert splits[0] == evaluation_split(T)
+        assert tested.is_unique and set(tested) == set(pd.date_range(T - pd.Timedelta(days=89), T))
+        for s in splits:  # no embargo, and every training day is before every scored day
+            assert s.embargo_days == 0 and s.train(days).date.max() < s.test(days).date.min()
+            s.assert_train(s.train(days))
+        assert all(1 <= s.test_days <= 7 for s in splits[1:])
+
+
+@pytest.mark.parametrize("model", ["ewma", "glm"])
+def test_a_live_block_never_sees_its_own_days(model):
+    """Spiking one block's counts must not move that block's mu (nor any earlier block's)."""
+    from aggregate import to_coarse
+    from core.observed import Observed
+    from forecast import _live_rows, _live_splits
+
+    frames = _frames("dark_small")
+    f2 = frames[0]
+    T = f2.date.max()
+    splits = _live_splits(T, 90, 7)
+    params = (DELTA, MIN_SE, LEVEL)
+    target = splits[3]
+    spiked2 = f2.copy()
+    inside = target.test(f2)
+    spiked2.loc[inside.index[inside.exposure > 0], "count"] += 50  # observed rows only
+    spiked = (spiked2, to_coarse(Observed(spiked2)).frame, frames[2])
+    before = _live_rows(model, splits, frames, params)
+    after = _live_rows(model, splits, spiked, params)
+    same = before.date < pd.Timestamp(target.cutoff) + pd.Timedelta(days=target.test_days)
+    pd.testing.assert_series_equal(before.mu[same], after.mu[same])
+    assert not np.allclose(
+        before.mu[~same], after.mu[~same], equal_nan=True
+    )  # later blocks do learn
+
+
+def test_a_live_block_with_no_history_is_unknown_not_zero():
+    """dark_small history starts at T - 89: the oldest block has nothing before it, so it gets no rows."""
+    from aggregate import to_coarse
+    from core.observed import Observed
+    from forecast import _live_rows, _live_splits
+
+    f2, _, X2 = _frames("dark_small")
+    T = f2.date.max()
+    f2 = f2[f2.date > T - pd.Timedelta(days=90)]  # as aggregate writes it: radar_history_days only
+    frames = (f2, to_coarse(Observed(f2)).frame, X2)
+    splits = _live_splits(T, 90, 7)
+    rows = _live_rows("glm", splits, frames, (DELTA, MIN_SE, LEVEL))
+    blind = [s for s in splits if not (s.train(f2).exposure > 0).any()]
+    assert splits[-1] in blind  # the oldest block starts with the history: nothing before it
+    for s in splits:
+        dates = set(s.test(f2).date)
+        if s in blind:
+            assert not rows.date.isin(dates).any()  # no rows: unknown, never mu = 0
+        else:
+            assert dates <= set(rows.date)
+    assert np.isfinite(rows[["mu", "phi", "lo90", "hi90"]]).all().all()
