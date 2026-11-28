@@ -9,7 +9,15 @@ import pandas as pd
 from core import io
 from core.schemas import SCHEMAS
 from detect._common import CFG, cell_ids
-from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
+from detect.cfar import (
+    _censored_background,
+    alpha,
+    background,
+    clusters,
+    flag,
+    merge_pols,
+    size_class,
+)
 from detect.ghost import azimuth_heading, ghost_offset_m, is_ghost
 from detect.pboat import features, predict_pboat
 from detect.scene import apply_masks, load_scene
@@ -58,7 +66,7 @@ def run_pass(
     per_pol = {}
     for pol, raw in (("vv", vv), ("vh", vh)):
         m = apply_masks(raw, land, static)
-        mu = background(m)
+        mu = _censored_background(m, a) if CFG["cfar_censor"] else background(m)
         per_pol[pol] = (m, mu, clusters(flag(m, mu, a), m, mu, meta=meta))
     cands = merge_pols(per_pol["vv"][2], per_pol["vh"][2])
     # a blob seen in one polarisation only gets the other's measured ratio at its centre

@@ -15,6 +15,8 @@ _SPEC: dict[str, Any] = {
     "land_buffer_m": 300,
     "cfar_outer": 41,
     "cfar_guard": 11,
+    # #267: leave ring pixels already above alpha * mu_b out of the background (one pass). TODO(P1): config key.
+    "cfar_censor": True,
     "p_fa": 1e-7,  # then calibrated on injection and null tests
     "enl": 4.4,  # spec: estimate_enl default, also the simulator's L (issue 8)
     "cluster_px": [1, 200],

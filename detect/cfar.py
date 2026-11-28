@@ -36,6 +36,20 @@ def background(
         return np.where(n > 0.5, s / n, np.nan)
 
 
+def _censored_background(
+    img: np.ndarray, a: float, outer: int = CFG["cfar_outer"], guard: int = CFG["cfar_guard"]
+) -> np.ndarray:
+    """background() again with ring pixels already above a * mu_b left out (censored CFAR, #267).
+
+    One pass: a bright ship in a small boat's ring no longer raises the boat's background, so the boat is not hidden
+    within ~200 m of the ship. Open sea barely changes: at p_fa = 1e-7 almost no sea pixel is above a * mu_b.
+    """
+    mu = background(img, outer, guard)
+    with np.errstate(invalid="ignore"):
+        bright = img > a * mu
+    return background(np.where(bright, np.nan, img), outer, guard)
+
+
 def alpha(L: float, p_fa: float = CFG["p_fa"]) -> float:
     """Threshold multiplier from the gamma speckle tail: P(I / mean > alpha) = p_fa."""
     return float(stats.gamma.isf(p_fa, a=L, scale=1 / L))
