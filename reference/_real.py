@@ -24,6 +24,7 @@ from reference.land import land
 
 class Reference(NamedTuple):
     cells: gpd.GeoDataFrame  # 2 km and 10 km rows, reference/cells schema
+    land: gpd.GeoDataFrame  # reference/land: one (multi)polygon row, id 0 (#133, P7's basemap)
     piers: gpd.GeoDataFrame
     travel: pd.DataFrame
     rasters: dict[
@@ -85,9 +86,8 @@ def build(
     raw = raw or io.raw_root()
     cfg = rc._ref()
     reg = reg if reg is not None else region()
-    land_poly = shapely.union_all(
-        land(gpd.read_file(raw / "coastline.gpkg"), reg).geometry.to_numpy()
-    )
+    land_gdf = land(gpd.read_file(raw / "coastline.gpkg"), reg)
+    land_poly = shapely.union_all(land_gdf.geometry.to_numpy())
     cells = rc.build_cells(reg, land_poly)
     cells["inshore_frac"] = _inshore(raw, cells).to_numpy()
     p2 = rc.regrid_presence(pd.read_parquet(raw / "gfw_presence.parquet"))
@@ -117,7 +117,7 @@ def build(
         "reference/static_mask_10m": (static10, masks.PX),
         "reference/sea_250m": (sea, int(cfg["sea_raster_m"])),
     }
-    return Reference(cells, piers, travel, rasters)
+    return Reference(cells, land_gdf, piers, travel, rasters)
 
 
 def write_raster(name: str, array: NDArray[np.uint8], pixel_m: int) -> Path:
