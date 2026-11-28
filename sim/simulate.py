@@ -19,6 +19,7 @@ from shapely.geometry import Point, box
 from core import io
 from core.config import Config
 from core.grid import COARSE, FINE, _origin, cell_id, parent
+from sim._scores import cusum, gi_star
 from sim.raw import write_raw
 from sim.regimes import REGIMES, plant
 from sim.scenes import write_scenes
@@ -204,7 +205,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     rng = _rng(config, "slowdowns", seed)
     hot = (fine["anchorage"] | fine["port_zone"]).to_numpy()
     ship_rate = np.where(hot, s["slowdown_rate_hot"], s["slowdown_rate_cold"])
-    sc = rng.poisson(np.broadcast_to(ship_rate, (days, n)))
+    # rates are per full sea cell (docs/specs/P3.md), and slowdown exposure is sea_frac, so a 60%-sea shore cell gets
+    # 60% of the slowdowns; otherwise its expected count is 0.6 of its true one
+    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days, n)))
     sd, sci = np.nonzero(sc)
     sd, sci = np.repeat(sd, sc[sd, sci]), np.repeat(sci, sc[sd, sci])
     ns = len(sd)
@@ -262,7 +265,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     )  # fmt: skip
     ccx = x0 + (fine["ix"].to_numpy() + 0.5) * FINE  # cell centres
     ccy = y0 + (fine["iy"].to_numpy() + 0.5) * FINE
-    pick_days, pick_cells = [], []
+    pick_days, pick_cells, picked = [], [], []  # picked: the drop day each pick-up follows
     for dd, dc in zip(drop_days, drop_cells, strict=True):
         if rng.random() >= s["pickup_prob"]:
             continue
@@ -273,6 +276,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         if pd_ < days:
             pick_days.append(pd_)
             pick_cells.append(dc)
+            picked.append(dd)
     pick_days, pick_cells = np.asarray(pick_days, float), np.asarray(pick_cells, int)
     nd, npk = len(drop_days), len(pick_days)
     ships = pd.concat(
@@ -547,7 +551,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "lo90": poisson.ppf(0.05, mu),
             "hi90": poisson.ppf(0.95, mu),
             "model": "sim_truth",
-            "fold": pd.array([None] * len(f), dtype="Int64"),
+            "fold": pd.array(
+                [0] * len(f), dtype="Int64"
+            ),  # the live forecast, as forecast writes it (#172)
         }
     )
 
@@ -569,8 +575,6 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
             "event_type": fc["event_type"].to_numpy(),
             "p_mid": pmid,
             "bh_flag": bh,
-            "gi_z": 0.0,
-            "cusum_s": 0.0,
             "context": 0.5,
             "U": u,
             "agreement": (u >= 0.9).astype(int),
@@ -579,6 +583,15 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     c_seen, mu_seen = fc["count"].to_numpy(), mu[seen]
     fuse_cells["y"] = (c_seen + 0.5) / (mu_seen + 0.5)
     week = pd.to_datetime(fuse_cells["date"]).dt.strftime("%G-W%V")
+    p6, kind, cid = (
+        config["p6"],
+        fuse_cells["event_type"].to_numpy(),
+        fuse_cells["cell_id"].to_numpy(),
+    )
+    fuse_cells["gi_z"] = gi_star(cid, kind, week.to_numpy(), c_seen, mu_seen, p6["gi_band_m"])
+    fuse_cells["cusum_s"] = cusum(
+        cid, kind, fc["day"].to_numpy(), c_seen, mu_seen, p6["cusum_rho"], p6["cusum_h"]
+    )
     g = pd.DataFrame(
         {"k": fuse_cells["cell_id"] + fuse_cells["event_type"] + week, "c": c_seen, "m": mu_seen}
     )
@@ -590,9 +603,15 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     site_cells = list(
         dict.fromkeys(drop_cells.tolist())
     )  # first-drop order; `fixed` has exactly one
-    rows = []
+    # one link per planted slowdown: L = 1 if a pick-up followed it, aged from its day to T, S = sum L 0.5^(age / h)
+    half_life, rows, links = config["p6"]["half_life_days"], [], []
     for j, c in enumerate(site_cells):
         npk_j = int((pick_cells == c).sum())
+        dd_c = drop_days[drop_cells == c]
+        L_c = np.isin(dd_c, picked).astype(float)
+        age_c = np.clip(days - 1 - dd_c, 0, None)
+        S_c = float((L_c * 0.5 ** (age_c / half_life)).sum())
+        links.append(pd.DataFrame({"site_id": str(cell_ids[c]), "L": L_c, "age_days": age_c}))
         seen_j = int((pk["cell"] == c).mul(pk["pass"].ge(0)).sum())
         dist = np.hypot(piers["geometry"].x - ccx[c], piers["geometry"].y - ccy[c])
         top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
@@ -602,7 +621,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
                 "x_m": ccx[c],
                 "y_m": ccy[c],
                 "n_slowdowns": int((drop_cells == c).sum()),
-                "S": float(npk_j),
+                "S": S_c,
                 "p_perm": 0.01,
                 "bh_flag": True,
                 "recurrence": npk_j,
@@ -612,6 +631,48 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
                 "top_piers": top,
             }
         )
+    # stand-in sites (#104): rows with no drops in truth, so patrol and the dashboard have 16+ sites to rank and route.
+    # Planted sites stay first and above every stand-in on S; no stand-ins under `null`. Values are stand-ins, not
+    # statistics: S falls by rank below the lowest planted S, a quarter are flagged, agreement and follow-ups vary.
+    n_in = s["stand_in_sites"] if rows else 0
+    pool = np.flatnonzero(
+        ok
+    )  # the planted site's candidates: 5-20 km out, off the lane, exclusion and wind farm
+    chosen = list(site_cells)
+    for c in _rng(config, "sites", seed).permutation(pool):
+        if len(chosen) == len(site_cells) + n_in:
+            break
+        if np.hypot(ccx[c] - ccx[chosen], ccy[c] - ccy[chosen]).min() > s["site_gap_m"]:
+            chosen.append(int(c))
+    low = min(r["S"] for r in rows) if rows else 0.0
+    for k, c in enumerate(chosen[len(site_cells) :], start=1):
+        S_k = low * (n_in + 1 - k) / (n_in + 1)
+        m = int(np.ceil(S_k))
+        links.append(
+            pd.DataFrame(
+                {"site_id": [str(cell_ids[c])] * m, "L": [S_k / max(m, 1)] * m, "age_days": 0.0}
+            )
+        )
+        dist = np.hypot(piers["geometry"].x - ccx[c], piers["geometry"].y - ccy[c])
+        top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
+        rec = n_in + 1 - k
+        rows.append(
+            {
+                "site_id": str(cell_ids[c]),
+                "x_m": ccx[c],
+                "y_m": ccy[c],
+                "n_slowdowns": rec,
+                "S": S_k,
+                "p_perm": k / (n_in + 1),
+                "bh_flag": k <= n_in // 4,
+                "recurrence": rec,
+                "followup_unobserved": rec * (k % 2),
+                "agreement": (n_in - k) % 5,
+                "reasons": ["stand-in site (simulated, no planted drops)"],
+                "top_piers": top,
+            }
+        )
+    site_cells = chosen
     sites = pd.DataFrame(rows, columns=SITE_COLS).astype(
         {
             "x_m": float,
@@ -636,18 +697,11 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         }
     )
 
-    # fuse/piers: P_j = sum of S x exp(-T / 1 h) over the planted sites; fuse/links: S split into links of age 0
+    # fuse/piers: P_j = sum of S x exp(-T / 1 h) over the planted sites
     P_j = np.zeros(len(piers))
-    links = []
-    for site_id, c, S in zip(sites["site_id"], site_cells, sites["S"], strict=True):
+    for c, S in zip(site_cells, sites["S"], strict=True):
         t_site = travel[travel["cell_id"] == cell_ids[c]].set_index("pier_id")["hours"]
         P_j = P_j + S * np.exp(-t_site.reindex(piers["pier_id"]).to_numpy())
-        k = int(np.ceil(S))
-        links.append(
-            pd.DataFrame(
-                {"site_id": [site_id] * k, "L": [S / max(k, 1)] * k, "age_days": [0.0] * k}
-            )
-        )
     fuse_piers = pd.DataFrame({"pier_id": piers["pier_id"], "P_j": P_j})
     fuse_links = (
         pd.concat(links, ignore_index=True)

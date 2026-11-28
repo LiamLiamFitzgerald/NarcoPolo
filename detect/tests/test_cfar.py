@@ -1,8 +1,8 @@
 import numpy as np
 
-from detect._standin import make_scene
 from detect.cfar import alpha, background, estimate_enl, flag
 from detect.scene import apply_masks, to_linear
+from detect.tests._scene import make_scene
 
 SEA = 0.01
 

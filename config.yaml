@@ -49,6 +49,36 @@ validate:
   injection_n_per_pass: 10   # TODO(P1): not in the spec
   injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
 
+# P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
+p4:
+  pixel_m: 10                # shared.md issue 5: 10 m pixels on the fixed region grid
+  land_buffer_m: 300         # CFAR step 1: land plus a 300 m buffer set to NaN
+  cfar_outer: 41
+  cfar_guard: 11
+  p_fa: 1.0e-7               # then calibrated on the injection and null tests (CFAR step 4)
+  enl: 4.4                   # estimate_enl default
+  cluster_px: [1, 200]
+  size_small_max_px: 4       # size_class: 1-4 small, 5-20 medium, > 20 large
+  size_medium_max_px: 20
+  pol_agree_m: 30
+  radar_wavelength_m: 0.0555 # ghost rule: lambda ~ 5.55 cm
+  ghost_db: 20
+  ghost_tol_m: 200
+  ghost_band_m: [4000, 8000] # ghost_offset_m when PRF is missing
+  ais_window_min: 30
+  match_gate_m: 500
+  match_big_cost: 1000000000 # matching step 2: large finite cost
+  presence_slow_kn: 2        # issue 3: slowest GFW presence bin
+  slow_kn: 3
+  cruise_kn: 8
+  slow_min: 20
+  storm_hs_m: 4
+  rolling_median_min: 10     # slowdown step 2
+  min_pings_cruise_hour: 3   # sparse AIS (Resolved ambiguities)
+  min_pings_slow: 2
+  slowdown_hour_utc: 12      # slowdowns_from_presence: 12:00 UTC of the date
+  ship_types: [[70, 79], [80, 89]]  # cargo, tankers
+
 sim:                      # docs/specs/P1.md, "Simulator defaults"
   days: 120
   beta0: -4
@@ -72,10 +102,33 @@ sim:                      # docs/specs/P1.md, "Simulator defaults"
   slowdown_rate_hot: 1.0         # ship slowdowns per cell-day in the anchorage and port zones
   slowdown_rate_cold: 0.01       # ... everywhere else
   pass_width_frac: [0.4, 0.8]    # share of the region (east-west) one pass covers
-  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9}
+  seed_offsets: {map: 1, weather: 2, boats: 3, slowdowns: 4, pickups: 5, passes: 6, observe: 7, scenes: 8, raw: 9, sites: 10}
+  stand_in_sites: 15         # TODO(P1) #104: extra fuse/sites rows with no drops, so P7 has 16+ sites to rank and route
+  site_gap_m: 4000           # A2: no site within 4 km of another
 
 # A10: each stage file is stamped with a hash of only the config keys it reads, so unrelated edits do not make it stale.
 # Simulated files also hash `sim`. TODO(owners): each module adds the keys its stage really reads.
+# P6 detectors and fuse (#123): docs/specs/P6.md Parameters, A1 and A3; the same values as P6's code defaults
+p6:
+  fdr_q: 0.1
+  gi_band_m: 2900            # binary Gi* weights: the 8 surrounding 2 km cells
+  gi_perm: 999
+  cusum_rho: 2               # A1
+  cusum_h: 0.5               # TODO(P6): not in the spec (#124); D2 calibrates it on null-regime runs
+  top_frac: 0.1
+  inshore_max: 0.1           # context facts, docs/specs/P6.md step 4
+  coast_min_m: 2000
+  coast_max_m: 25000
+  slow_hours_min: 0.33       # shared.md issue 3
+  slow_hours_max: 3
+  link_radius_m: 4000
+  link_days: 7
+  tau_days: 3
+  half_life_days: 30
+  shift_days: 60
+  n_shuffles: 999
+  pier_tau_h: 1
+
 reads:
   reference/cells: [x0, y0, region_bbox, reference]
   reference/piers: [x0, y0, region_bbox, reference]
@@ -114,3 +167,12 @@ learn:
   min_week_share: 0.5         # TODO(P1): least share of the weekly budget any week gets
   n_regret_samples: 200       # TODO(P1): posterior draws for expected-regret exploration
   n_seeds_quick: 3            # make validate; n_seeds only for the final report
+  train:                      # L4 fit (validate/train.py, #158); tune on train regimes only
+    l2: 1.0                   # TODO(P1): rung 1 ridge penalty on standardised weights (scikit-learn C = 1)
+    n_eff_min: 500            # L4 step 3 (Phillips et al.)
+    pos_mult: 5               # L4 step 3: n_eff = min(n, pos_mult x positives)
+    promote_se: 2             # L4 step 4: promote on a gain > promote_se x SE
+    nam_hidden: 32            # TODO(P1): ReLU units per feature net (rung 2)
+    nam_epochs: 300           # TODO(P1): full-batch Adam steps
+    nam_lr: 0.01              # TODO(P1): Adam step size
+    nam_l2: 0.001             # TODO(P1): weight decay
