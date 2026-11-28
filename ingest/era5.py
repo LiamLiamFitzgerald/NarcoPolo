@@ -58,6 +58,10 @@ def _cds_requests(bbox: Bbox, start: date, end: date) -> list[dict]:
             "day": [f"{d.day:02d}" for d in days],
             "time": [f"{h:02d}:00" for h in range(24)],  # UTC
             "area": [lat_max, lon_min, lat_min, lon_max],  # N, W, S, E
+            "grid": [
+                0.25,
+                0.25,
+            ],  # #216 (Liam, 28 Nov): CDS interpolates waves (native 0.5°) to the data dictionary's 0.25°
             "data_format": "netcdf",
             "download_format": "unarchived",
         }
