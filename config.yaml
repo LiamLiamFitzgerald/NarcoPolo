@@ -46,6 +46,16 @@ patrol:
   aircraft_budget_h: 4
   aircraft_dwell_h: 0.2
 
+# #103 (Liam, 28 Nov): plan start and base port, read by patrol. Until a human checks Haulbowline's position on a map,
+# they stay commented out, so plans keep saying "stand-in" (and real data refuses). Then uncomment both:
+# base_port: {lon: -8.32, lat: 51.84}   # TODO(P7) #103: approximate (from memory), Haulbowline, Cork Harbour
+# patrol_start_hour_utc: 0              # TODO(P7) #103: plans start this many hours into the day after T
+
+# #272 (Liam, 28 Nov): baseline per event type (D8)
+forecast:
+  model_by_type: auto        # choose GLM or EWMA per type on backtest folds before the evaluation window
+  select_margin: 0           # the spec's rule: the higher mean skill wins
+
 coverage:
   calm_wind_ms: 6            # provisional until the recall curve exists
   calm_hs_m: 1.5             # provisional
@@ -63,6 +73,17 @@ ingest:
   infomar_bathy: null         # TODO(P2): {url, licence}: licence must include INFOMAR's CC BY 4.0 attribution line
   s1_calm_share: 0.5          # docs/specs/P2.md: download a pass if >= 50% of the region cells it covers are calm
   s1_rough_passes: 5          # docs/specs/P2.md: plus 5 rough passes for P1's recall curve
+  # #261 (Liam, 28 Nov): accepted as P2 checked them live on 2026-11-28 (not in the spec)
+  s1_openeo_url: https://openeo.dataspace.copernicus.eu
+  s1_catalogue_url: https://catalogue.dataspace.copernicus.eu/odata/v1/Products
+  s1_product_type: IW_GRDH_1S
+
+# #212 (Liam, 28 Nov): a human fills every value from the GFW 4Wings docs; the real-data run waits for it
+gfw:                         # TODO(P2): https://globalfishingwatch.org/our-apis/documentation#4wings-api
+  chunk_days: null           # max days per 4Wings report request
+  sar_matched: {"true": null, "false": null}   # label -> 4Wings filter for public-global-sar-presence:latest
+  vessel_types: {cargo: null, carrier: null}   # #239: slowdowns use cargo (tankers assumed inside it) + carrier
+  speed_bins: {}             # label -> filter on speed; P4 needs the "<2" bin, P3 a fast bin for lanes
 
 validate:
   injection_match_m: 30      # docs/specs/P1.md, validate block: an injected spot is recovered if a candidate is within 30 m
@@ -186,6 +207,7 @@ learn:
   prior_strength: 5           # n0 virtual visits, TODO(P1)
   discount: 0.9               # per week, TODO(P1)
   exact_max_nodes: 16         # TODO(P1)
+  exact_min_gain_pct: 0       # #229 (Liam, 28 Nov): keep the exact solver; it is never worse than greedy + 2-opt
   displace_visit_days: 14     # TODO(P1): sim only; `displacing` regime: the simulator's own patrol visits the active site this often
   attention_tau: 1.0          # TODO(P1): softness of regret-based CCT weights
   attention_floor: 0.05       # TODO(P1): minimum weight per merged group
