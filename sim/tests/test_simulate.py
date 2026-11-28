@@ -58,8 +58,12 @@ def test_same_seed_same_files(world, tmp_path_factory):
 def test_every_stage_file_reads_back_valid(world):
     data, mp = world
     mp.setenv("NARCO_DATA", str(data))
-    for name in io.SCHEMAS:
+    crew = {
+        "patrol/outcomes"
+    }  # #329: entered by crews in the dashboard; the simulator never invents them
+    for name in set(io.SCHEMAS) - crew:
         assert len(io.read_stage(name)) > 0
+    assert not any(io.stage_path(name).exists() for name in crew)
     assert (
         io.read_stage("forecast/expected")["fold"] == 0
     ).all()  # live forecast, like forecast.run (#172)
