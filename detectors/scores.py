@@ -180,9 +180,9 @@ def run_cells() -> None:
     window only. CUSUM runs over all observed history so a build-up before the window still counts."""
     obs = Observed(io.read_stage("aggregate/observed")).observed_rows()
     exp = io.read_stage("forecast/expected")
-    # Live forecast only (fold 0, #74 item 6; the simulator's truth rows have fold NA). Backtest folds would
-    # duplicate cell-days.
-    exp = exp[exp["fold"].fillna(0) == 0]
+    # Live forecast only (fold 0, #74 item 6; the simulator writes 0 too, #172). Backtest folds would duplicate
+    # cell-days.
+    exp = exp[exp["fold"] == 0]
     m = obs.merge(exp, on=_KEY).sort_values(["date", "cell_id"])
     m["cusum_s"] = 0.0
     for _, g in m.groupby(["event_type", "cell_id"]):
