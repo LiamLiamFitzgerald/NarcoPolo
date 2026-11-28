@@ -29,6 +29,7 @@ VALID = {
         sea_frac=0.9,
     ),
     "reference/piers": row(pier_id="p1", name="Pier", geometry=Point(1, 1), road_access=True),
+    "reference/land": row(id=0, geometry=box(0, 0, 2000, 1000)),
     "reference/travel_hours": row(cell_id="2000_0_0", pier_id="p1", hours=0.5),
     "coverage/exposure": row(
         cell_id="2000_0_0",

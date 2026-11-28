@@ -621,6 +621,11 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     for name, frame in {
         "reference/cells": gpd.GeoDataFrame(cells, crs=32629),
         "reference/piers": piers,
+        "reference/land": gpd.GeoDataFrame(  # north of the shore line, as raw/coastline.gpkg draws it
+            {"id": [0]},
+            geometry=[box(x0, y0 + (NY - 1 + SHORE_FRAC) * FINE, x0 + NX * FINE, y0 + NY * FINE)],
+            crs=32629,
+        ),
         "reference/travel_hours": travel,
         "coverage/exposure": exp_df,
         "detect/detections": detections,
