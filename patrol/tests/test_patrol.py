@@ -312,3 +312,40 @@ def test_patrol_parameters_are_the_spec_values_overlaid_by_config():
     assert (patrol.AIR_KN, patrol.AIR_BUDGET_H, patrol.AIR_DWELL_H) == (
         want["aircraft_kn"], want["aircraft_budget_h"], want["aircraft_dwell_h"],
     )  # fmt: skip
+
+
+def _answers(rows):
+    return pd.DataFrame(rows, columns=["site_id", "iso_week", "outcome"])
+
+
+FLAT = {s: {"alpha": 1.0, "beta": 1.0, "last_visit_week": None} for s in ("a", "b", "c")}
+
+
+def test_learn_recovers_the_discounted_posterior_means():
+    # #317: Beta(1,1), discount 0.9, one W47 answer each -> 1.9/2.8 found, 0.9/2.8 nothing, 0.5 not visited
+    from patrol import _learn
+
+    out = _answers(
+        [("a", "2026-W47", "found_something"), ("b", "2026-W47", "found_nothing"),
+         ("c", "2026-W47", "not_visited")]
+    )  # fmt: skip
+    mean = bandit._mean(_learn(FLAT, out, "2026-W48", 0.9))
+    assert mean["a"] == pytest.approx(1.9 / 2.8)
+    assert mean["b"] == pytest.approx(0.9 / 2.8)
+    assert mean["c"] == pytest.approx(0.5)
+
+
+def test_learn_counts_each_answer_once_and_never_from_the_plan_week():
+    from patrol import _learn
+
+    w47 = _answers([("a", "2026-W47", "found_something")])
+    once = _learn(FLAT, w47, "2026-W48", 0.9)
+    assert _learn(once, w47, "2026-W48", 0.9) == once  # running patrol again changes nothing
+    w48 = _answers([("b", "2026-W48", "found_something")])
+    assert _learn(once, w48, "2026-W48", 0.9) == once  # the plan week's own answers wait
+    later = _learn(once, w48, "2026-W49", 0.9)
+    # b was discounted by W47 and W48: 0.9 * 0.9 + 1
+    assert (
+        later["b"]["alpha"] == pytest.approx(0.81 + 1) and later["b"]["last_visit_week"] == 202648
+    )
+    assert _learn(FLAT, None, "2026-W49", 0.9) == FLAT  # no outcomes file: nothing changes
