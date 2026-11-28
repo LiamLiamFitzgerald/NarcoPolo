@@ -6,7 +6,7 @@
       "name": "Core, simulator, validation, CI",
       "paths": ["core/", "sim/", "validate/", "reports/", "docs/", "scripts/", ".github/", ".claude/",
                 "pyproject.toml", "uv.lock", "Makefile", "tach.toml", "config.yaml",
-                "AGENTS.md", "CLAUDE.md", "README.md", ".gitignore", ".env.example"]
+                "AGENTS.md", "CLAUDE.md", "README.md", ".gitignore", ".env.example", "flake.nix", "flake.lock"]
     },
     "P2": {"name": "Ingest", "paths": ["ingest/"]},
     "P3": {"name": "Reference and coverage", "paths": ["reference/", "coverage/"]},
