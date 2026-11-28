@@ -180,11 +180,21 @@ def test_busy_areas_are_not_flagged_and_planted_site_scores_high(planted):
 
 @pytest.mark.xfail(
     strict=True,
-    reason="#57 acceptance not met: the simulator plants drops about every 10 days, so one shared time shift "
-    "within +-60 days keeps most slowdowns within the 7-day link window of another planted pick-up; "
-    "p_perm of the planted site is about 0.15. Method and windows are fixed by the spec; needs a human decision.",
+    reason="#177: one shared shift can only make as many shuffles as there are scored days (~40-120), so the "
+    "smallest p (~0.01-0.02) can't pass BH even over the top 15; with a short history the planted site is a "
+    "candidate (test_planted_site_is_a_patrol_candidate) but not the lowest p. Decision: options 1 + 3.",
 )
 def test_planted_site_has_lowest_p_perm_and_bh_flag(planted):
     site, out = planted
     top = out.sort_values("p_perm").iloc[0]
     assert top["site_id"] == site and bool(top["bh_flag"])
+
+
+def test_planted_site_is_a_patrol_candidate(planted):
+    """#177 decision (options 1 + 3): sites are tested only within the top-k by S, and a site needs no BH flag to be
+    patrolled. Acceptance: with its pick-ups seen, the planted site is among the tested candidates, and the busy
+    anchorages are not flagged."""
+    site, out = planted
+    tested = out[out["S"] > 0].sort_values("S", ascending=False).head(PARAMS["test_top_k"])
+    assert site in set(tested["site_id"])
+    assert not out.sort_values("n_slowdowns", ascending=False).head(3)["bh_flag"].any()

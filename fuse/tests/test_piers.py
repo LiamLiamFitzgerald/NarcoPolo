@@ -42,7 +42,9 @@ def test_no_flagged_sites_falls_back_to_top5_unflagged():
     _, top = pier_scores(s, travel)
     assert sorted(top) == ["s3", "s4", "s5", "s6", "s7"]
     out, *_ = _finish(s, pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), None, None, travel, None)
-    assert all(any("Not significant" in r for r in rs) for rs in out["reasons"])
+    assert all(
+        any(r.startswith(("Not flagged", "Not tested")) for r in rs) for rs in out["reasons"]
+    )
 
 
 def test_flagged_site_without_reachable_pier_says_so():

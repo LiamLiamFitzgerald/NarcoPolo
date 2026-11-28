@@ -378,8 +378,13 @@ def reasons(site, inputs) -> list[str]:
             f"Worth checking: busy traffic alone rarely scores this high (p = {site['p_perm']:.3g}, "
             f"still unusual after correcting for {inputs.get('n_tested', 0)} sites)."
         )
+    elif inputs.get("tested", True):
+        out.append(
+            f"Not flagged (p = {site['p_perm']:.3g} over {inputs.get('n_tested', 0)} tested sites): busy traffic "
+            "alone could explain this score, or there is not enough history yet to tell."
+        )
     else:
-        out.append("Not significant: busy traffic alone could explain this score.")
+        out.append("Not tested: outside the top sites by score.")
     return out
 
 
@@ -408,7 +413,10 @@ def _scored_sites(
     table = link_table(u_small, _radar(_exposure(observed), T), nbrs)
     p = permutation(slow, table)
     out["p_perm"] = p.reindex(out["site_id"]).to_numpy()
-    tested = (out["S"] > 0).to_numpy()
+    # #177: only the patrol candidates (top-k by S, S > 0) are tested, so BH corrects for k tests, not every cell.
+    # A site never needs a flag to be patrolled: p_site and the bandit rank sites; the flag is extra evidence.
+    in_top = out["S"].rank(ascending=False, method="first") <= PARAMS["test_top_k"]
+    tested = ((out["S"] > 0) & in_top).to_numpy()
     flag = np.zeros(len(out), bool)
     flag[tested] = multipletests(out.loc[tested, "p_perm"], alpha=PARAMS["fdr_q"], method="fdr_bh")[
         0
@@ -442,11 +450,21 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
         e = expected[expected["fold"].fillna(0) == 0] if "fold" in expected else expected
         mu = _small_rows(e).set_index(["cell_id", "date"])["mu"]
     lay = layers.set_index("cell_id") if layers is not None and len(layers) else None
-    n_tested = int((sites_["S"] > 0).sum()) if len(sites_) else 0
+    in_top = (
+        sites_["S"].rank(ascending=False, method="first") <= PARAMS["test_top_k"]
+        if len(sites_)
+        else []
+    )
+    tested_ids = set(sites_.loc[(sites_["S"] > 0) & in_top, "site_id"]) if len(sites_) else set()
+    n_tested = len(tested_ids)
     rs, tp = [], []
     for _, site in sites_.iterrows():
         sid = site["site_id"]
-        inputs: dict = {"n_tested": n_tested, "significant": bool(site["bh_flag"])}
+        inputs: dict = {
+            "n_tested": n_tested,
+            "significant": bool(site["bh_flag"]),
+            "tested": sid in tested_ids,
+        }
         if sid in strongest.index:
             st = strongest.loc[sid]
             inputs["strongest"] = st
