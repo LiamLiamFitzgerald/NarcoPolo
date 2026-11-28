@@ -450,7 +450,13 @@ def test_plan_stops_carry_their_lens_and_only_the_zero_mix_is_ready(world):
     _, snap = world
     ship = snap["plan"]["ship"]
     assert "lens" not in ship[0] and ship[1]["lens"] == "dropoff" and ship[1]["reason"] == "explore"
-    assert snap["meta"]["mission_mix"] == {"wanted": [0], "ready": [0]}  # PLACEHOLDER (#316, #321)
+    wanted = load(io.CONFIG_PATH)[0]["patrol"].get("mission_mixes") or [
+        0
+    ]  # #338: P1 adds the presets
+    assert snap["meta"]["mission_mix"] == {
+        "wanted": list(wanted),
+        "ready": [0],
+    }  # PLACEHOLDER (#321)
 
 
 def test_headline_figures_match_a_hand_count_on_the_simulator(world):
