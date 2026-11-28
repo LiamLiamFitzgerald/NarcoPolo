@@ -596,7 +596,7 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
         top = piers.assign(d=dist)[piers["road_access"]].nsmallest(2, "d")["pier_id"].tolist()
         rows.append(
             {
-                "site_id": f"site_{j}",
+                "site_id": str(cell_ids[c]),  # R1: site_id = cell_id (A2), as in truth and fuse
                 "x_m": ccx[c],
                 "y_m": ccy[c],
                 "n_slowdowns": int((drop_cells == c).sum()),
