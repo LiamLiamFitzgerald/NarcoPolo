@@ -116,3 +116,75 @@ def test_sim_sites_are_schema_valid_and_unique(sim_sites):
     s, _ = sim_sites
     assert len(s) > 0 and s["site_id"].is_unique
     assert (s["followup_unobserved"] <= s["n_slowdowns"]).all()
+
+
+def _visible_pickups(frames, site):
+    """Positive control: give each planted slowdown at `site` a seen pick-up (count 1, U 1) on the first observed
+    dark_small day of its own cell within link_days, as if every pick-up had been caught on a calm pass."""
+    obs, cells, ev = frames["obs"].copy(), frames["cells"].copy(), frames["events"]
+    obs["date"] = pd.to_datetime(obs["date"])
+    cells["date"] = pd.to_datetime(cells["date"])
+    small = (obs["event_type"] == "dark_small") & (obs["cell_id"] == site) & (obs["exposure"] > 0)
+    csmall = (cells["event_type"] == "dark_small") & (cells["cell_id"] == site)
+    slow = ev[(ev["event_type"] == "slowdown") & (ev["cell_id"] == site)]
+    days = pd.to_datetime(slow["time_utc"].dt.tz_convert("UTC").dt.date)
+    for d in days:
+        cand = obs.index[small & obs["date"].between(d, d + pd.Timedelta(days=PARAMS["link_days"]))]
+        for i in cand:
+            hit = csmall & (cells["date"] == obs.at[i, "date"])
+            if hit.any():
+                obs.loc[i, "count"] = max(1.0, obs.at[i, "count"])
+                cells.loc[hit, "U"] = 1.0
+                break
+    return obs, cells
+
+
+@pytest.fixture(scope="module")
+def planted(tmp_path_factory):
+    """Simulator run with the planted pick-ups made visible (positive control), scored by the pure path."""
+    from fuse.link import _run
+
+    tmp = tmp_path_factory.mktemp("p6plant")
+    mp = pytest.MonkeyPatch()
+    mp.setenv("NARCO_DATA", str(tmp / "data"))
+    cfg = tmp / "config.yaml"
+    shutil.copy(io.ROOT / "config.yaml", cfg)
+    mp.setattr(io, "CONFIG_PATH", cfg)
+    try:
+        simulate(load(cfg)[0], 20261127)
+        truth = pd.read_parquet(io.truth_path())
+        site = str(truth.loc[truth["kind"] == "drop", "cell_id"].iloc[0])
+        frames = {
+            "obs": io.read_stage("aggregate/observed"),
+            "cells": io.read_stage("fuse/cells"),
+            "events": io.read_stage("match/events"),
+        }
+        obs, cells = _visible_pickups(frames, site)
+        _, out = _run(
+            obs, None, None, None, frames["events"], cells=cells, T=io.read_snapshot()["T"]
+        )
+    finally:
+        mp.undo()
+    return site, out
+
+
+def test_busy_areas_are_not_flagged_and_planted_site_scores_high(planted):
+    """Busy cells (most slowdowns, e.g. anchorages) get the largest S by sheer volume; the permutation test must
+    keep them unflagged. The planted site, with its pick-ups seen, scores above the median tested site."""
+    site, out = planted
+    busiest = out.sort_values("n_slowdowns", ascending=False).head(3)
+    assert not busiest["bh_flag"].any()
+    tested = out[out["S"] > 0]
+    assert out.loc[out["site_id"] == site, "S"].iloc[0] > tested["S"].median()
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="#57 acceptance not met: the simulator plants drops about every 10 days, so one shared time shift "
+    "within +-60 days keeps most slowdowns within the 7-day link window of another planted pick-up; "
+    "p_perm of the planted site is about 0.15. Method and windows are fixed by the spec; needs a human decision.",
+)
+def test_planted_site_has_lowest_p_perm_and_bh_flag(planted):
+    site, out = planted
+    top = out.sort_values("p_perm").iloc[0]
+    assert top["site_id"] == site and bool(top["bh_flag"])
