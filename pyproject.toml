@@ -29,7 +29,7 @@ extend-exclude = ["scripts", ".claude"]  # tooling scripts, not pipeline code
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "--import-mode=importlib"  # test files in different modules may share a name
+addopts = "--import-mode=importlib -p core.tests.isolation"  # importlib: test files may share a name; isolation: never touch real raw/ (#331)
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
