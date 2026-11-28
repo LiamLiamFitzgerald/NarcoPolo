@@ -1,5 +1,4 @@
-"""Shared fixtures: one simulated raw/ per session, fakes that serve it in each provider's format, and an offline
-stand-in for the GFW client that records every 4Wings call and returns canned rows."""
+"""Shared fixtures: one simulated raw/ per session; fakes for CDS (ERA5) and the GFW client."""
 
 import zipfile
 from datetime import date
@@ -77,8 +76,6 @@ class FakeCDS:
         else:
             files[0].rename(target)
 
-
-# ---------------------------------------------------------------- GFW (4Wings) stand-in
 
 # Placeholders, not real GFW filter syntax (that is open in #212): the tests only check pass-through.
 SETTINGS = {

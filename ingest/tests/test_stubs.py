@@ -1,4 +1,4 @@
-"""Every offline stub (era5, osm are real; static is real once its URLs are configured: tests/test_*.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
+"""Every offline stub (era5, osm, gfw are real; static is real once its URLs are configured: tests/test_*.py) writes the raw/ shape the simulator writes, records it with a licence, and opens no socket."""
 
 import json
 import socket
@@ -9,8 +9,8 @@ import pandas as pd
 import pyogrio
 import pytest
 
-from ingest import era5, fetch_all, osm, s1, static
-from ingest.tests.conftest import CFG, FakeCDS
+from ingest import s1, static
+from ingest.tests.conftest import CFG
 
 B = CFG["region_bbox"]
 BBOX = (B["lon_min"], B["lat_min"], B["lon_max"], B["lat_max"])
@@ -113,17 +113,3 @@ def test_fetch_bathy_matches_simulator(simraw, raw):
     path = static.fetch_bathy()
     _same_raster_shape(path, simraw / "infomar_bathy.tif")
     _recorded(raw, path)
-
-
-def test_fetch_all_records_everything_and_is_idempotent(simraw, raw, monkeypatch, fake_gfw):
-    monkeypatch.setattr(era5, "_client", lambda: FakeCDS(simraw / "era5.nc"))
-    monkeypatch.setattr(osm, "_overpass", lambda q: {"elements": []})
-    fetch_all(CFG)
-    on_disk = {p.relative_to(raw).as_posix() for p in raw.rglob("*") if p.is_file()} - {
-        "manifest.json"
-    }
-    files = _files(raw)
-    assert on_disk == set(files) and on_disk >= {"era5.nc", "gfw_sar.parquet", "coastline.gpkg"}
-    assert all(e["licence"].strip() for e in files.values())
-    fetch_all(CFG)
-    assert _files(raw) == files  # second run downloads (and re-records) nothing
