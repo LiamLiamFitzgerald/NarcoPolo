@@ -45,7 +45,6 @@ patrol:
   aircraft_kn: 180           # TODO(P7): spec says "confirm with the team"
   aircraft_budget_h: 4
   aircraft_dwell_h: 0.2
-  mission_mixes: [0, 25, 50, 75, 100]  # TODO(P7): example values from #316; the team picks the real presets (#338)
 
 # #103 (Liam, 28 Nov): plan start and base port, read by patrol. Until a human checks Haulbowline's position on a map,
 # they stay commented out, so plans keep saying "stand-in" (and real data refuses). Then uncomment both:
