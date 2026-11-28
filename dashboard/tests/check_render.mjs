@@ -35,6 +35,8 @@ for (const mode of ["light", "dark"]) {
       check(await page.evaluate(() => document.documentElement.dataset.mode) === mode, `${tag}: theme follows the system`);
       check((await page.textContent("#banner")).includes(`Data: ${label}`), `${tag}: chip shows the data label`);
       check(await page.getAttribute("#banner", "data-label") === label, `${tag}: chip is styled for the label`);
+      const land = snap.basemap.features.filter(f => f.properties?.kind === "land").length;
+      check(land === 0 || (await page.locator("#base path.land").count()) > 0, `${tag}: land drawn when the snapshot has it`);
       for (const name of MAPS) {
         await page.click(`#map button[data-value="${name}"]`);
         const got = await page.locator("#heat rect.hatched").count(), want = expectedHatched(snap, name);

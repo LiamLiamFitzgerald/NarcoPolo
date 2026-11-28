@@ -40,7 +40,7 @@
   --div-p1: #f5c9c5; --div-p2: #f6a29b; --div-p3: #f37872; --div-p4: #ec4647;
   --hatch-bg: #f6f6f6; --hatch-line: #8c8c8c; --lane-line: #16355c;
   --site: #f47230; --explore: #6a4ce2; --ink: #161d1d; --ring: #ffffff;
-  --map-bg: #e9efee; --cell-gap: #e9efee;
+  --map-bg: #e9efee; --cell-gap: #e9efee; --land: #e2ddd1; --coast: #857f72;
 
   /* the data label never changes with the theme: a simulated demo must never look real */
   --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
@@ -63,7 +63,7 @@
   --div-p1: #634543; --div-p2: #8f504e; --div-p3: #bc5a59; --div-p4: #eb6263;
   --hatch-bg: #1f1f1f; --hatch-line: #8a8a8a; --lane-line: #b3c8e8;
   --site: #e76624; --explore: #9887ef; --ink: #dde4e3; --ring: #090f0f;
-  --map-bg: #1a2121; --cell-gap: #1a2121;
+  --map-bg: #1a2121; --cell-gap: #1a2121; --land: #2c2a25; --coast: #8f897b;
 
   --label-on: #ffffff; --label-simulated: #7a4a00; --label-real: #1e6b35; --label-mixed: #5b3fc4; --label-none: #5f6368;
 }
@@ -206,6 +206,7 @@ dialog dt { color: var(--md-on-surface-variant); } dialog dd { margin: 0; overfl
 #svg.see-through .cell:not(.hatched) { fill-opacity: 0.6; } /* unobserved stays opaque hatching */
 .backdrop-sym { fill: var(--md-on-surface-variant); opacity: 0.5; }
 .basemap { fill: none; stroke: var(--md-outline); stroke-width: 1; }
+.land { fill: var(--land); stroke: var(--coast); stroke-width: 1.2; stroke-linejoin: round; }
 .inshore { fill: none; stroke: var(--md-primary); stroke-width: 0.8; }
 .lane { fill: url(#lane); opacity: 0.5; }
 .exclusion { fill: url(#lane); stroke: var(--md-on-surface-variant); stroke-dasharray: 3 2; opacity: 0.8; }
@@ -316,8 +317,8 @@ function project(lon, lat) {
 }
 
 function setExtent() {
-  const g = Object.values(snap.cells.geometry);
-  const lon = g.flatMap(b => [b[0], b[2]]), lat = g.flatMap(b => [b[1], b[3]]);
+  const g = Object.values(snap.cells.geometry), coast = landRings().flat();
+  const lon = [...g.flatMap(b => [b[0], b[2]]), ...coast.map(p => p[0])], lat = [...g.flatMap(b => [b[1], b[3]]), ...coast.map(p => p[1])];
   const padLon = (Math.max(...lon) - Math.min(...lon)) * 0.03, padLat = (Math.max(...lat) - Math.min(...lat)) * 0.08;
   ext = { lon0: Math.min(...lon) - padLon, lon1: Math.max(...lon) + padLon, lat0: Math.min(...lat) - padLat, lat1: Math.max(...lat) + padLat };
   H = project(ext.lon0, ext.lat0)[1];
@@ -348,6 +349,11 @@ function seeThrough() {
   if (snap) drawLegend(view.map, view.week);
 }
 
+// Basemap features: the study-area outline, and the land (#133) when the reference layer exists. On real
+// data the land is the real coast of Ireland; on simulated data it is the simulator's straight coast.
+const rings = f => (f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates]).flat();
+const landRings = () => snap.basemap.features.filter(f => f.properties?.kind === "land").flatMap(rings);
+
 function drawBasemap() {
   const g = group("base"), bd = backdrop();
   if (bd) {
@@ -356,11 +362,10 @@ function drawBasemap() {
     layer.style.display = isOn("backdrop") ? "" : "none";
     el("image", { href: bd.image, x: x0, y: y0, width: x1 - x0, height: y1 - y0, preserveAspectRatio: "none" }, layer, bd.attribution);
   }
-  for (const f of snap.basemap.features) {
-    const polys = f.geometry.type === "MultiPolygon" ? f.geometry.coordinates : [f.geometry.coordinates];
-    for (const poly of polys) for (const ring of poly)
-      el("path", { d: "M" + ring.map(p => project(...p).join(",")).join("L") + "Z", class: "basemap" }, g);
-  }
+  const path = ring => "M" + ring.map(p => project(...p).join(",")).join("L") + "Z";
+  for (const ring of landRings()) el("path", { d: path(ring), class: "land" }, g, "land");
+  for (const f of snap.basemap.features.filter(f => f.properties?.kind !== "land"))
+    for (const ring of rings(f)) el("path", { d: path(ring), class: "basemap" }, g, "study area");
 }
 
 // Unobserved is never the lowest colour of a scale (Design principle 4): it is grey hatching.

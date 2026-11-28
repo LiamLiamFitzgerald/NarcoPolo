@@ -132,6 +132,23 @@ def basemap(coastline: BaseGeometry) -> dict:
     }
 
 
+def _basemap(study_area: BaseGeometry, land: BaseGeometry | None) -> dict:
+    """The study-area outline, and the land (#133) when reference/land exists: on real data that is the
+    real coast of Ireland from the OSM coastline; the simulator writes a straight one."""
+    fc = basemap(study_area)
+    fc["features"][0]["properties"] = {"kind": "study_area"}
+    if land is not None:
+        fc["features"].append({**basemap(land)["features"][0], "properties": {"kind": "land"}})
+    return fc
+
+
+def _read_land() -> BaseGeometry | None:
+    try:
+        return unary_union(list(io.read_stage("reference/land").geometry))
+    except ValueError:  # the layer is optional (#133): no stamp means no land layer was written
+        return None
+
+
 def data_label(provenance: Iterable[str]) -> str:
     """'simulated', 'real' or 'mixed' from the stage files' provenance; never typed in by hand."""
     kinds = set(provenance)
@@ -309,7 +326,7 @@ def build_snapshot(*, validation_path: Path | None = None) -> dict:
             "config_hash": cfg_hash,
         },
         "basemap": {
-            **basemap(unary_union(list(fine.geometry))),
+            **_basemap(unary_union(list(fine.geometry)), _read_land()),
             # a GeoJSON foreign member, so the snapshot keeps exactly its seven top-level keys
             **({"backdrop": bd} if (bd := _read_backdrop()) else {}),
         },

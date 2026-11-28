@@ -14,6 +14,7 @@ from core.crs import to_utm
 from core.schemas import check_json
 from export import (
     _backdrop,
+    _basemap,
     _legends,
     _provenance,
     _scan,
@@ -332,3 +333,27 @@ def test_snapshot_embeds_the_radar_backdrop_when_p3_has_written_it(world):
         bd["image"].startswith("data:image/png;base64,") and bd["bounds"] == BACKDROP_META["bounds"]
     )
     check_json("export/snapshot", snap)  # still exactly the seven top-level keys
+
+
+def test_basemap_draws_land_when_the_land_layer_exists_and_only_the_outline_otherwise():
+    x, y = (float(v) for v in to_utm(-9.0, 51.5))
+    sea = Polygon([(x, y), (x + 10_000, y), (x + 10_000, y + 5_000), (x, y + 5_000)])
+    land = Polygon(
+        [(x, y + 5_000), (x + 10_000, y + 5_000), (x + 10_000, y + 9_000), (x, y + 9_000)]
+    )
+    assert [f["properties"]["kind"] for f in _basemap(sea, None)["features"]] == ["study_area"]
+    fc = _basemap(sea, land)
+    assert [f["properties"]["kind"] for f in fc["features"]] == ["study_area", "land"]
+    lon, lat = fc["features"][1]["geometry"]["coordinates"][0][0]
+    assert abs(lon + 9.0) < 1e-3 and 51.5 < lat < 51.6  # land north of the sea, in WGS 84
+
+
+def test_snapshot_basemap_has_the_simulated_land(world):
+    _, snap = world
+    kinds = [f["properties"]["kind"] for f in snap["basemap"]["features"]]
+    assert kinds == ["study_area", "land"]  # the simulator writes reference/land (#133)
+    # the land lies along the simulated grid (which starts at x0, a little west of region_bbox)
+    boxes = list(snap["cells"]["geometry"].values())
+    west, east = min(b[0] for b in boxes), max(b[2] for b in boxes)
+    ring = snap["basemap"]["features"][1]["geometry"]["coordinates"][0]
+    assert all(west - 0.01 <= lon <= east + 0.01 for lon, _ in ring)
