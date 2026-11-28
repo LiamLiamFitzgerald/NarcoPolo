@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 
-from detect._standin import make_scene
 from detect.cfar import alpha, background, clusters, flag, merge_pols, size_class
 from detect.scene import to_linear
+from detect.tests._scene import make_scene
 from detect.tests.test_pipeline import _hits
 
 

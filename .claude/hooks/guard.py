@@ -25,6 +25,18 @@ DOC_HOSTS = ("readthedocs", "docs.", "pysal.org", "github.com", "pypi.org", "pyt
              "globalfishingwatch.org", "openeo.org", "ecmwf.int")
 
 
+def scratch(path_str: str) -> bool:
+    """A throwaway file outside the repo: under $NARCO_SCRATCH, or a Claude Code session scratchpad
+    (/tmp/claude-<uid>/.../scratchpad/...). It cannot touch the repo, so any module may write it (#106)."""
+    p = Path(path_str).resolve()
+    roots = [Path(os.environ["NARCO_SCRATCH"]).resolve()] if os.environ.get("NARCO_SCRATCH") else []
+    if any(p == r or r in p.parents for r in roots):
+        return True
+    parts = p.parts
+    return (len(parts) > 3 and parts[1] == "tmp" and parts[2].startswith("claude-")
+            and "scratchpad" in parts[3:-1])
+
+
 def block(reason: str) -> None:
     print(f"Blocked by NarcoPolo guard: {reason}", file=sys.stderr)
     sys.exit(2)
@@ -84,6 +96,9 @@ def main() -> None:
     inp = data.get("tool_input", {}) or {}
 
     if tool in EDIT_TOOLS:
+        target = inp.get("file_path") or inp.get("notebook_path") or ""
+        if rel(target) is None and scratch(target):
+            return
         if MODULE not in OWNERS["modules"]:
             block("set NARCO_MODULE=P1..P7 before starting Claude Code (see AGENTS.md).")
         target = inp.get("file_path") or inp.get("notebook_path") or ""
