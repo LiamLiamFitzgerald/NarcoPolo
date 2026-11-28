@@ -142,6 +142,13 @@ def test_numeric_ids_are_rejected():
         )
 
 
+def test_an_empty_string_dtype_id_column_is_valid():
+    """0 rows with pandas' string dtype (what match writes when there are no events) pass the id check."""
+    empty = frame("detect/detections").iloc[0:0].astype({"pass_id": "string"})
+    io.write_stage("detect/detections", empty, "simulated")
+    assert io.read_stage("detect/detections").empty
+
+
 def test_an_empty_sites_file_keeps_its_list_types():
     """A 0-row fuse/sites gets the same Arrow types as a non-empty one, not `null`."""
     import pyarrow.parquet as pq

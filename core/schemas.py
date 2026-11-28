@@ -13,9 +13,9 @@ import pandera.pandas as pa
 
 def _id() -> pa.Column:
     """A string key (#171): a numeric pass_id would validate, then never join with the string ones."""
-    ok = lambda s: bool(
-        s.map(lambda v: isinstance(v, str)).all()
-    )  # any storage dtype; empty is fine
+    # plain Python, so any storage dtype works, including an empty pandas string column (an Arrow-backed
+    # .all() raises on string dtype); empty is fine
+    ok = lambda s: all(isinstance(v, str) for v in s)
     return pa.Column(checks=pa.Check(ok, error="not a string id"), nullable=False)
 
 
