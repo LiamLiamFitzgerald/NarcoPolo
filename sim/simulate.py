@@ -157,7 +157,14 @@ def _ship_key(seed: int, i: int) -> str:
     return hashlib.sha256(f"salt-{seed}-{i}".encode()).hexdigest()[:16]
 
 
-def simulate(config: Config, seed: int) -> None:
+REGIMES = ("fixed", "two_sites", "pass_aware", "displacing", "null")  # docs/learning.md L1
+
+
+def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
+    if regime not in REGIMES:
+        raise ValueError(f"unknown regime {regime!r}; one of {REGIMES}")
+    if regime != "fixed":  # placeholder: only today's single planted site exists so far
+        raise NotImplementedError(f"regime {regime!r} is built in issue #150")
     s = config["sim"]
     days = int(s["days"])
     start = date.fromisoformat(s["start_date"])
@@ -653,15 +660,18 @@ def simulate(config: Config, seed: int) -> None:
             "length_m": np.nan,
             "detected": False,
             "pass_index": -1,
+            "site_id": "site_0",  # the planted site's id in fuse/sites
         }
     )
     truth = pd.concat(
         [
-            tb[["kind", "time_utc", "x_m", "y_m", "cell_id", "length_m", "detected", "pass_index"]],
+            tb[
+                ["kind", "time_utc", "x_m", "y_m", "cell_id", "length_m", "detected", "pass_index"]
+            ].assign(site_id=None),
             td,
         ],
         ignore_index=True,
-    )
+    ).assign(regime=regime, active=lambda t: t["kind"] == "drop")
     out = io.truth_path()
     out.parent.mkdir(parents=True, exist_ok=True)
     truth.to_parquet(out, index=False)

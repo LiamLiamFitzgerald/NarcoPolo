@@ -2,7 +2,6 @@
 the model JSON round-trips, and the same inputs give the same model. Stand-ins for #150 (regimes) and #153
 (agent scores) until they are on integration."""
 
-import inspect
 import json
 from datetime import date, timedelta
 
@@ -163,21 +162,46 @@ def test_scores_skip_unobserved_rows_and_cusum_only_looks_back():
     assert last["gi"].idxmax() == "2000_0_0" and last["oe"].idxmax() == "2000_0_0"
 
 
+def test_held_out_regimes_the_simulator_cannot_build_are_skipped_and_nothing_is_promoted(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path))
+
+    def site_weeks(cfg, regime, seed):
+        if regime != "fixed":
+            raise NotImplementedError(regime)
+        return _season(seed), SPLIT
+
+    monkeypatch.setattr(train, "_site_weeks", site_weeks)
+    m = train.fit_site_model(["fixed"], [1, 2])
+    assert m["rung"] == 0 and m["weights"] == [] and m["metrics"]["promotion"] == []
+    assert m["metrics"]["held_out_skipped"] == ["pass_aware", "displacing"]
+
+
+def test_rung_1_weights_are_a_list_in_feature_order():
+    """R4 (docs/learning.md): fuse reads weights[i] for features[i]."""
+    fit = {"rung": 1, "w": np.array([0.5, 0.0, 1.0, 2.0]), "b": -3.0}
+    out = train._weights(fit, FEATURES)
+    assert out == {"weights": [0.5, 0.0, 1.0, 2.0], "intercept": -3.0}
+
+
 # ---------------------------------------------------------------- on the simulator
 
 
 @pytest.fixture(scope="module")
 def fitted(tmp_path_factory):
-    """fit_site_model on 2 seeds; `pass_aware` is a stand-in for #150 (the fixed simulator, other seeds)."""
+    """fit_site_model on one seed. Until #150 builds them, the held-out regimes are stand-ins: the fixed
+    simulator with other seeds."""
     mp = pytest.MonkeyPatch()
     mp.setenv("NARCO_DATA", str(tmp_path_factory.mktemp("m") / "data"))
     real = train._simulate
+    offset = {"fixed": 0, "pass_aware": 100, "displacing": 200}
 
     def stand_in(cfg, seed, regime):
-        real(cfg, seed + (100 if regime != "fixed" else 0), "fixed")
+        real(cfg, seed + offset[regime], "fixed")
 
     mp.setattr(train, "_simulate", stand_in)
-    model = train.fit_site_model({"train": ["fixed"], "held_out": ["pass_aware"]}, [1, 2])
+    model = train.fit_site_model(["fixed"], [1])
     yield model, train.model_path()
     mp.undo()
 
@@ -185,7 +209,7 @@ def fitted(tmp_path_factory):
 def test_model_json_round_trips_and_has_the_contract_keys(fitted):
     model, path = fitted
     assert json.loads(path.read_text()) == model
-    for key in (
+    keys = {
         "rung",
         "features",
         "weights",
@@ -194,11 +218,15 @@ def test_model_json_round_trips_and_has_the_contract_keys(fitted):
         "metrics",
         "seeds",
         "regimes",
-    ):
-        assert key in model
+    }
+    assert keys <= set(model) <= keys | {"params"}
     assert model["config_hash"] == load(io.CONFIG_PATH)[1]
-    assert model["seeds"] == [1, 2] and model["regimes"]["held_out"] == ["pass_aware"]
-    assert model["metrics"]["rungs_tried"] == [1]  # 2 seeds: n_eff < 500, stop at rung 1
+    assert model["seeds"] == [1] and model["regimes"] == ["fixed"]
+    assert model["features"] == FEATURES  # `link` is not a model feature (R3)
+    assert model["metrics"]["held_out_regimes"] == ["displacing", "pass_aware"]
+    assert model["metrics"]["rungs_tried"] == [1]  # 1 seed: n_eff < 500, stop at rung 1
+    assert len(model["weights"]) in (0, len(model["features"]))
+    assert all(w >= 0 for w in model["weights"])
     assert "lightgbm" in model["metrics"]
 
 
@@ -213,13 +241,3 @@ def test_stack_ranks_the_planted_site_in_the_top_k_on_fixed():
     s = s.assign(p=train._predict(fit, s[FEATURES].to_numpy(float), s["midp"].to_numpy(float)))
     rank = s.groupby("date")["p"].rank(ascending=False, method="first")
     assert s["label"].any() and (rank[s["label"]] <= K).all()
-
-
-def test_real_regimes_once_l1_is_on_integration(tmp_path, monkeypatch):
-    from sim.simulate import simulate
-
-    if "regime" not in inspect.signature(simulate).parameters:
-        pytest.skip("sim.simulate has no regime argument yet (#150)")
-    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
-    model = train.fit_site_model({"train": ["fixed", "two_sites"], "held_out": ["pass_aware"]}, [1])
-    assert model["rung"] in (0, 1)

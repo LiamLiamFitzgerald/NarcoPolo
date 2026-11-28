@@ -11,14 +11,13 @@ integration. Level 2: the stack is fitted only on weeks that end before the cuto
 `n_folds_small` walk-forward folds, and scored only from that cutoff plus `split.embargo_days`.
 """
 
-import inspect
 import json
 import os
 import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -31,7 +30,7 @@ from core.config import Config, load
 from core.observed import Observed
 from core.split import Split, folds
 
-_AGENTS = ("oe", "midp", "gi", "cusum")  # computable here; `link` needs fuse's lag link (L2, #153)
+_AGENTS = ("oe", "midp", "gi", "cusum")  # R3: `link` is site-level only and enters through p_comb
 _RHO = 2.0  # Poisson CUSUM shift, A1
 # TODO(P1): move to config.yaml learn.train (#158); 500, 5 and 2 are docs/learning.md L4 steps 3-4
 _DEFAULTS: dict[str, float] = {
@@ -78,12 +77,7 @@ def _simulate(cfg: Config, seed: int, regime: str) -> None:
     # tach-ignore(validate runs the simulator; tach.toml change requested in #158)
     from sim.simulate import simulate
 
-    if "regime" in inspect.signature(simulate).parameters:  # L1 (#150)
-        cast(Any, simulate)(cfg, seed, regime=regime)
-    elif regime == "fixed":
-        simulate(cfg, seed)
-    else:
-        raise NotImplementedError(f"sim.simulate has no regime {regime!r} yet (#150)")
+    simulate(cfg, seed, regime)  # NotImplementedError for regimes #150 has not built yet
 
 
 def _midp(c: np.ndarray, mu: np.ndarray) -> np.ndarray:
@@ -320,21 +314,23 @@ def _plain(x: Any) -> Any:
     return x
 
 
-def _weights(fit: Mapping[str, Any], features: list[str]) -> tuple[dict[str, Any], float | None]:
+def _weights(fit: Mapping[str, Any], features: list[str]) -> dict[str, Any]:
+    """R4: rung 1 weights are a list in `features` order; higher rungs keep their nets under `params`."""
     if fit["rung"] == 0:
-        return {}, None
+        return {"weights": [], "intercept": 0.0}
     if fit["rung"] == 1:
-        return dict(zip(features, fit["w"], strict=True)), fit["b"]
-    return {
+        return {"weights": list(fit["w"]), "intercept": fit["b"]}
+    params = {
         f: {"mean": fit["mean"][j], "sd": fit["sd"][j], **{k: fit[k][j] for k in ("u", "c", "a")}}
         for j, f in enumerate(features)
-    }, fit["b"]
+    }
+    return {"weights": [], "intercept": fit["b"], "params": params}
 
 
 def _features(cfg: Config) -> list[str]:
     """One feature per merged agent: the first of each group in reports/signals.json (L2, #153) if it exists,
     else the config's agent list; only agents scored here."""
-    path = io.ROOT / "reports" / "signals.json"
+    path = Path(os.environ.get("NARCO_REPORTS", io.ROOT / "reports")) / "signals.json"
     if path.exists():
         groups = json.loads(path.read_text())["merged"]
     else:
@@ -357,9 +353,11 @@ def _ladder(
     n, pos = len(y), int(y.sum())
     n_eff = min(n, int(p["pos_mult"]) * pos)
     rungs = [1, 2] if n_eff >= p["n_eff_min"] else [1]  # L4 step 3
+    if not held:
+        rungs = []  # held-out regimes decide promotion; with none, the statistics alone stay
 
     best: dict[str, Any] = {"rung": 0}
-    ev = {0: _evaluate(best, held, features, k)}
+    ev = {0: _evaluate(best, held, features, k)} if held else {}
     steps = []
     for rung in rungs:
         fit = _fit(rung, X, y, p, seed)
@@ -381,7 +379,6 @@ def _ladder(
                 "changes_nothing": abs(a["gain"]) <= a["se"],
             }
 
-    weights, intercept = _weights(best, features)
     try:
         import lightgbm  # noqa: F401  # pyright: ignore[reportMissingImports]
 
@@ -395,8 +392,7 @@ def _ladder(
     return {
         "rung": best["rung"],
         "features": features,
-        "weights": weights,
-        "intercept": intercept,
+        **_weights(best, features),
         "metrics": {
             "n": n,
             "n_positive": pos,
@@ -410,27 +406,33 @@ def _ladder(
     }
 
 
-def fit_site_model(
-    regimes: Mapping[str, Sequence[str]] | None = None, seeds: Sequence[int] | None = None
-) -> dict[str, Any]:
+def fit_site_model(regimes: list[str], seeds: list[int]) -> dict[str, Any]:
     """Fit the L4 ladder on the simulator and write <data root>/models/site_model.json; returns what it wrote.
 
-    regimes: {"train": [...], "held_out": [...]}, default config learn.regimes; seeds: default
-    range(learn.n_seeds). Applying the model (P6, fuse.learn), per site with merged-agent scores x_f:
-    rung 1: p_site = sigmoid(intercept + sum_f weights[f] * x_f).
-    rung 2: z_f = (x_f - weights[f].mean) / weights[f].sd, g_f = sum_h a_h * max(0, u_h * z_f + c_h),
-            p_site = sigmoid(intercept + sum_f g_f).
-    rung 0: no weights; use the statistics alone (1 - p_comb).
-    The neural rung's weights are in the JSON; no site_model.pt, as torch is not a dependency.
+    regimes: the train regimes; promotion is decided on config learn.regimes.held_out (minus any trained on).
+    A held-out regime the simulator cannot build yet (#150) is skipped and listed in metrics; with none left,
+    no rung is promoted and the file says rung 0. Applying it (P6, fuse.learn), with x = scores in `features`:
+    rung 1: p_site = sigmoid(intercept + sum_i weights[i] * x_i).
+    rung 2: for each feature f, z = (x_f - params[f].mean) / params[f].sd, g_f = sum_h a_h max(0, u_h z + c_h);
+            p_site = sigmoid(intercept + sum_f g_f). fuse applies rungs 0 and 1 only (docs/learning.md L4).
+    rung 0: no weights; the statistics alone (1 - p_comb).
+    The neural rung's parameters are in the JSON; no site_model.pt, as torch is not a dependency.
     """
     cfg, sha = load(io.CONFIG_PATH)
-    reg: Mapping[str, Sequence[str]] = regimes or cfg["learn"]["regimes"]
-    seeds = list(seeds if seeds is not None else range(cfg["learn"]["n_seeds"]))
     p, k, features = _params(cfg), int(cfg["learn"]["alert_budget"]), _features(cfg)
-    train = [_site_weeks(cfg, r, s) for r in reg["train"] for s in seeds]
-    held = [_site_weeks(cfg, r, s) for r in reg["held_out"] for s in seeds]
+    train = [_site_weeks(cfg, r, s) for r in regimes for s in seeds]
+    held, skipped = [], []
+    for r in [r for r in cfg["learn"]["regimes"]["held_out"] if r not in regimes]:
+        try:
+            held += [_site_weeks(cfg, r, s) for s in seeds]
+        except NotImplementedError:
+            skipped.append(r)
     model = _ladder(train, held, features, p, k, seed=seeds[0] if seeds else 0)
-    model.update(config_hash=sha, seeds=seeds, regimes={r: list(v) for r, v in reg.items()})
+    model["metrics"].update(
+        held_out_regimes=sorted({rows["regime"].iloc[0] for rows, _ in held}),
+        held_out_skipped=skipped,
+    )
+    model.update(config_hash=sha, seeds=list(seeds), regimes=list(regimes))
     model = _plain(model)
     path = model_path()
     path.parent.mkdir(parents=True, exist_ok=True)

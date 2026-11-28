@@ -70,7 +70,12 @@ def test_json_stage_round_trip_and_staleness(tmp_path, monkeypatch):
 
 def test_bandit_fields_and_state():
     check_json("patrol/plan", {"ship": [{**STOP, "theta": 0.3, "reason": "explore"}]})
-    for bad in [{"ship": [{**STOP, "theta": 2}]}, {"ship": [{**STOP, "reason": "guess"}]}]:
+    check_json("patrol/plan", {"ship": [{**STOP, "day": 3}]})
+    for bad in [
+        {"ship": [{**STOP, "theta": 2}]},
+        {"ship": [{**STOP, "reason": "guess"}]},
+        {"ship": [{**STOP, "day": 7}]},
+    ]:
         with pytest.raises(ValueError):
             check_json("patrol/plan", bad)
     check_json("patrol/bandit_state", {"s1": {"alpha": 1.5, "beta": 4.0, "last_visit_week": None}})
