@@ -204,7 +204,9 @@ def simulate(config: Config, seed: int, regime: str = "fixed") -> None:
     rng = _rng(config, "slowdowns", seed)
     hot = (fine["anchorage"] | fine["port_zone"]).to_numpy()
     ship_rate = np.where(hot, s["slowdown_rate_hot"], s["slowdown_rate_cold"])
-    sc = rng.poisson(np.broadcast_to(ship_rate, (days, n)))
+    # rates are per full sea cell (docs/specs/P3.md), and slowdown exposure is sea_frac, so a 60%-sea shore cell gets
+    # 60% of the slowdowns; otherwise its expected count is 0.6 of its true one
+    sc = rng.poisson(np.broadcast_to(ship_rate * fine["sea_frac"].to_numpy(), (days, n)))
     sd, sci = np.nonzero(sc)
     sd, sci = np.repeat(sd, sc[sd, sci]), np.repeat(sci, sc[sd, sci])
     ns = len(sd)
