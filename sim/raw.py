@@ -168,6 +168,20 @@ def _era5(world: SimWorld, rng: np.random.Generator, path: Path) -> None:
             var[:], var.units, var._FillValue = data.astype(np.float32), units, np.float32(np.nan)
 
 
+def _refuse_real_raw() -> None:
+    """Raise before simulate writes anything if raw_root() holds real downloads (#331)."""
+    manifest = io.raw_root() / "manifest.json"
+    if not manifest.is_file():
+        return
+    files = json.loads(manifest.read_text()).get("files", {})
+    real = [k for k, v in files.items() if v.get("request", {}).get("simulated") is not True]
+    if real:
+        raise RuntimeError(
+            f"{io.raw_root()} holds {len(real)} real files (e.g. {real[0]}); "
+            "simulate would overwrite them. Point NARCO_RAW at another folder."
+        )
+
+
 def write_raw(world: SimWorld) -> None:
     root = io.raw_root()
     root.mkdir(parents=True, exist_ok=True)
