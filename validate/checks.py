@@ -177,10 +177,56 @@ def simulator_recovery() -> dict[str, Any]:
         exp, on=["cell_id", "date", "event_type"]
     )
     ratio = (m.groupby("event_type")["count"].sum() / m.groupby("event_type")["mu"].sum()).to_dict()
+    rank = int(near.idxmax()) + 1 if near.any() else None
+    k = int(
+        load(io.CONFIG_PATH)[0]["learn"]["alert_budget"]
+    )  # the patrol shortlist (= patrol.top_sites)
     return {
-        "planted_site_rank": int(near.idxmax()) + 1 if near.any() else None,
+        "planted_site_rank": rank,
+        "planted_site_in_top_k": rank is not None and rank <= k,
+        "n_sites": len(sites),
         "observed_over_expected": ratio,
     }
+
+
+def visible_recovery() -> dict[str, Any]:
+    """#266: the same season with pick-ups the radar can see (sim.pickup_length_m = validate.visible_pickup_length_m),
+    simulated and run end to end in a scratch root. On the default world pick-ups are 6-15 m and almost never
+    detected, so recovery there measures the radar's limit; this world checks the statistics find a visible signal."""
+    import shutil
+    import tempfile
+
+    from scripts.run_all import main as run_all
+    from sim.simulate import simulate
+
+    cfg, _ = load(io.CONFIG_PATH)
+    length = list(cfg["validate"]["visible_pickup_length_m"])
+    old_cfg = io.CONFIG_PATH
+    old_env = {k: os.environ.get(k) for k in ("NARCO_DATA", "NARCO_RAW")}
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "config.yaml"
+        shutil.copy(old_cfg, path)
+        text = path.read_text()
+        default = cfg["sim"]["pickup_length_m"]
+        line = f"pickup_length_m: [{default[0]}, {default[1]}]"
+        if line not in text:
+            raise ValueError(f"visible_recovery: {line!r} not found in {old_cfg}")
+        path.write_text(text.replace(line, f"pickup_length_m: [{length[0]}, {length[1]}]", 1))
+        os.environ["NARCO_DATA"], os.environ["NARCO_RAW"] = f"{d}/data", f"{d}/raw"
+        io.CONFIG_PATH = path
+        try:
+            visible, _ = load(path)
+            simulate(visible, visible["seed"])
+            run_all()
+            out = simulator_recovery()
+        finally:
+            io.CONFIG_PATH = old_cfg
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+    return {"pickup_length_m": length, **out}
 
 
 def _clean(x: Any) -> Any:
@@ -255,6 +301,7 @@ def run() -> Path:
             "brier": brier,
             "interval_coverage": coverage,
             "recovery": simulator_recovery(),
+            "recovery_visible_pickups": visible_recovery(),  # #266
             "injection": _injection(),
             "null": null_test(),
             "skill": pd.concat([backtest("slowdown"), backtest("dark_small")], ignore_index=True),

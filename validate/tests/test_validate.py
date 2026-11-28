@@ -138,6 +138,9 @@ def test_run_writes_a_report_with_every_key(sim_world, monkeypatch):
     # L6 runs whole simulated seasons through the real pipeline (tens of minutes); validate/tests/test_policy.py
     # covers it, and this test checks the report's keys and blocks, so the policy block is left out here
     monkeypatch.setattr(validate.checks, "policy_block", lambda: None)
+    monkeypatch.setattr(
+        validate.checks, "visible_recovery", lambda: {"planted_site_rank": None}
+    )  # test_recovery covers it
     path = run()
     rep = json.loads(path.read_text())
     assert {"recall", "injection", "skill", "calibration", "brier", "null"} <= set(rep)

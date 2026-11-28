@@ -33,7 +33,12 @@ def built(tmp_path_factory):
     simulate(load(cfg)[0], 20261127)
     planted = {
         n: io.read_stage(n)
-        for n in ("reference/cells", "reference/travel_hours", "coverage/exposure")
+        for n in (
+            "reference/cells",
+            "reference/land",
+            "reference/travel_hours",
+            "coverage/exposure",
+        )
     }
     fine = planted["reference/cells"].query("level == 2000")
     x0, y0, x1, y1 = gpd.GeoSeries(fine.geometry).total_bounds
@@ -72,6 +77,18 @@ def test_rebuilt_cells_equal_the_planted_ones(built):
     )
     assert np.allclose(m["sea_frac_p"], m["sea_frac_b"])
     assert np.allclose(m["inshore_frac_p"], m["inshore_frac_b"], equal_nan=True)
+
+
+def test_rebuilt_land_matches_the_planted_land(built):
+    """P7's basemap layer (#105): the land closed from raw/coastline.gpkg covers the simulator's own land strip."""
+    assert io.read_provenance("reference/land") == "real"
+    b = gpd.GeoSeries(io.read_stage("reference/land").geometry, crs=32629).union_all()
+    p = gpd.GeoSeries(built["reference/land"].geometry, crs=32629).union_all()
+    assert b.area > 0
+    # the rebuilt land reaches the test region's edge (a cell above the grid), the simulator's stops at the grid's
+    # top: inside the box both cover, they must agree
+    both = b.envelope.intersection(p.envelope)
+    assert b.intersection(both).symmetric_difference(p.intersection(both)).area < 1e-3 * both.area
 
 
 def test_rebuilt_travel_times_follow_the_planted_ones(built):

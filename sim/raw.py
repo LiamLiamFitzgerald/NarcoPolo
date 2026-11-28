@@ -1,4 +1,5 @@
 """raw/ files other than s1 and the static layers: GFW SAR, GFW presence, ERA5 and the manifest. Reads the SimWorld only.
+Also writes the stage file reference/presence_2km (#208) from the same presence draws, so it matches raw/.
 
 Shaped like docs/shared.md "Raw inputs": positions in lon/lat (as the sources deliver them), times in UTC.
 - gfw_sar.parquet: scene_id, timestamp, lon, lat, matched, length_m. matched = an AIS-carrying ship.
@@ -18,7 +19,7 @@ from scipy.io import netcdf_file
 
 from core import io
 from core.crs import to_utm, to_wgs84
-from core.grid import FINE, _origin
+from core.grid import FINE, _origin, cell_id, cell_index
 from sim.world import SimWorld
 
 # TODO(P1): not in the spec; move into config.yaml sim: once the raw issue settles
@@ -73,7 +74,7 @@ def _gfw_sar(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
     ).sort_values(["timestamp", "lon", "lat"], ignore_index=True)
 
 
-def _gfw_presence(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
+def _presence_rows(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
     """Slowdown hours in the slow bin where each ship stopped; transit hours in the fast bin along the lane."""
     x0, y0 = _origin()
     sh = world.ships
@@ -95,14 +96,28 @@ def _gfw_presence(world: SimWorld, rng: np.random.Generator) -> pd.DataFrame:
             ),
         }
     )
+    rows["date"] = [world.start + timedelta(days=int(d)) for d in rows["day"]]
+    return rows
+
+
+def _gfw_presence(rows: pd.DataFrame) -> pd.DataFrame:
+    rows = rows.copy()
     lon, lat = to_wgs84(rows["x"].to_numpy(), rows["y"].to_numpy())
     rows["lon"] = np.round(np.floor(lon / _PRESENCE_DEG) * _PRESENCE_DEG, 2)
     rows["lat"] = np.round(np.floor(lat / _PRESENCE_DEG) * _PRESENCE_DEG, 2)
-    rows["date"] = [world.start + timedelta(days=int(d)) for d in rows["day"]]
     keys = ["lon", "lat", "date", "speed_bin", "vessel_type"]
     out = rows.groupby(keys, as_index=False, sort=True)["hours"].sum()
     out["hours"] = out["hours"].round(3)
     return out[out["hours"] > 0].reset_index(drop=True)  # GFW returns only cells with presence
+
+
+def _presence_2km(rows: pd.DataFrame) -> pd.DataFrame:
+    """reference/presence_2km (#208): the same hours summed on the 2 km cell they fall in, i.e. the exact answer an
+    area-weighted regrid of raw/gfw_presence approximates."""
+    ix, iy = cell_index(rows["x"].to_numpy(), rows["y"].to_numpy(), FINE)
+    rows = rows.assign(cell_id=[cell_id(i, j, FINE) for i, j in zip(ix, iy, strict=True)])
+    keys = ["cell_id", "date", "vessel_type", "speed_bin"]
+    return rows.groupby(keys, sort=True)["hours"].sum().reset_index()
 
 
 def _era5(world: SimWorld, rng: np.random.Generator, path: Path) -> None:
@@ -156,7 +171,9 @@ def write_raw(world: SimWorld) -> None:
     root.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(world.seed + world.config["sim"]["seed_offsets"]["raw"])
     _gfw_sar(world, rng).to_parquet(root / "gfw_sar.parquet", index=False)
-    _gfw_presence(world, rng).to_parquet(root / "gfw_presence.parquet", index=False)
+    presence = _presence_rows(world, rng)
+    _gfw_presence(presence).to_parquet(root / "gfw_presence.parquet", index=False)
+    io.write_stage("reference/presence_2km", _presence_2km(presence), "simulated")
     _era5(world, rng, root / "era5.nc")
 
     end = world.start + timedelta(days=world.days)
