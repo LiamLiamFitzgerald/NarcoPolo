@@ -523,11 +523,25 @@ def _run(
     return cells, _all(observed, expected, layers, travel, events, cells, T)[0]
 
 
+def _history_cells(observed, expected, layers, events, T, cells):
+    """Cell scores over the radar history (T - 89 .. T) for the lag link (#269): the spec links every slowdown
+    whose follow-up overlaps the radar history, but fuse/cells holds only the evaluation window (22-28 days, the
+    days scored and shown). Same scorer, same rules; percentile ranks are taken over the longer window. Without
+    a forecast or layers (pure-path tests) the given cells are used."""
+    if expected is None or layers is None or T is None or not len(expected):
+        return cells
+    from detectors import score_cells  # tach: fuse depends on detectors (#269)
+
+    start = pd.Timestamp(T) - pd.Timedelta(days=RADAR_HISTORY_DAYS - 1)
+    return score_cells(observed, expected, layers, events, T, start=start.date())
+
+
 def _all(observed, expected, layers, travel, events, cells, T, piers=None):
     """(sites, piers, links) from frames; no file I/O."""
     if T is None:
         T = pd.Timestamp(max(observed["date"])).date() if len(observed) else None
-    s, slow, strongest = _scored_sites(cells, observed, expected, events, T)
+    hist = _history_cells(observed, expected, layers, events, T, cells)
+    s, slow, strongest = _scored_sites(hist, observed, expected, events, T)
     return _finish(s, slow, strongest, observed, expected, layers, travel, piers)
 
 
