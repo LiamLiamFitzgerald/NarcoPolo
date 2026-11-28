@@ -143,7 +143,9 @@ def test_no_medium_rows_gives_an_empty_frame():
 def test_gate_needs_the_schema_and_dark_medium_rows(monkeypatch):
     obs, exp = _frames()
     small_only = obs[obs["event_type"] == "dark_small"]
-    assert "fuse/fisheries" not in schemas.SCHEMAS  # until #346 lands
+    monkeypatch.delitem(
+        schemas.SCHEMAS, "fuse/fisheries", raising=False
+    )  # off without the schema (#346)
     assert _gated(obs, exp, _TRAVEL, _PIERS) is None
     monkeypatch.setitem(
         schemas.SCHEMAS, "fuse/fisheries", schemas.SCHEMAS["fuse/sites"]
@@ -154,8 +156,9 @@ def test_gate_needs_the_schema_and_dark_medium_rows(monkeypatch):
     )
 
 
-def test_simulator_run_writes_sites_and_no_fisheries(tmp_path):
-    """Today's simulator has no dark_medium rows and core/schemas no fuse/fisheries: fuse.run() is unchanged."""
+def test_simulator_run_writes_fisheries_only_when_schema_and_inputs_exist(tmp_path):
+    """fuse.run() writes fuse/fisheries exactly when core/schemas declares it and the simulator has dark_medium rows
+    (#346); either way fuse/sites stays schema-valid. Holds before and after #346 lands."""
     mp = pytest.MonkeyPatch()
     mp.setenv("NARCO_DATA", str(tmp_path / "data"))
     cfg = tmp_path / "config.yaml"
@@ -167,7 +170,11 @@ def test_simulator_run_writes_sites_and_no_fisheries(tmp_path):
 
         fuse.run()
         schemas.check("fuse/sites", io.read_stage("fuse/sites"))
-        assert not list((tmp_path / "data").rglob("*fisheries*"))
-        assert not np.any(io.read_stage("aggregate/observed")["event_type"] == "dark_medium")
+        has_input = bool(np.any(io.read_stage("aggregate/observed")["event_type"] == "dark_medium"))
+        if "fuse/fisheries" in schemas.SCHEMAS and has_input:
+            f = io.read_stage("fuse/fisheries")  # read_stage re-checks the schema
+            assert (f["lens"] == "fisheries").all()
+        else:
+            assert not list((tmp_path / "data").rglob("*fisheries*"))
     finally:
         mp.undo()
