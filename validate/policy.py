@@ -53,7 +53,7 @@ class _Season:
 class _Deps:
     world: Callable[[str, int], _Season]
     outcome: Callable[
-        [pd.DataFrame, dict, int], pd.DataFrame
+        [pd.DataFrame, dict, pd.Timestamp], pd.DataFrame
     ]  # sim.patrol_outcome(truth, plan, week_start): R2, the week's start timestamp (UTC)
     bandit: Any  # patrol.bandit: prior(sites, n0), update(state, outcomes, discount, week=), sample(state, seed)
 
@@ -161,7 +161,10 @@ def _summary(frame: pd.DataFrame) -> list[dict[str, Any]]:
     g = frame.groupby(["policy", "regime"])[metrics]
     m, sd = g.mean(), g.std()
     out = m.add_suffix("_mean").join(sd.add_suffix("_sd")).reset_index()
-    return out.assign(n_seeds=g.size().to_numpy()).to_dict("records")
+    return [
+        {str(k): v for k, v in r.items()}
+        for r in out.assign(n_seeds=g.size().to_numpy()).to_dict("records")
+    ]
 
 
 def _block(deps: _Deps | None = None) -> dict[str, Any] | None:

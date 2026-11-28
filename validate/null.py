@@ -64,7 +64,7 @@ def _fuse(frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
     try:
         from detectors import score_cells
     except ImportError:  # detectors without a pure scorer: fuse runs without cell scores
-        return run(*(frames[k] for k in _NAMES))
+        return _pair(run(*(frames[k] for k in _NAMES)))
     T = io.read_snapshot()["T"]
     cells = score_cells(
         frames["aggregate/observed"],
@@ -73,7 +73,12 @@ def _fuse(frames: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataFrame]:
         frames["match/events"],
         T,
     )
-    return run(*(frames[k] for k in _NAMES), cells=cells, T=T)
+    return _pair(run(*(frames[k] for k in _NAMES), cells=cells, T=T))
+
+
+def _pair(out: tuple[pd.DataFrame, pd.DataFrame] | None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    assert out is not None  # with frames, fuse.run returns (cells, sites); None only for make all
+    return out
 
 
 def _flagged(frames: dict[str, pd.DataFrame]) -> bool:
