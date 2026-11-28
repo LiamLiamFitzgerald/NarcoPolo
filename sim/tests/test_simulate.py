@@ -47,7 +47,7 @@ def test_same_seed_same_files(world, tmp_path_factory):
         p.relative_to(other): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in other.rglob("*.parquet")
     }
-    assert first == second and len(first) == 13  # 12 stage files + truth
+    assert first == second and len(first) == 14  # 13 stage files + truth
     assert io.read_stage("reference/cells").equals(cells)
     run(
         tmp_path_factory.mktemp("c"), mp, seed=1
@@ -172,3 +172,14 @@ def test_dist_coast_is_measured_to_the_shoreline():
     assert (
         fine.loc[fine["iy"] == NY - 1, "inshore_frac"].eq(1).all()
     )  # the inshore band did not move
+
+
+def test_pboat_training_is_labelled_by_truth(world):  # #209
+    data, mp = world
+    mp.setenv("NARCO_DATA", str(data))
+    t = io.read_stage("validate/pboat_training")
+    det = io.read_stage("detect/detections")
+    assert len(t) == len(det) and t["label"].any() and (~t["label"]).any()
+    assert not t.loc[t["label"], "ghost"].any()  # a ghost is never a boat
+    vv = t.groupby("label")["peak_ratio_vv_db"].mean()
+    assert vv[True] > vv[False]  # boats are brighter than false alarms

@@ -91,6 +91,7 @@ validate:
   injection_n_per_pass: 10   # TODO(P1): not in the spec
   injection_passes: 5        # TODO(P1): not in the spec; chips per run, keeps make validate quick
   visible_pickup_length_m: [15, 24]  # TODO(P1) #266: pick-ups the radar sees (sim p_det ~0.95 at 20 m) that match still counts as small or medium (25-50 m come out "large" and leave dark_small)
+  pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
 
 # P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
 p4:
@@ -181,6 +182,7 @@ reads:
   reference/travel_hours: [x0, y0, region_bbox, reference]
   reference/presence_2km: [x0, y0, region_bbox, reference]
   coverage/weather_daily: [x0, y0, region_bbox, coverage]
+  validate/pboat_training: [x0, y0, region_bbox, validate, p4]
   coverage/exposure: [x0, y0, region_bbox, coverage]
   detect/detections: [x0, y0, region_bbox]
   match/events: [x0, y0, region_bbox]

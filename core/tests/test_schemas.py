@@ -123,6 +123,17 @@ VALID = {
     "coverage/weather_daily": row(
         cell_id="2000_0_0", date="2026-11-27", wind_max_ms=7.0, hs_max_m=1.2
     ),
+    "validate/pboat_training": row(
+        pass_id="pass_000",
+        cell_id="2000_0_0",
+        date="2026-11-27",
+        peak_ratio_vv_db=9.0,
+        peak_ratio_vh_db=6.5,
+        pol_agree=True,
+        n_px=3,
+        ghost=False,
+        label=True,
+    ),
 }
 
 
@@ -159,6 +170,8 @@ def test_every_schema_has_a_valid_example():
         ("reference/presence_2km", {"speed_bin": 2.0}),  # GFW's str label, not a number (#208)
         ("coverage/weather_daily", {"hs_max_m": np.nan}),  # unknown ERA5 is no row, not NaN
         ("coverage/weather_daily", {"wind_max_ms": -1.0}),
+        ("validate/pboat_training", {"n_px": 0}),
+        ("validate/pboat_training", {"label": None}),
     ],
 )
 def test_broken_rule_is_rejected(name, bad):
