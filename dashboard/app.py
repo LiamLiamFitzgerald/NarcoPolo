@@ -21,18 +21,69 @@ def _snapshot_path() -> Path:
     return _data_root() / "export" / "snapshot.json"
 
 
-# "We checked" patrol outcomes (#317). PLACEHOLDER until the patrol/outcomes contract (#329) is approved:
-# rows go to a plain draft file under the data root, not a stage file, and patrol does not read them yet.
-# Places only: a site id, a week and one of three fixed answers; no free text, no vessel, no person.
+# "We checked" patrol outcomes (#317). Places only: a site id, a week and one of three fixed answers; no free
+# text, no vessel, no person. Once core.schemas declares patrol/outcomes (contract #329) they live in that stage
+# file, which patrol learns from; until then they go to a plain draft file under the data root (#339).
 OUTCOMES = ("found_something", "found_nothing", "not_visited")
+_STAGE = "patrol/outcomes"
+_COLS = ["site_id", "iso_week", "outcome", "entered_at"]
 
 
 def _outcomes_path() -> Path:
     return _data_root() / "dashboard" / "outcomes_draft.json"
 
 
-def _read_outcomes(path: Path) -> list[dict]:
+def _stage_ready() -> bool:
+    from core.schemas import SCHEMAS
+
+    return _STAGE in SCHEMAS
+
+
+def _read_draft(path: Path) -> list[dict]:
     return json.loads(path.read_text()) if path.exists() else []
+
+
+def _latest(rows: list[dict]) -> list[dict]:
+    """One row per (site_id, iso_week): the latest entered_at wins (ISO strings sort in time order)."""
+    by_key = {(r["site_id"], r["iso_week"]): r for r in sorted(rows, key=lambda r: r["entered_at"])}
+    return list(by_key.values())
+
+
+def _write_stage(rows: list[dict]) -> None:
+    import pandas as pd
+
+    from core import io
+
+    frame = pd.DataFrame(rows, columns=_COLS)
+    frame["entered_at"] = pd.to_datetime(frame["entered_at"], utc=True)
+    io.write_stage(_STAGE, frame, "real")  # crews' answers are always real, whatever the snapshot
+
+
+def _read_stage(draft: Path) -> list[dict]:
+    """The stage file's rows. Draft rows are merged in once (the latest answer per site and week wins),
+    then the draft is removed, so it can never be counted twice."""
+    from core import io
+
+    rows = []
+    if io.stage_path(_STAGE).exists():
+        f = io.read_stage(_STAGE)
+        rows = [
+            {
+                **r,
+                "outcome": str(r["outcome"]),
+                "entered_at": r["entered_at"].strftime("%Y-%m-%dT%H:%M:%SZ"),
+            }
+            for r in f[_COLS].to_dict("records")
+        ]
+    if draft.exists():
+        rows = _latest(rows + _read_draft(draft))
+        _write_stage(rows)
+        draft.unlink()
+    return rows
+
+
+def _read_outcomes(path: Path) -> list[dict]:
+    return _read_stage(path) if _stage_ready() else _read_draft(path)
 
 
 def _record_outcome(path: Path, site_id: str, iso_week: str, outcome: str) -> list[dict]:
@@ -50,14 +101,17 @@ def _record_outcome(path: Path, site_id: str, iso_week: str, outcome: str) -> li
             "entered_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
         }
     )
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(rows, indent=1))
+    if _stage_ready():
+        _write_stage(rows)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, indent=1))
     return rows
 
 
 class Api:
     """Exposed to index.html as window.pywebview.api: serves the frozen snapshot and keeps the crews'
-    "we checked" answers (#317, placeholder file)."""
+    "we checked" answers (#317): in patrol/outcomes once the contract exists, else in the draft file."""
 
     def __init__(self, snapshot: Path | None = None, outcomes: Path | None = None):
         self._snapshot = snapshot or _snapshot_path()
@@ -69,8 +123,10 @@ class Api:
     def get_outcomes(self) -> list[dict]:
         return _read_outcomes(self._outcomes)
 
-    def record_outcome(self, site_id: str, iso_week: str, outcome: str) -> list[dict]:
-        return _record_outcome(self._outcomes, site_id, iso_week, outcome)
+    def record_outcome(self, site_id: str, iso_week: str, outcome: str) -> dict:
+        """{"rows": every answer, "stored": "stage" (patrol learns from it) or "draft"}."""
+        rows = _record_outcome(self._outcomes, site_id, iso_week, outcome)
+        return {"rows": rows, "stored": "stage" if _stage_ready() else "draft"}
 
 
 def _handler(snapshot: Path, outcomes: Path | None = None):
@@ -100,10 +156,10 @@ def _handler(snapshot: Path, outcomes: Path | None = None):
             try:
                 n = min(int(self.headers.get("Content-Length", 0)), 4096)
                 r = json.loads(self.rfile.read(n))
-                rows = api.record_outcome(str(r["site_id"]), str(r["iso_week"]), str(r["outcome"]))
+                res = api.record_outcome(str(r["site_id"]), str(r["iso_week"]), str(r["outcome"]))
             except (ValueError, KeyError, TypeError):
                 return self.send_error(400)
-            self._json(200, json.dumps(rows).encode())
+            self._json(200, json.dumps(res).encode())
 
     return functools.partial(Handler, directory=str(HERE))
 

@@ -7,6 +7,9 @@ import threading
 import urllib.request
 from pathlib import Path
 
+import pytest
+
+from core.schemas import SCHEMAS
 from dashboard import app
 from dashboard.app import Api
 
@@ -162,12 +165,19 @@ def test_every_screen_has_a_nav_link_and_a_question():
         ), name
 
 
-# "We checked" outcomes (#317, placeholder draft file until contract #329)
-def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path):
+# "We checked" outcomes (#317): the draft file until contract #329, then the patrol/outcomes stage file (#339)
+@pytest.fixture
+def draft_only(monkeypatch):
+    monkeypatch.setattr(app, "_stage_ready", lambda: False)
+
+
+def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp_path, draft_only):
     api = Api(tmp_path / "snapshot.json", tmp_path / "o" / "outcomes.json")
     assert api.get_outcomes() == []
     api.record_outcome("2000_1_2", "2026-W48", "found_nothing")
-    rows = api.record_outcome("2000_1_2", "2026-W48", "found_something")  # a correction replaces
+    res = api.record_outcome("2000_1_2", "2026-W48", "found_something")  # a correction replaces
+    rows = res["rows"]
+    assert res["stored"] == "draft"
     assert [(r["site_id"], r["iso_week"], r["outcome"]) for r in rows] == [
         ("2000_1_2", "2026-W48", "found_something")
     ]
@@ -182,7 +192,7 @@ def test_outcomes_keep_one_answer_per_site_and_week_and_reject_anything_else(tmp
     assert len(api.get_outcomes()) == 1
 
 
-def test_fallback_server_records_an_outcome(tmp_path):
+def test_fallback_server_records_an_outcome(tmp_path, draft_only):
     snap, out = tmp_path / "snapshot.json", tmp_path / "outcomes.json"
     snap.write_text("{}")
     with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap, out)) as srv:
@@ -190,6 +200,54 @@ def test_fallback_server_records_an_outcome(tmp_path):
         url = f"http://127.0.0.1:{srv.server_port}/outcomes.json"
         body = json.dumps({"site_id": "s1", "iso_week": "2026-W48", "outcome": "not_visited"})
         req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
-        assert json.load(urllib.request.urlopen(req))[0]["outcome"] == "not_visited"
+        assert json.load(urllib.request.urlopen(req))["rows"][0]["outcome"] == "not_visited"
         assert json.load(urllib.request.urlopen(url))[0]["site_id"] == "s1"
         srv.shutdown()
+
+
+needs_contract = pytest.mark.skipif(
+    "patrol/outcomes" not in SCHEMAS, reason="patrol/outcomes contract (#329) not merged yet"
+)
+
+
+@needs_contract
+def test_outcomes_go_to_the_stage_file_and_the_draft_is_merged_once(tmp_path, monkeypatch):
+    from core import io
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    draft = tmp_path / "data" / "dashboard" / "outcomes_draft.json"
+    draft.parent.mkdir(parents=True)
+    draft.write_text(json.dumps([
+        {"site_id": "s1", "iso_week": "2026-W47", "outcome": "found_nothing", "entered_at": "2026-11-20T08:00:00Z"},
+        {"site_id": "s2", "iso_week": "2026-W47", "outcome": "not_visited", "entered_at": "2026-11-21T08:00:00Z"},
+    ]))  # fmt: skip
+    api = Api(tmp_path / "snapshot.json", draft)
+    assert {r["site_id"] for r in api.get_outcomes()} == {"s1", "s2"} and not draft.exists()
+    res = api.record_outcome("s1", "2026-W47", "found_something")  # a correction replaces
+    assert res["stored"] == "stage"
+    f = io.read_stage("patrol/outcomes")  # checked against the contract on read
+    assert len(f) == 2 and str(f["entered_at"].dt.tz) == "UTC"
+    assert f.set_index("site_id").loc["s1", "outcome"] == "found_something"
+    assert len(api.get_outcomes()) == 2  # the draft is gone, so nothing is merged twice
+    try:
+        api.record_outcome("s1", "2026-W47", "a boat called X")
+        raise AssertionError("free text accepted")
+    except ValueError:
+        pass
+
+
+@needs_contract
+def test_fallback_server_records_an_outcome_in_the_stage_file(tmp_path, monkeypatch):
+    from core import io
+
+    monkeypatch.setenv("NARCO_DATA", str(tmp_path / "data"))
+    snap = tmp_path / "snapshot.json"
+    snap.write_text("{}")
+    with http.server.ThreadingHTTPServer(("127.0.0.1", 0), app._handler(snap)) as srv:
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        url = f"http://127.0.0.1:{srv.server_port}/outcomes.json"
+        body = json.dumps({"site_id": "s1", "iso_week": "2026-W48", "outcome": "found_nothing"})
+        req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+        assert json.load(urllib.request.urlopen(req))["stored"] == "stage"
+        srv.shutdown()
+    assert io.read_stage("patrol/outcomes")["outcome"].astype(str).tolist() == ["found_nothing"]
