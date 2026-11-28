@@ -96,6 +96,14 @@ validate:
   persistence_radius_m: 50   # #334: a candidate this close to a fixed target is on it (GFW's persistence radius, the cited start)
   pboat_negative_m: 500      # docs/specs/P4.md (p_boat training): a negative is > 500 m from any injection or AIS ship
 
+detect_prob:                 # #349: small-boat detection-probability curve, fitted by validate.detect_prob on injected boats (coefficients go to reports/detect_prob.json, never here)
+  form: [log_length_m, wind_ms, incidence_deg]  # #349: logit p = b0 + b1 log(length_m) + b2 wind_ms + b3 incidence_deg; a term missing from the data is dropped and named in the report
+  length_bins_m: [0, 8, 12, 15, 24]  # TODO(P1) #365: the recall-curve bins of docs/specs/P1.md until a West Cork length mix is sourced
+  length_weights: null       # TODO(P1) #365: no source gives the West Cork small-boat length mix; p-bar_detect stays null (unknown) until one does
+  realism_anchor:            # Paolo et al. 2024 (Nature): Sentinel-1 thresholds calibrated to 60% recall at 15-20 m. Warning check only, never a tuning target
+    length_m: [15, 20]
+    recall: 0.6
+
 # P4 detect and match (#183): docs/specs/P4.md Parameters and Steps; the same values as P4's code defaults
 p4:
   pixel_m: 10                # shared.md issue 5: 10 m pixels on the fixed region grid

@@ -34,7 +34,7 @@
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit|Read|Bash|WebFetch",
         "hooks": [
-          {"type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.py"}
+          {"type": "command", "command": "uv run --no-project python \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard.py"}
         ]
       }
     ],
