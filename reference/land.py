@@ -16,6 +16,10 @@ from shapely.ops import polygonize, unary_union
 _PROBE_M = (
     1.0  # probe offset from a segment's midpoint: a geometric tolerance, far below the 10 m grid
 )
+# A coastline that ends on the region's edge must touch it exactly, or the region is never cut. After a lon/lat
+# round trip an end can sit ~1e-10 m inside the edge, so an end this close is pushed out past the edge and the
+# line clipped again (a geometric tolerance, like _PROBE_M; a real gap in the coastline is far wider).
+_SNAP_M = 1.0
 
 
 def _probes(lines: BaseGeometry) -> tuple[np.ndarray, np.ndarray]:
@@ -35,6 +39,22 @@ def _probes(lines: BaseGeometry) -> tuple[np.ndarray, np.ndarray]:
     return np.vstack(left), np.vstack(right)
 
 
+def _reach_edge(lines: BaseGeometry, region: BaseGeometry) -> BaseGeometry:
+    """Extend every line end within _SNAP_M of the region's edge by 2 x _SNAP_M along the line, then clip."""
+    edge = region.boundary
+    out = []
+    for part in getattr(lines, "geoms", [lines]):
+        xy = np.asarray(part.coords)[:, :2].copy()
+        if len(xy) >= 2 and not part.is_closed:
+            for end, nxt in ((0, 1), (-1, -2)):
+                p = shapely.Point(xy[end])
+                if 0 < p.distance(edge) <= _SNAP_M:
+                    d = xy[end] - xy[nxt]
+                    xy[end] = xy[end] + 2 * _SNAP_M * d / np.hypot(*d)
+        out.append(shapely.LineString(xy).intersection(region))
+    return unary_union(out)
+
+
 def land(coastline: gpd.GeoDataFrame, region: BaseGeometry) -> gpd.GeoDataFrame:
     """Land inside `region` (UTM polygon) as one (multi)polygon row: columns id, geometry, EPSG:32629."""
     lines = shapely.line_merge(unary_union(list(coastline.to_crs(32629).geometry))).intersection(
@@ -45,6 +65,7 @@ def land(coastline: gpd.GeoDataFrame, region: BaseGeometry) -> gpd.GeoDataFrame:
     )
     if lines.is_empty:
         return gpd.GeoDataFrame({"id": [0]}, geometry=[shapely.Polygon()], crs=32629)
+    lines = _reach_edge(lines, region)
     faces = np.array(list(polygonize(unary_union([lines, region.boundary]))), dtype=object)
     left, right = _probes(lines)
     tree = shapely.STRtree(faces)

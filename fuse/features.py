@@ -45,7 +45,9 @@ def weekly_scores(obs: pd.DataFrame, exp: pd.DataFrame) -> pd.DataFrame:
     with no exposure has no row, never a zero. `date` is the week's Sunday, so Split.train keeps whole weeks."""
     seen = Observed(obs).observed_rows()
     seen = seen[seen["level"] == 2000]
-    exp = exp[exp["fold"].fillna(0) == 0]
+    exp = exp[
+        exp["fold"] == 0
+    ]  # the live forecast only, as detectors uses it (#172, #198): NA is not live
     key = ["cell_id", "date", "event_type"]
     m = seen.merge(exp[[*key, "mu"]], on=key)
     d = pd.to_datetime(m["date"])

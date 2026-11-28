@@ -12,7 +12,11 @@ import pandera.pandas as pa
 
 
 def _id() -> pa.Column:
-    return pa.Column(nullable=False)
+    """A string key (#171): a numeric pass_id would validate, then never join with the string ones."""
+    # plain Python, so any storage dtype works, including an empty pandas string column (an Arrow-backed
+    # .all() raises on string dtype); empty is fine
+    ok = lambda s: all(isinstance(v, str) for v in s)
+    return pa.Column(checks=pa.Check(ok, error="not a string id"), nullable=False)
 
 
 def _num(
@@ -36,10 +40,18 @@ def _utc() -> pa.Column:
     return pa.Column(checks=pa.Check(ok, error="not timezone-aware UTC"), nullable=False)
 
 
+def _is_date(s: pd.Series) -> bool:
+    """Calendar dates (#171): parseable, timezone-naive and at midnight, so merges on date never drop rows."""
+    d = pd.to_datetime(s, errors="coerce")
+    if isinstance(d.dtype, pd.DatetimeTZDtype):
+        return False
+    return bool(d.notna().all() and (d == d.dt.normalize()).all())
+
+
 def _date() -> pa.Column:
-    ok = lambda s: bool(pd.to_datetime(s, errors="coerce").notna().all())
     return pa.Column(
-        checks=pa.Check(ok, element_wise=False, error="not calendar dates"), nullable=False
+        checks=pa.Check(_is_date, element_wise=False, error="not calendar dates (naive, midnight)"),
+        nullable=False,
     )
 
 
@@ -62,6 +74,12 @@ def _later(col: pa.Column) -> pa.Column:
     """A column the learning layer adds (docs/learning.md): checked when present, not yet required."""
     col.required = False
     return col
+
+
+def _unique(*cols: str) -> pa.Check:
+    return pa.Check(
+        lambda df: ~df.duplicated(list(cols)), error=f"duplicate ({', '.join(cols)}) rows"
+    )
 
 
 def _schema(columns: dict[str, pa.Column], *checks: pa.Check) -> pa.DataFrameSchema:
@@ -109,6 +127,25 @@ SCHEMAS: dict[str, pa.DataFrameSchema] = {
             "pier_id": pa.Column(str, nullable=False),
             "hours": _num(ge=0),
         }
+    ),
+    "reference/presence_2km": _schema(  # #208: reference.regrid_presence output (shared.md issue 4)
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),  # UTC
+            "vessel_type": pa.Column(str, nullable=False),  # as in raw/gfw_presence
+            "speed_bin": pa.Column(str, nullable=False),  # GFW's label, e.g. "0-2", "8+"
+            "hours": _num(ge=0),  # area-weighted presence hours
+        },
+        _unique("cell_id", "date", "vessel_type", "speed_bin"),
+    ),
+    "coverage/weather_daily": _schema(  # #208: max over the UTC day's hourly ERA5, coverage.weather_at point rules
+        {
+            "cell_id": pa.Column(str, nullable=False),
+            "date": _date(),  # UTC
+            "wind_max_ms": _num(ge=0),
+            "hs_max_m": _num(ge=0),  # no row where ERA5 is unknown: never 0 or NaN in its place
+        },
+        _unique("cell_id", "date"),
     ),
     "coverage/exposure": _schema(
         {

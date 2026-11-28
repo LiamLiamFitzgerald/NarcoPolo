@@ -428,7 +428,10 @@ def _scored_sites(
     strongest = _strongest(slow, u_small, agree, nbrs)
     a = strongest["agreement"] if len(strongest) else pd.Series(dtype=int)
     out["agreement"] = a.reindex(out["site_id"]).fillna(0).astype(int).to_numpy()
-    ranked = suppress(out.sort_values(["S", "site_id"], ascending=[False, True], kind="stable"))
+    # ties on S (often S = 0 where no pick-up was seen) go to the cell with more slowdowns, so suppression never
+    # hides a busy cell, and its "looked, saw nothing" record, behind a quieter neighbour with the same S (#60)
+    order = ["S", "n_slowdowns", "site_id"]
+    ranked = suppress(out.sort_values(order, ascending=[False, False, True], kind="stable"))
     ranked = ranked.reset_index(drop=True)
     # R3: raw agent scores, as the trainer fits them; no forecast (some pure-path tests) means no features
     feats = None if expected is None else site_features(ranked, observed, expected, T)
@@ -456,7 +459,9 @@ def _finish(sites_, slow, strongest, observed, expected, layers, travel, piers):
     small = _small_rows(observed).set_index(["cell_id", "date"])["count"] if len(observed) else None
     mu = None
     if expected is not None and len(expected):
-        e = expected[expected["fold"].fillna(0) == 0] if "fold" in expected else expected
+        e = (
+            expected[expected["fold"] == 0] if "fold" in expected else expected
+        )  # live forecast (#198)
         mu = _small_rows(e).set_index(["cell_id", "date"])["mu"]
     lay = layers.set_index("cell_id") if layers is not None and len(layers) else None
     in_top = (
